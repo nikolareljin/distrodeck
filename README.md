@@ -52,7 +52,7 @@ distrodeck doctor
 
 ## Scripts
 
-This repo includes the `nikolareljin/script-helpers` git submodule under `scripts/`.
+This repo includes the `nikolareljin/script-helpers` git submodule under `scripts/script-helpers`.
 
 ```bash
 git submodule update --init --recursive
