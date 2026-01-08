@@ -1,0 +1,14 @@
+Source: distrodeck
+Section: utils
+Priority: optional
+Maintainer: Nikola Reljin <nikola.reljin@gmail.com>
+Build-Depends: debhelper-compat (= 13), dh-python, python3
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: distrodeck
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}
+Description: Export and restore packages before distro upgrades
+ Export installed packages, PPAs, snaps, flatpaks, and AppImages,
+ then re-install them after a distro upgrade.

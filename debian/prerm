@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  remove|purge)
+    if [ -L /usr/local/bin/distrodeck ]; then
+      rm -f /usr/local/bin/distrodeck
+    fi
+    ;;
+esac
+
+exit 0

@@ -1,0 +1,548 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional
+
+VERSION = "0.3.0"
+DEFAULT_EXPORT_FILE = "distrodeck-export.txt"
+
+
+def log(message: str) -> None:
+    print(message)
+
+
+def warn(message: str) -> None:
+    print(f"warning: {message}", file=sys.stderr)
+
+
+def fail(message: str) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(cmd, check=True, capture_output=False, text=True, input_text=None):
+    return subprocess.run(
+        cmd,
+        check=check,
+        capture_output=capture_output,
+        text=text,
+        input=input_text,
+    )
+
+
+def cmd_exists(name: str) -> bool:
+    return subprocess.call(
+        ["bash", "-lc", f"command -v {name} >/dev/null 2>&1"]
+    ) == 0
+
+
+def read_os_release() -> dict:
+    data = {}
+    path = Path("/etc/os-release")
+    if not path.exists():
+        return data
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        data[key] = value.strip().strip('"')
+    return data
+
+
+def get_os_id() -> str:
+    return read_os_release().get("ID", "unknown")
+
+
+def get_codename() -> str:
+    if cmd_exists("lsb_release"):
+        try:
+            return run(["lsb_release", "-sc"], capture_output=True).stdout.strip()
+        except subprocess.CalledProcessError:
+            return ""
+    return read_os_release().get("VERSION_CODENAME", "")
+
+
+def get_appimage_dirs(arg_dirs: Optional[str]) -> List[str]:
+    if arg_dirs:
+        return [d for d in arg_dirs.split(":") if d]
+    env_dirs = os.getenv("DISTRODECK_APPIMAGE_DIRS") or os.getenv("APPIMAGE_DIRS")
+    if env_dirs:
+        return [d for d in env_dirs.split(":") if d]
+    return [
+        str(Path.home() / "Applications"),
+        str(Path.home() / "AppImage"),
+        str(Path.home() / "AppImages"),
+    ]
+
+
+def export_apt_manual() -> List[str]:
+    if cmd_exists("apt-mark"):
+        out = run(["apt-mark", "showmanual"], capture_output=True).stdout
+        return sorted([line for line in out.splitlines() if line.strip()])
+    return []
+
+
+def export_apt_hold() -> List[str]:
+    if cmd_exists("apt-mark"):
+        out = run(["apt-mark", "showhold"], capture_output=True).stdout
+        return sorted([line for line in out.splitlines() if line.strip()])
+    return []
+
+
+def export_ppas() -> List[str]:
+    lines = []
+    for path in ["/etc/apt/sources.list", "/etc/apt/sources.list.d"]:
+        if os.path.isdir(path):
+            for root, _, files in os.walk(path):
+                for name in files:
+                    if name.endswith(".list"):
+                        lines.extend(
+                            Path(root, name).read_text(encoding="utf-8").splitlines()
+                        )
+        elif os.path.isfile(path):
+            lines.extend(Path(path).read_text(encoding="utf-8").splitlines())
+    ppas = set()
+    for line in lines:
+        if not line.startswith("deb "):
+            continue
+        match = re.search(r"ppa\.launchpad\.net/([^/]+)/([^/]+)/", line)
+        if match:
+            ppas.add(f"ppa:{match.group(1)}/{match.group(2)}")
+    return sorted(ppas)
+
+
+def export_apt_sources() -> List[str]:
+    sources = set()
+    path = Path("/etc/apt/sources.list.d")
+    if not path.exists():
+        return []
+    for item in path.glob("*.list"):
+        for line in item.read_text(encoding="utf-8").splitlines():
+            if line.startswith("deb ") and "ppa.launchpad.net" not in line:
+                sources.add(line.strip())
+    return sorted(sources)
+
+
+def export_snaps() -> List[str]:
+    if not cmd_exists("snap"):
+        return []
+    out = run(["snap", "list"], capture_output=True).stdout
+    items = []
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        name = parts[0]
+        tracking = parts[3]
+        notes = parts[-1] if len(parts) > 5 else ""
+        classic = "true" if notes == "classic" else "false"
+        items.append(f"{name} channel={tracking} classic={classic}")
+    return sorted(set(items))
+
+
+def export_flatpaks() -> List[str]:
+    if not cmd_exists("flatpak"):
+        return []
+    out = run(
+        ["flatpak", "list", "--app", "--columns=application,origin"],
+        capture_output=True,
+    ).stdout
+    items = []
+    for line in out.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        app = parts[0]
+        remote = parts[1] if len(parts) > 1 else ""
+        if remote:
+            items.append(f"remote={remote} app={app}")
+        else:
+            items.append(f"app={app}")
+    return sorted(set(items))
+
+
+def export_pacman() -> List[str]:
+    if not cmd_exists("pacman"):
+        return []
+    out = run(["pacman", "-Qqe"], capture_output=True).stdout
+    return sorted([line for line in out.splitlines() if line.strip()])
+
+
+def export_dnf() -> List[str]:
+    if not cmd_exists("dnf"):
+        return []
+    try:
+        out = run(
+            ["dnf", "repoquery", "--userinstalled", "--qf", "%{name}"],
+            capture_output=True,
+        ).stdout
+        items = [line for line in out.splitlines() if line.strip()]
+        return sorted(set(items))
+    except subprocess.CalledProcessError:
+        return []
+
+
+def export_zypper() -> List[str]:
+    if not cmd_exists("zypper"):
+        return []
+    try:
+        out = run(
+            ["zypper", "search", "-i", "-t", "package", "-s"],
+            capture_output=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = []
+    for line in out.splitlines():
+        if not line.strip().startswith("i |"):
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) >= 2:
+            name = parts[1]
+            if name:
+                items.append(name)
+    return sorted(set(items))
+
+
+def export_appimages(appimage_dirs: List[str]) -> List[str]:
+    found = set()
+    for root in appimage_dirs:
+        path = Path(root)
+        if not path.exists():
+            continue
+        for dirpath, _, filenames in os.walk(path):
+            depth = len(Path(dirpath).relative_to(path).parts)
+            if depth > 1:
+                continue
+            for name in filenames:
+                if name.endswith(".AppImage"):
+                    found.add(str(Path(dirpath, name)))
+    return sorted(found)
+
+
+def export_all(args: argparse.Namespace) -> None:
+    os_id = get_os_id()
+    codename = get_codename()
+    appimage_dirs = get_appimage_dirs(args.appimage_dirs)
+    out_lines = [
+        "# distrodeck export v1",
+        f"exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+        f"distro_id={os_id}",
+        f"codename={codename}",
+        "",
+        "[apt_manual]",
+        *export_apt_manual(),
+        "",
+        "[apt_hold]",
+        *export_apt_hold(),
+        "",
+        "[ppas]",
+        *export_ppas(),
+        "",
+        "[apt_sources]",
+        *export_apt_sources(),
+        "",
+        "[snap]",
+        *export_snaps(),
+        "",
+        "[flatpak]",
+        *export_flatpaks(),
+        "",
+        "[pacman]",
+        *export_pacman(),
+        "",
+        "[dnf]",
+        *export_dnf(),
+        "",
+        "[zypper]",
+        *export_zypper(),
+        "",
+        "[appimage]",
+        *export_appimages(appimage_dirs),
+        "",
+    ]
+    Path(args.output).write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    log(f"Exported to {args.output}")
+
+
+def ensure_nala() -> bool:
+    if cmd_exists("nala"):
+        return True
+    if not cmd_exists("apt-get"):
+        warn("apt-get not available; cannot install Nala")
+        return False
+    log("Installing Nala...")
+    run(["sudo", "apt-get", "update"])
+    run(["sudo", "apt-get", "install", "-y", "nala"])
+    return True
+
+
+def run_update() -> None:
+    if ensure_nala():
+        run(["sudo", "nala", "update"])
+        run(["sudo", "nala", "upgrade", "-y"])
+    elif cmd_exists("apt-get"):
+        run(["sudo", "apt-get", "update"])
+        run(["sudo", "apt-get", "upgrade", "-y"])
+    elif cmd_exists("dnf"):
+        run(["sudo", "dnf", "upgrade", "-y"])
+    elif cmd_exists("zypper"):
+        run(["sudo", "zypper", "refresh"])
+        run(["sudo", "zypper", "update", "-y"])
+    elif cmd_exists("pacman"):
+        run(["sudo", "pacman", "-Syu", "--noconfirm"])
+    else:
+        warn("No supported package manager for update.")
+    if cmd_exists("snap"):
+        run(["sudo", "snap", "refresh"])
+    if cmd_exists("flatpak"):
+        run(["flatpak", "update", "-y"])
+
+
+def run_security() -> None:
+    if cmd_exists("unattended-upgrade"):
+        run(["sudo", "unattended-upgrade"])
+        return
+    if cmd_exists("nala"):
+        run(["sudo", "nala", "upgrade", "-y", "--security"])
+        return
+    if cmd_exists("apt-get"):
+        run(["sudo", "apt-get", "update"])
+        run(["sudo", "apt-get", "upgrade", "-y", "--with-new-pkgs"])
+        return
+    if cmd_exists("dnf"):
+        run(["sudo", "dnf", "upgrade", "-y", "--security"])
+        return
+    if cmd_exists("zypper"):
+        run(["sudo", "zypper", "patch", "--category", "security", "-y"])
+        return
+    if cmd_exists("pacman"):
+        warn("Pacman has no separate security-only mode; run update instead.")
+        return
+    warn("No supported package manager for security updates.")
+
+
+def run_upgrade() -> None:
+    os_id = get_os_id()
+    if os_id == "ubuntu":
+        if not cmd_exists("do-release-upgrade"):
+            fail("do-release-upgrade not available")
+        run(["sudo", "do-release-upgrade"])
+        return
+    warn(f"Distro upgrade not implemented for {os_id}")
+
+
+def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
+    if not old_codename or not new_codename:
+        return line
+    return line.replace(old_codename, new_codename)
+
+
+def parse_export_file(path: Path) -> dict:
+    data = {
+        "apt_manual": [],
+        "apt_hold": [],
+        "ppas": [],
+        "apt_sources": [],
+        "snap": [],
+        "flatpak": [],
+        "pacman": [],
+        "dnf": [],
+        "zypper": [],
+        "appimage": [],
+        "codename": "",
+    }
+    section = ""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("codename="):
+            data["codename"] = line.split("=", 1)[1]
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+            continue
+        if section in data:
+            data[section].append(line)
+    return data
+
+
+def import_from_file(args: argparse.Namespace) -> None:
+    path = Path(args.input)
+    if not path.exists():
+        fail(f"Input file not found: {args.input}")
+    data = parse_export_file(path)
+    log(
+        "Plan: "
+        f"{len(data['apt_manual'])} apt packages, "
+        f"{len(data['ppas'])} PPAs, "
+        f"{len(data['snap'])} snaps, "
+        f"{len(data['flatpak'])} flatpaks, "
+        f"{len(data['pacman'])} pacman packages, "
+        f"{len(data['dnf'])} dnf packages, "
+        f"{len(data['zypper'])} zypper packages, "
+        f"{len(data['appimage'])} appimages"
+    )
+    if not args.apply:
+        log("Dry-run only. Re-run with --apply to install.")
+        return
+
+    if data["ppas"] and cmd_exists("add-apt-repository"):
+        run(["sudo", "apt-get", "update"])
+        for ppa in data["ppas"]:
+            run(["sudo", "add-apt-repository", "-y", ppa])
+
+    if data["apt_sources"] and cmd_exists("apt-get"):
+        new_codename = get_codename()
+        sources_lines = []
+        for src in data["apt_sources"]:
+            if args.update_sources:
+                src = rewrite_codename(src, data["codename"], new_codename)
+            sources_lines.append(src)
+        content = "\n".join(sources_lines) + "\n"
+        run(
+            ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
+            input_text=content,
+        )
+
+    if data["apt_manual"] and cmd_exists("apt-get"):
+        run(["sudo", "apt-get", "update"])
+        run(["sudo", "apt-get", "install", "-y", *data["apt_manual"]])
+    elif data["apt_manual"]:
+        warn("apt-get not available; skipping apt package install")
+
+    if data["apt_hold"] and cmd_exists("apt-mark"):
+        for pkg in data["apt_hold"]:
+            run(["sudo", "apt-mark", "hold", pkg])
+
+    if data["snap"] and cmd_exists("snap"):
+        for entry in data["snap"]:
+            parts = entry.split()
+            name = parts[0] if parts else ""
+            channel = ""
+            classic = False
+            for part in parts[1:]:
+                if part.startswith("channel="):
+                    channel = part.split("=", 1)[1]
+                if part.startswith("classic="):
+                    classic = part.split("=", 1)[1] == "true"
+            if not name:
+                continue
+            cmd = ["sudo", "snap", "install", name]
+            if channel:
+                cmd.append(f"--channel={channel}")
+            if classic:
+                cmd.append("--classic")
+            run(cmd)
+
+    if data["flatpak"] and cmd_exists("flatpak"):
+        for entry in data["flatpak"]:
+            app = ""
+            remote = ""
+            for part in entry.split():
+                if part.startswith("app="):
+                    app = part.split("=", 1)[1]
+                if part.startswith("remote="):
+                    remote = part.split("=", 1)[1]
+            if not app:
+                continue
+            if remote:
+                run(["flatpak", "install", "-y", remote, app])
+            else:
+                run(["flatpak", "install", "-y", app])
+
+    if data["appimage"]:
+        for path_str in data["appimage"]:
+            path = Path(path_str)
+            if path.exists():
+                path.chmod(path.stat().st_mode | 0o111)
+            else:
+                warn(f"AppImage not found: {path_str}")
+
+    if data["pacman"] and cmd_exists("pacman"):
+        run(["sudo", "pacman", "-S", "--needed", "--noconfirm", *data["pacman"]])
+    elif data["pacman"]:
+        warn("pacman not available; skipping pacman package install")
+
+    if data["dnf"] and cmd_exists("dnf"):
+        run(["sudo", "dnf", "install", "-y", *data["dnf"]])
+    elif data["dnf"]:
+        warn("dnf not available; skipping dnf package install")
+
+    if data["zypper"] and cmd_exists("zypper"):
+        run(["sudo", "zypper", "install", "-y", *data["zypper"]])
+    elif data["zypper"]:
+        warn("zypper not available; skipping zypper package install")
+
+
+def run_doctor() -> None:
+    os_id = get_os_id()
+    codename = get_codename()
+    log(f"os_id={os_id}")
+    if codename:
+        log(f"codename={codename}")
+    checks = [
+        "apt-get",
+        "nala",
+        "snap",
+        "flatpak",
+        "add-apt-repository",
+        "do-release-upgrade",
+        "dnf",
+        "zypper",
+        "pacman",
+    ]
+    for name in checks:
+        status = "ok" if cmd_exists(name) else "missing"
+        log(f"{name}: {status}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="distrodeck",
+        description="Export and restore packages before distro upgrades.",
+    )
+    parser.add_argument("--version", action="version", version=VERSION)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    export_cmd = sub.add_parser("export", help="Export installed packages and sources")
+    export_cmd.add_argument("--output", default=DEFAULT_EXPORT_FILE)
+    export_cmd.add_argument("--appimage-dirs", default=None)
+    export_cmd.set_defaults(func=export_all)
+
+    import_cmd = sub.add_parser("import", help="Import packages and sources")
+    import_cmd.add_argument("--input", required=True)
+    import_cmd.add_argument("--apply", action="store_true")
+    import_cmd.add_argument("--update-sources", action="store_true")
+    import_cmd.add_argument("--appimage-dirs", default=None)
+    import_cmd.set_defaults(func=import_from_file)
+
+    update_cmd = sub.add_parser("update", help="Update system packages")
+    update_cmd.set_defaults(func=lambda _: run_update())
+
+    upgrade_cmd = sub.add_parser("upgrade", help="Run distro upgrade")
+    upgrade_cmd.set_defaults(func=lambda _: run_upgrade())
+
+    security_cmd = sub.add_parser("security", help="Apply security upgrades")
+    security_cmd.set_defaults(func=lambda _: run_security())
+
+    doctor_cmd = sub.add_parser("doctor", help="Check system prerequisites")
+    doctor_cmd.set_defaults(func=lambda _: run_doctor())
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

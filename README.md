@@ -1,0 +1,138 @@
+# distrodeck
+
+One CLI to snapshot and restore your installed packages before a distro upgrade.
+
+Primary target: Ubuntu. Should work on other Debian-based distros with apt, and partially on any distro with snap/flatpak installed.
+
+## Features
+
+- Export installed packages and package sources (including PPAs)
+- Import and reinstall from the export file
+- Update/upgrade system packages (uses Nala)
+- Trigger distro upgrades on Ubuntu
+- Apply security updates
+- Track snaps, flatpaks, and AppImages
+
+## Install
+
+Requires Python 3 (installed by default on Ubuntu).
+
+Clone into your projects folder and run from the repo root:
+
+```bash
+./distrodeck --help
+```
+
+Optionally add to PATH:
+
+```bash
+sudo ln -s "$PWD/distrodeck" /usr/local/bin/distrodeck
+```
+
+## Usage
+
+```bash
+distrodeck export --output backup.txt
+
+distrodeck import --input backup.txt --apply --update-sources
+
+distrodeck update
+
+distrodeck upgrade
+
+distrodeck security
+
+distrodeck doctor
+```
+
+## Documentation
+
+- Usage guide: `docs/USAGE.md`
+- Man page: `docs/man/distrodeck.1` (regenerate with `make man`)
+
+## Scripts
+
+This repo includes the `nikolareljin/script-helpers` git submodule under `scripts/`.
+
+```bash
+git submodule update --init --recursive
+```
+
+## Export file format
+
+The export is a plain text file with sections:
+
+```
+# distrodeck export v1
+exported_at=...
+distro_id=ubuntu
+codename=jammy
+
+[apt_manual]
+...
+
+[apt_hold]
+...
+
+[ppas]
+ppa:graphics-drivers/ppa
+
+[apt_sources]
+deb [signed-by=/usr/share/keyrings/foo.gpg] https://example.com stable main
+
+[snap]
+firefox channel=latest/stable classic=false
+
+[flatpak]
+remote=flathub app=org.gimp.GIMP
+
+[pacman]
+neovim
+
+[dnf]
+htop
+
+[zypper]
+git
+
+[appimage]
+/home/user/Applications/Some.AppImage
+```
+
+## Notes
+
+- `export` prefers manually installed apt packages and captures held packages.
+- PPAs are captured as `ppa:user/name` entries and re-added on import.
+- `apt_sources` captures non-PPA entries under `/etc/apt/sources.list.d`.
+- `--update-sources` replaces the old distro codename with the current one for `apt_sources` entries.
+- AppImages are discovered in `~/Applications`, `~/AppImage`, `~/AppImages`, or `DISTRODECK_APPIMAGE_DIRS`.
+- Import is dry-run by default. Use `--apply` to install.
+
+## Compatibility
+
+- Ubuntu: full support (apt, PPA, do-release-upgrade, snap, flatpak)
+- Other Debian-based distros: apt + flatpak + snap (no `do-release-upgrade`)
+- Fedora/RHEL: export/import via `dnf` (no distro-upgrade automation)
+- Arch: export/import via `pacman` (no distro-upgrade automation)
+- openSUSE: export/import via `zypper` (no distro-upgrade automation)
+
+## Packaging (Ubuntu PPA)
+
+Standard Debian packaging is included. Build a `.deb` locally with:
+
+```bash
+make man
+dpkg-buildpackage -us -uc
+```
+
+Optional: build a `.deb` with `fpm` (requires `fpm`):
+
+```bash
+make fpm
+```
+
+Before publishing to a PPA, update `debian/changelog` and `debian/control` with your maintainer name and target series.
+
+## Contributing
+
+Keep the script POSIX-friendly where possible and avoid adding heavy dependencies.

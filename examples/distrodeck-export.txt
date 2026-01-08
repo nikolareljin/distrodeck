@@ -1,0 +1,31 @@
+# distrodeck export v1
+exported_at=2024-01-01T00:00:00Z
+distro_id=ubuntu
+codename=jammy
+
+[apt_manual]
+curl
+nala
+
+[apt_hold]
+
+[ppas]
+ppa:graphics-drivers/ppa
+
+[apt_sources]
+deb [signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable
+
+[snap]
+firefox channel=latest/stable classic=false
+
+[flatpak]
+remote=flathub app=org.gimp.GIMP
+
+[pacman]
+
+[dnf]
+
+[zypper]
+
+[appimage]
+/home/user/Applications/Example.AppImage

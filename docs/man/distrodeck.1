@@ -1,0 +1,78 @@
+.TH DISTRODECK 1 "2026-01-08" "distrodeck 0.3.0" "User Commands"
+.SH NAME
+distrodeck \- Export and restore packages before distro upgrades.
+.SH SYNOPSIS
+.B distrodeck
+\fIcommand\fR [options]
+.SH DESCRIPTION
+distrodeck exports installed packages and sources, then re-installs them after a distro upgrade.
+.SH COMMANDS
+.TP
+.B export
+Export installed packages and sources
+.TP
+.B import
+Import packages and sources
+.TP
+.B update
+Update system packages
+.TP
+.B upgrade
+Run distro upgrade
+.TP
+.B security
+Apply security upgrades
+.TP
+.B doctor
+Check system prerequisites
+.SH COMMAND HELP
+.SS export
+.nf
+usage: distrodeck export [-h] [--output OUTPUT]
+                         [--appimage-dirs APPIMAGE_DIRS]
+
+options:
+  -h, --help            show this help message and exit
+  --output OUTPUT
+  --appimage-dirs APPIMAGE_DIRS
+.fi
+.SS import
+.nf
+usage: distrodeck import [-h] --input INPUT [--apply] [--update-sources]
+                         [--appimage-dirs APPIMAGE_DIRS]
+
+options:
+  -h, --help            show this help message and exit
+  --input INPUT
+  --apply
+  --update-sources
+  --appimage-dirs APPIMAGE_DIRS
+.fi
+.SS update
+.nf
+usage: distrodeck update [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS upgrade
+.nf
+usage: distrodeck upgrade [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS security
+.nf
+usage: distrodeck security [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS doctor
+.nf
+usage: distrodeck doctor [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi

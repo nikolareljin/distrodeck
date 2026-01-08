@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    mkdir -p /usr/local/bin
+    ln -sf /usr/bin/distrodeck /usr/local/bin/distrodeck
+    ;;
+esac
+
+exit 0
