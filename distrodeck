@@ -503,6 +503,16 @@ def run_doctor() -> None:
         log(f"{name}: {status}")
 
 
+def run_install_tools(args: argparse.Namespace) -> None:
+    script = Path(__file__).resolve().parent / "scripts" / "install-tools-tui.sh"
+    if not script.exists():
+        fail(f"Installer script not found: {script}")
+    cmd = [str(script)]
+    if args.all:
+        cmd.append("--all")
+    run(cmd)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="distrodeck",
@@ -534,6 +544,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = sub.add_parser("doctor", help="Check system prerequisites")
     doctor_cmd.set_defaults(func=lambda _: run_doctor())
+
+    install_cmd = sub.add_parser(
+        "install-tools",
+        help="Install optional tools via a TUI checklist",
+    )
+    install_cmd.add_argument(
+        "--all",
+        action="store_true",
+        help="Install all tools without showing the TUI",
+    )
+    install_cmd.set_defaults(func=run_install_tools)
 
     return parser
 

@@ -43,6 +43,10 @@ distrodeck upgrade
 distrodeck security
 
 distrodeck doctor
+
+distrodeck install-tools
+
+distrodeck install-tools --all
 ```
 
 ## Documentation
@@ -50,6 +54,7 @@ distrodeck doctor
 - Usage guide: `docs/USAGE.md`
 - Man page: `docs/man/distrodeck.1` (regenerate with `make man`)
 - CI guide: `docs/CI.md`
+- Installer TUI: `scripts/install-tools-tui.sh`
 
 ## Scripts
 
