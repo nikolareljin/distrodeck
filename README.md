@@ -32,6 +32,8 @@ sudo ln -s "$PWD/distrodeck" /usr/local/bin/distrodeck
 ## Usage
 
 ```bash
+distrodeck  # opens the TUI menu
+
 distrodeck export --output backup.txt
 
 distrodeck import --input backup.txt --apply --update-sources
