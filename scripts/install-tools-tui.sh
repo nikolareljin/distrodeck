@@ -80,6 +80,102 @@ install_jq() {
   install_pkg "$1" jq
 }
 
+install_ripgrep() {
+  install_pkg "$1" ripgrep || log_warn "Failed to install ripgrep from repos."
+}
+
+install_fd() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" fd-find;;
+    dnf|pacman|zypper) install_pkg "$mgr" fd;;
+    *) log_warn "fd install not supported for this distro.";;
+  esac
+}
+
+install_bat() {
+  install_pkg "$1" bat || log_warn "Failed to install bat from repos."
+}
+
+install_eza() {
+  install_pkg "$1" eza || log_warn "Failed to install eza from repos."
+}
+
+install_fzf() {
+  install_pkg "$1" fzf || log_warn "Failed to install fzf from repos."
+}
+
+install_zoxide() {
+  install_pkg "$1" zoxide || log_warn "Failed to install zoxide from repos."
+}
+
+install_yq() {
+  install_pkg "$1" yq || log_warn "Failed to install yq from repos."
+}
+
+install_curl() {
+  install_pkg "$1" curl
+}
+
+install_wget() {
+  install_pkg "$1" wget
+}
+
+install_git() {
+  install_pkg "$1" git
+}
+
+install_git_lfs() {
+  install_pkg "$1" git-lfs || log_warn "Failed to install git-lfs from repos."
+}
+
+install_zsh() {
+  install_pkg "$1" zsh || log_warn "Failed to install zsh from repos."
+}
+
+install_starship() {
+  install_pkg "$1" starship || log_warn "Failed to install starship from repos."
+}
+
+install_tmux() {
+  install_pkg "$1" tmux || log_warn "Failed to install tmux from repos."
+}
+
+install_htop() {
+  install_pkg "$1" htop || log_warn "Failed to install htop from repos."
+}
+
+install_ncdu() {
+  install_pkg "$1" ncdu || log_warn "Failed to install ncdu from repos."
+}
+
+install_duf() {
+  install_pkg "$1" duf || log_warn "Failed to install duf from repos."
+}
+
+install_tree() {
+  install_pkg "$1" tree || log_warn "Failed to install tree from repos."
+}
+
+install_build_tools() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" build-essential;;
+    dnf) install_pkg "$mgr" gcc gcc-c++ make;;
+    pacman) install_pkg "$mgr" base-devel;;
+    zypper) install_pkg "$mgr" gcc gcc-c++ make;;
+    *) log_warn "Build tools install not supported for this distro.";;
+  esac
+}
+
+install_neovim() {
+  install_pkg "$1" neovim || log_warn "Failed to install neovim from repos."
+}
+
+install_micro() {
+  install_pkg "$1" micro || log_warn "Failed to install micro from repos."
+}
+
 install_node() {
   local mgr="$1"
   case "$mgr" in
@@ -161,19 +257,40 @@ main() {
     dialog_init
     selected=$(dialog --stdout --title "Distrodeck Installer" \
       --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" 0 \
-      "docker" "Docker Engine" off \
-      "nala" "Nala (apt UI)" off \
-      "dialog" "dialog (TUI)" off \
+      "bat" "bat (cat alternative)" off \
+      "curl" "curl" off \
+      "eza" "eza (ls alternative)" off \
+      "fd" "fd (find alternative)" off \
+      "fzf" "fzf (fuzzy finder)" off \
+      "git" "git" off \
+      "git-lfs" "git-lfs" off \
       "jq" "jq (JSON CLI)" off \
+      "ripgrep" "ripgrep (rg)" off \
+      "tree" "tree" off \
+      "wget" "wget" off \
+      "yq" "yq (YAML CLI)" off \
+      "zoxide" "zoxide (smart cd)" off \
+      "starship" "starship prompt" off \
+      "tmux" "tmux" off \
+      "zsh" "zsh" off \
+      "duf" "duf (disk space)" off \
+      "htop" "htop" off \
+      "ncdu" "ncdu (disk usage)" off \
+      "build-tools" "build-essential / toolchain" off \
+      "go" "Go" off \
+      "java" "Java (JDK)" off \
+      "micro" "micro editor" off \
+      "neovim" "Neovim" off \
       "node" "Node.js + npm" off \
+      "rust" "Rust (rustc/cargo)" off \
+      "dialog" "dialog (TUI)" off \
+      "docker" "Docker Engine" off \
       "lazygit" "LazyGit" off \
       "lazydocker" "LazyDocker" off \
-      "java" "Java (JDK)" off \
-      "rust" "Rust (rustc/cargo)" off \
-      "go" "Go" off \
+      "nala" "Nala (apt UI)" off \
       "vscode" "VS Code (code)" off)
   else
-    selected="docker nala dialog jq node lazygit lazydocker java rust go vscode"
+    selected="bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide starship tmux zsh duf htop ncdu build-tools go java micro neovim node rust dialog docker lazydocker lazygit nala vscode"
   fi
 
   if [[ -z "$selected" ]]; then
@@ -185,6 +302,27 @@ main() {
   for choice in "${choices[@]}"; do
     choice="${choice//\"/}"
     case "$choice" in
+      ripgrep) install_ripgrep "$mgr";;
+      fd) install_fd "$mgr";;
+      bat) install_bat "$mgr";;
+      eza) install_eza "$mgr";;
+      fzf) install_fzf "$mgr";;
+      zoxide) install_zoxide "$mgr";;
+      yq) install_yq "$mgr";;
+      curl) install_curl "$mgr";;
+      wget) install_wget "$mgr";;
+      git) install_git "$mgr";;
+      git-lfs) install_git_lfs "$mgr";;
+      zsh) install_zsh "$mgr";;
+      starship) install_starship "$mgr";;
+      tmux) install_tmux "$mgr";;
+      htop) install_htop "$mgr";;
+      ncdu) install_ncdu "$mgr";;
+      duf) install_duf "$mgr";;
+      tree) install_tree "$mgr";;
+      build-tools) install_build_tools "$mgr";;
+      neovim) install_neovim "$mgr";;
+      micro) install_micro "$mgr";;
       docker) install_docker "$mgr";;
       nala) install_nala "$mgr";;
       dialog) install_dialog_pkg "$mgr";;
