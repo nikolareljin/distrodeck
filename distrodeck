@@ -9,6 +9,17 @@ from pathlib import Path
 from typing import List, Optional
 
 VERSION = "0.3.0"
+VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
+SHARE_VERSION_FILE = Path("/usr/share/distrodeck/VERSION")
+for path in (VERSION_FILE, SHARE_VERSION_FILE):
+    if path.exists():
+        try:
+            file_version = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            file_version = ""
+        if file_version:
+            VERSION = file_version
+        break
 DEFAULT_EXPORT_FILE = "distrodeck-export.txt"
 
 

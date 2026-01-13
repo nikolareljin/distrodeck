@@ -139,6 +139,13 @@ make fpm
 
 Before publishing to a PPA, update `debian/changelog` and `debian/control` with your maintainer name and target series.
 
+## Packaging (RPM/Homebrew)
+
+- Build `.rpm`: `./tools/build-rpm.sh`
+- Homebrew tarball + formula: `./tools/build-brew-tarball.sh && ./tools/gen-brew-formula.sh`
+- Publish Homebrew formula: `./tools/publish-homebrew.sh`
+- Install from tap: `brew install <tap>/distrodeck`
+
 ## Contributing
 
 Keep the script POSIX-friendly where possible and avoid adding heavy dependencies.

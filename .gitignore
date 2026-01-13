@@ -21,6 +21,16 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+dist/
+*.deb
+*.dsc
+*.changes
+*.buildinfo
+*.rpm
+*.srpm
+*.tar.gz
+*.tar.xz
+*.tar.zst
 
 .idea/
 .vscode/
