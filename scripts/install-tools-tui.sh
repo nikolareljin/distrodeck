@@ -186,11 +186,57 @@ install_node() {
 }
 
 install_lazygit() {
-  install_pkg "$1" lazygit || log_warn "Failed to install lazygit from repos."
+  if install_pkg "$1" lazygit; then
+    return
+  fi
+  install_pkg "$1" lazygit-gm || log_warn "Failed to install lazygit (tried lazygit and lazygit-gm)."
 }
 
 install_lazydocker() {
-  install_pkg "$1" lazydocker || log_warn "Failed to install lazydocker from repos."
+  if install_pkg "$1" lazydocker; then
+    return
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    log_warn "Failed to install lazydocker from repos, and curl is missing for fallback install."
+    return
+  fi
+
+  local os arch url tmp_dir bin_path
+  os="$(uname -s)"
+  case "$os" in
+    Linux) os="Linux";;
+    Darwin) os="Darwin";;
+    *) log_warn "Fallback lazydocker install not supported for OS: $os"; return;;
+  esac
+
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x86_64";;
+    aarch64|arm64) arch="arm64";;
+    armv7l|armv7) arch="armv7";;
+    i386|i686) arch="386";;
+    *) log_warn "Fallback lazydocker install not supported for arch: $arch"; return;;
+  esac
+
+  url="https://github.com/jesseduffield/lazydocker/releases/latest/download/lazydocker_${os}_${arch}.tar.gz"
+  tmp_dir="$(mktemp -d)"
+  bin_path="$tmp_dir/lazydocker"
+  if curl -fsSL "$url" -o "$tmp_dir/lazydocker.tar.gz"; then
+    if tar -xzf "$tmp_dir/lazydocker.tar.gz" -C "$tmp_dir"; then
+      if [[ -f "$bin_path" ]]; then
+        sudo install -m 0755 "$bin_path" /usr/local/bin/lazydocker
+        log_info "Installed lazydocker to /usr/local/bin/lazydocker"
+      else
+        log_warn "Fallback lazydocker install failed: binary not found in archive."
+      fi
+    else
+      log_warn "Fallback lazydocker install failed: unable to extract archive."
+    fi
+  else
+    log_warn "Fallback lazydocker install failed: download error."
+  fi
+  rm -rf "$tmp_dir"
 }
 
 install_java() {
@@ -237,6 +283,82 @@ install_vscode() {
   fi
 }
 
+tool_desc() {
+  case "$1" in
+    bat) echo "bat (cat alternative)";;
+    curl) echo "curl";;
+    eza) echo "eza (ls alternative)";;
+    fd) echo "fd (find alternative)";;
+    fzf) echo "fzf (fuzzy finder)";;
+    git) echo "git";;
+    git-lfs) echo "git-lfs";;
+    jq) echo "jq (JSON CLI)";;
+    ripgrep) echo "ripgrep (rg)";;
+    tree) echo "tree";;
+    wget) echo "wget";;
+    yq) echo "yq (YAML CLI)";;
+    zoxide) echo "zoxide (smart cd)";;
+    starship) echo "starship prompt";;
+    tmux) echo "tmux";;
+    zsh) echo "zsh";;
+    duf) echo "duf (disk space)";;
+    htop) echo "htop";;
+    ncdu) echo "ncdu (disk usage)";;
+    build-tools) echo "build-essential / toolchain";;
+    go) echo "Go";;
+    java) echo "Java (JDK)";;
+    micro) echo "micro editor";;
+    neovim) echo "Neovim";;
+    node) echo "Node.js + npm";;
+    rust) echo "Rust (rustc/cargo)";;
+    dialog) echo "dialog (TUI)";;
+    docker) echo "Docker Engine";;
+    lazydocker) echo "LazyDocker";;
+    lazygit) echo "LazyGit";;
+    nala) echo "Nala (apt UI)";;
+    vscode) echo "VS Code (code)";;
+    *) echo "$1";;
+  esac
+}
+
+is_installed_tool() {
+  case "$1" in
+    bat) command -v bat >/dev/null 2>&1 || command -v batcat >/dev/null 2>&1;;
+    curl) command -v curl >/dev/null 2>&1;;
+    eza) command -v eza >/dev/null 2>&1;;
+    fd) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1;;
+    fzf) command -v fzf >/dev/null 2>&1;;
+    git) command -v git >/dev/null 2>&1;;
+    git-lfs) command -v git-lfs >/dev/null 2>&1;;
+    jq) command -v jq >/dev/null 2>&1;;
+    ripgrep) command -v rg >/dev/null 2>&1;;
+    tree) command -v tree >/dev/null 2>&1;;
+    wget) command -v wget >/dev/null 2>&1;;
+    yq) command -v yq >/dev/null 2>&1;;
+    zoxide) command -v zoxide >/dev/null 2>&1;;
+    starship) command -v starship >/dev/null 2>&1;;
+    tmux) command -v tmux >/dev/null 2>&1;;
+    zsh) command -v zsh >/dev/null 2>&1;;
+    duf) command -v duf >/dev/null 2>&1;;
+    htop) command -v htop >/dev/null 2>&1;;
+    ncdu) command -v ncdu >/dev/null 2>&1;;
+    build-tools) command -v make >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1;;
+    go) command -v go >/dev/null 2>&1;;
+    java) command -v java >/dev/null 2>&1;;
+    micro) command -v micro >/dev/null 2>&1;;
+    neovim) command -v nvim >/dev/null 2>&1;;
+    node) command -v node >/dev/null 2>&1 || command -v npm >/dev/null 2>&1;;
+    rust) command -v rustc >/dev/null 2>&1 || command -v cargo >/dev/null 2>&1;;
+    dialog) command -v dialog >/dev/null 2>&1;;
+    docker) command -v docker >/dev/null 2>&1;;
+    lazydocker) command -v lazydocker >/dev/null 2>&1;;
+    lazygit) command -v lazygit >/dev/null 2>&1 || command -v lazygit-gm >/dev/null 2>&1;;
+    nala) command -v nala >/dev/null 2>&1;;
+    vscode) command -v code >/dev/null 2>&1;;
+    *) return 1;;
+  esac
+}
+
 main() {
   local mgr
   mgr="$(detect_pkg_mgr)"
@@ -252,44 +374,50 @@ main() {
     all=true
   fi
 
+  declare -A installed=()
+  local tools=(
+    bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide
+    starship tmux zsh duf htop ncdu
+    build-tools go java micro neovim node rust
+    dialog docker lazydocker lazygit nala vscode
+  )
+
   if ! $all; then
     ensure_dialog
     dialog_init
+    dialog --stdout --title "Distrodeck Installer" \
+      --infobox "Checking installed tools..." "$DIALOG_HEIGHT" "$DIALOG_WIDTH"
+    for tool in "${tools[@]}"; do
+      if is_installed_tool "$tool"; then
+        installed["$tool"]="true"
+      else
+        installed["$tool"]="false"
+      fi
+    done
+    dialog --clear
+
+    local items=()
+    for tool in "${tools[@]}"; do
+      local desc status
+      desc="$(tool_desc "$tool")"
+      status="off"
+      if [[ "${installed[$tool]}" == "true" ]]; then
+        desc+=" (installed)"
+        status="on"
+      fi
+      items+=("$tool" "$desc" "$status")
+    done
     selected=$(dialog --stdout --title "Distrodeck Installer" \
       --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" 0 \
-      "bat" "bat (cat alternative)" off \
-      "curl" "curl" off \
-      "eza" "eza (ls alternative)" off \
-      "fd" "fd (find alternative)" off \
-      "fzf" "fzf (fuzzy finder)" off \
-      "git" "git" off \
-      "git-lfs" "git-lfs" off \
-      "jq" "jq (JSON CLI)" off \
-      "ripgrep" "ripgrep (rg)" off \
-      "tree" "tree" off \
-      "wget" "wget" off \
-      "yq" "yq (YAML CLI)" off \
-      "zoxide" "zoxide (smart cd)" off \
-      "starship" "starship prompt" off \
-      "tmux" "tmux" off \
-      "zsh" "zsh" off \
-      "duf" "duf (disk space)" off \
-      "htop" "htop" off \
-      "ncdu" "ncdu (disk usage)" off \
-      "build-tools" "build-essential / toolchain" off \
-      "go" "Go" off \
-      "java" "Java (JDK)" off \
-      "micro" "micro editor" off \
-      "neovim" "Neovim" off \
-      "node" "Node.js + npm" off \
-      "rust" "Rust (rustc/cargo)" off \
-      "dialog" "dialog (TUI)" off \
-      "docker" "Docker Engine" off \
-      "lazygit" "LazyGit" off \
-      "lazydocker" "LazyDocker" off \
-      "nala" "Nala (apt UI)" off \
-      "vscode" "VS Code (code)" off)
+      "${items[@]}")
   else
+    for tool in "${tools[@]}"; do
+      if is_installed_tool "$tool"; then
+        installed["$tool"]="true"
+      else
+        installed["$tool"]="false"
+      fi
+    done
     selected="bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide starship tmux zsh duf htop ncdu build-tools go java micro neovim node rust dialog docker lazydocker lazygit nala vscode"
   fi
 
@@ -301,6 +429,10 @@ main() {
   IFS=' ' read -r -a choices <<< "$selected"
   for choice in "${choices[@]}"; do
     choice="${choice//\"/}"
+    if [[ "${installed[$choice]}" == "true" ]]; then
+      log_info "Already installed: $choice"
+      continue
+    fi
     case "$choice" in
       ripgrep) install_ripgrep "$mgr";;
       fd) install_fd "$mgr";;
