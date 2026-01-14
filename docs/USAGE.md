@@ -4,6 +4,12 @@
 
 distrodeck exports a snapshot of installed packages and sources, then re-installs them after a distro upgrade.
 
+Running with no arguments opens the TUI menu:
+
+```
+distrodeck
+```
+
 ## Commands
 
 ### export

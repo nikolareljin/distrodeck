@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -50,6 +51,110 @@ def cmd_exists(name: str) -> bool:
     return subprocess.call(
         ["bash", "-lc", f"command -v {name} >/dev/null 2>&1"]
     ) == 0
+
+
+def require_dialog() -> None:
+    if not cmd_exists("dialog"):
+        fail("dialog not found. Install it or run distrodeck with CLI arguments.")
+
+
+def dialog_size(height_ratio: float = 0.6, width_ratio: float = 0.7) -> tuple[int, int]:
+    size = get_terminal_size(fallback=(80, 24))
+    width = max(60, min(120, int(size.columns * width_ratio)))
+    height = max(12, min(30, int(size.lines * height_ratio)))
+    return height, width
+
+
+def dialog_menu(title: str, prompt: str, items: List[tuple]) -> Optional[str]:
+    height, width = dialog_size(0.7, 0.8)
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--menu",
+        prompt,
+        str(height),
+        str(width),
+        "0",
+    ]
+    for tag, desc in items:
+        args.extend([tag, desc])
+    result = run(args, check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def dialog_input(title: str, prompt: str, default: str = "") -> Optional[str]:
+    height, width = dialog_size(0.4, 0.8)
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--inputbox",
+        prompt,
+        str(height),
+        str(width),
+        default,
+    ]
+    result = run(args, check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def dialog_yesno(title: str, prompt: str) -> bool:
+    height, width = dialog_size(0.35, 0.7)
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--yesno",
+        prompt,
+        str(height),
+        str(width),
+    ]
+    result = run(args, check=False)
+    return result.returncode == 0
+
+
+def dialog_password(title: str, prompt: str) -> Optional[str]:
+    height, width = dialog_size(0.4, 0.7)
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--insecure",
+        "--passwordbox",
+        prompt,
+        str(height),
+        str(width),
+    ]
+    result = run(args, check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def dialog_msgbox(title: str, message: str) -> None:
+    height, width = dialog_size(0.4, 0.7)
+    run(
+        [
+            "dialog",
+            "--stdout",
+            "--title",
+            title,
+            "--msgbox",
+            message,
+            str(height),
+            str(width),
+        ],
+        check=False,
+    )
 
 
 def read_os_release() -> dict:
@@ -317,10 +422,17 @@ def run_update() -> None:
 
 def run_security() -> None:
     if cmd_exists("unattended-upgrade"):
-        run(["sudo", "unattended-upgrade"])
-        return
+        result = run(["sudo", "unattended-upgrade"], check=False)
+        if result.returncode != 0:
+            warn("unattended-upgrade failed; trying package-manager security updates.")
+        else:
+            return
     if cmd_exists("nala"):
-        run(["sudo", "nala", "upgrade", "-y", "--security"])
+        result = run(["sudo", "nala", "upgrade", "-y", "--security"], check=False)
+        if result.returncode == 0:
+            return
+        warn("nala does not support --security; falling back to a full upgrade.")
+        run(["sudo", "nala", "upgrade", "-y"])
         return
     if cmd_exists("apt-get"):
         run(["sudo", "apt-get", "update"])
@@ -524,6 +636,165 @@ def run_install_tools(args: argparse.Namespace) -> None:
     run(cmd)
 
 
+def ensure_sudo() -> bool:
+    if not cmd_exists("sudo"):
+        warn("sudo not available; some actions may fail.")
+        return True
+    if run(["sudo", "-n", "true"], check=False).returncode == 0:
+        return True
+    password = dialog_password("Authentication", "Enter sudo password:")
+    if password is None:
+        return False
+    result = run(["sudo", "-S", "-v"], check=False, input_text=f"{password}\n")
+    if result.returncode != 0:
+        dialog_msgbox("Authentication", "Sudo authentication failed.")
+        return False
+    return True
+
+
+def run_tui() -> None:
+    require_dialog()
+    self_cmd = str(Path(__file__).resolve())
+    actions = [
+        ("export", "Packages: Export installed packages"),
+        ("import", "Packages: Import from export file"),
+        ("update", "System: Update packages"),
+        ("upgrade", "System: Upgrade distro"),
+        ("security", "Security: Apply security updates"),
+        ("install-tools", "Tools: Install optional tools"),
+        ("doctor", "Diagnostics: Check system prerequisites"),
+        ("quit", "Exit"),
+    ]
+    while True:
+        choice = dialog_menu("Distrodeck", "Select an action:", actions)
+        if not choice or choice == "quit":
+            break
+        if choice == "export":
+            output = dialog_input(
+                "Export", "Output file:", DEFAULT_EXPORT_FILE
+            )
+            if not output:
+                continue
+            appimage_dirs = dialog_input(
+                "Export", "AppImage dirs (colon-separated, blank for default):", ""
+            )
+            cmd = [self_cmd, "export", "--output", output]
+            if appimage_dirs:
+                cmd.extend(["--appimage-dirs", appimage_dirs])
+        elif choice == "import":
+            input_file = dialog_input("Import", "Input file:", "")
+            if not input_file:
+                continue
+            apply = dialog_yesno("Import", "Apply installs now?")
+            update_sources = dialog_yesno("Import", "Update apt source codenames?")
+            appimage_dirs = dialog_input(
+                "Import", "AppImage dirs (colon-separated, blank for default):", ""
+            )
+            cmd = [self_cmd, "import", "--input", input_file]
+            if apply:
+                cmd.append("--apply")
+            if update_sources:
+                cmd.append("--update-sources")
+            if appimage_dirs:
+                cmd.extend(["--appimage-dirs", appimage_dirs])
+        elif choice == "install-tools":
+            if not ensure_sudo():
+                continue
+            install_all = dialog_yesno(
+                "Install Tools", "Install all tools without selection?"
+            )
+            cmd = [self_cmd, "install-tools"]
+            if install_all:
+                cmd.append("--all")
+        elif choice == "update":
+            if not ensure_sudo():
+                continue
+            height, width = dialog_size(0.7, 0.85)
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Update",
+                    "--programbox",
+                    "Updating packages...",
+                    str(height),
+                    str(width),
+                    "bash",
+                    "-lc",
+                    f"{self_cmd} update",
+                ],
+                check=False,
+            )
+            continue
+        elif choice == "upgrade":
+            if not ensure_sudo():
+                continue
+            height, width = dialog_size(0.7, 0.85)
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Upgrade",
+                    "--programbox",
+                    "Upgrading distro...",
+                    str(height),
+                    str(width),
+                    "bash",
+                    "-lc",
+                    f"{self_cmd} upgrade",
+                ],
+                check=False,
+            )
+            continue
+        elif choice == "security":
+            if not ensure_sudo():
+                continue
+            height, width = dialog_size(0.7, 0.85)
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Security",
+                    "--programbox",
+                    "Applying security updates...",
+                    str(height),
+                    str(width),
+                    "bash",
+                    "-lc",
+                    f"{self_cmd} security",
+                ],
+                check=False,
+            )
+            continue
+        else:
+            cmd = [self_cmd, choice]
+
+        if choice in {"install-tools"}:
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck",
+                    "--programbox",
+                    "Running command...",
+                    "20",
+                    "80",
+                    "bash",
+                    "-lc",
+                    " ".join(cmd),
+                ],
+                check=False,
+            )
+            continue
+
+        result = run(cmd, check=False, capture_output=True)
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "Command failed").strip()
+            dialog_msgbox("Distrodeck Error", message)
+        else:
+            dialog_msgbox("Distrodeck", "Done.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="distrodeck",
@@ -571,6 +842,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        run_tui()
+        return
     parser = build_parser()
     args = parser.parse_args()
     args.func(args)
