@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -57,7 +58,15 @@ def require_dialog() -> None:
         fail("dialog not found. Install it or run distrodeck with CLI arguments.")
 
 
+def dialog_size(height_ratio: float = 0.6, width_ratio: float = 0.7) -> tuple[int, int]:
+    size = get_terminal_size(fallback=(80, 24))
+    width = max(60, min(120, int(size.columns * width_ratio)))
+    height = max(12, min(30, int(size.lines * height_ratio)))
+    return height, width
+
+
 def dialog_menu(title: str, prompt: str, items: List[tuple]) -> Optional[str]:
+    height, width = dialog_size(0.7, 0.8)
     args = [
         "dialog",
         "--stdout",
@@ -65,8 +74,8 @@ def dialog_menu(title: str, prompt: str, items: List[tuple]) -> Optional[str]:
         title,
         "--menu",
         prompt,
-        "20",
-        "80",
+        str(height),
+        str(width),
         "0",
     ]
     for tag, desc in items:
@@ -78,6 +87,7 @@ def dialog_menu(title: str, prompt: str, items: List[tuple]) -> Optional[str]:
 
 
 def dialog_input(title: str, prompt: str, default: str = "") -> Optional[str]:
+    height, width = dialog_size(0.4, 0.8)
     args = [
         "dialog",
         "--stdout",
@@ -85,8 +95,8 @@ def dialog_input(title: str, prompt: str, default: str = "") -> Optional[str]:
         title,
         "--inputbox",
         prompt,
-        "10",
-        "80",
+        str(height),
+        str(width),
         default,
     ]
     result = run(args, check=False, capture_output=True)
@@ -96,6 +106,7 @@ def dialog_input(title: str, prompt: str, default: str = "") -> Optional[str]:
 
 
 def dialog_yesno(title: str, prompt: str) -> bool:
+    height, width = dialog_size(0.35, 0.7)
     args = [
         "dialog",
         "--stdout",
@@ -103,14 +114,15 @@ def dialog_yesno(title: str, prompt: str) -> bool:
         title,
         "--yesno",
         prompt,
-        "10",
-        "70",
+        str(height),
+        str(width),
     ]
     result = run(args, check=False)
     return result.returncode == 0
 
 
 def dialog_password(title: str, prompt: str) -> Optional[str]:
+    height, width = dialog_size(0.4, 0.7)
     args = [
         "dialog",
         "--stdout",
@@ -119,8 +131,8 @@ def dialog_password(title: str, prompt: str) -> Optional[str]:
         "--insecure",
         "--passwordbox",
         prompt,
-        "10",
-        "70",
+        str(height),
+        str(width),
     ]
     result = run(args, check=False, capture_output=True)
     if result.returncode != 0:
@@ -129,8 +141,18 @@ def dialog_password(title: str, prompt: str) -> Optional[str]:
 
 
 def dialog_msgbox(title: str, message: str) -> None:
+    height, width = dialog_size(0.4, 0.7)
     run(
-        ["dialog", "--stdout", "--title", title, "--msgbox", message, "10", "70"],
+        [
+            "dialog",
+            "--stdout",
+            "--title",
+            title,
+            "--msgbox",
+            message,
+            str(height),
+            str(width),
+        ],
         check=False,
     )
 
@@ -687,6 +709,7 @@ def run_tui() -> None:
         elif choice == "update":
             if not ensure_sudo():
                 continue
+            height, width = dialog_size(0.7, 0.85)
             run(
                 [
                     "dialog",
@@ -694,8 +717,8 @@ def run_tui() -> None:
                     "Distrodeck Update",
                     "--programbox",
                     "Updating packages...",
-                    "20",
-                    "80",
+                    str(height),
+                    str(width),
                     "bash",
                     "-lc",
                     f"{self_cmd} update",
@@ -706,6 +729,7 @@ def run_tui() -> None:
         elif choice == "upgrade":
             if not ensure_sudo():
                 continue
+            height, width = dialog_size(0.7, 0.85)
             run(
                 [
                     "dialog",
@@ -713,8 +737,8 @@ def run_tui() -> None:
                     "Distrodeck Upgrade",
                     "--programbox",
                     "Upgrading distro...",
-                    "20",
-                    "80",
+                    str(height),
+                    str(width),
                     "bash",
                     "-lc",
                     f"{self_cmd} upgrade",
@@ -725,6 +749,7 @@ def run_tui() -> None:
         elif choice == "security":
             if not ensure_sudo():
                 continue
+            height, width = dialog_size(0.7, 0.85)
             run(
                 [
                     "dialog",
@@ -732,8 +757,8 @@ def run_tui() -> None:
                     "Distrodeck Security",
                     "--programbox",
                     "Applying security updates...",
-                    "20",
-                    "80",
+                    str(height),
+                    str(width),
                     "bash",
                     "-lc",
                     f"{self_cmd} security",
