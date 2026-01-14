@@ -110,6 +110,24 @@ def dialog_yesno(title: str, prompt: str) -> bool:
     return result.returncode == 0
 
 
+def dialog_password(title: str, prompt: str) -> Optional[str]:
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--insecure",
+        "--passwordbox",
+        prompt,
+        "10",
+        "70",
+    ]
+    result = run(args, check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def dialog_msgbox(title: str, message: str) -> None:
     run(
         ["dialog", "--stdout", "--title", title, "--msgbox", message, "10", "70"],
@@ -596,6 +614,22 @@ def run_install_tools(args: argparse.Namespace) -> None:
     run(cmd)
 
 
+def ensure_sudo() -> bool:
+    if not cmd_exists("sudo"):
+        warn("sudo not available; some actions may fail.")
+        return True
+    if run(["sudo", "-n", "true"], check=False).returncode == 0:
+        return True
+    password = dialog_password("Authentication", "Enter sudo password:")
+    if password is None:
+        return False
+    result = run(["sudo", "-S", "-v"], check=False, input_text=f"{password}\n")
+    if result.returncode != 0:
+        dialog_msgbox("Authentication", "Sudo authentication failed.")
+        return False
+    return True
+
+
 def run_tui() -> None:
     require_dialog()
     self_cmd = str(Path(__file__).resolve())
@@ -642,6 +676,8 @@ def run_tui() -> None:
             if appimage_dirs:
                 cmd.extend(["--appimage-dirs", appimage_dirs])
         elif choice == "install-tools":
+            if not ensure_sudo():
+                continue
             install_all = dialog_yesno(
                 "Install Tools", "Install all tools without selection?"
             )
@@ -649,6 +685,8 @@ def run_tui() -> None:
             if install_all:
                 cmd.append("--all")
         elif choice == "update":
+            if not ensure_sudo():
+                continue
             run(
                 [
                     "dialog",
@@ -665,8 +703,64 @@ def run_tui() -> None:
                 check=False,
             )
             continue
+        elif choice == "upgrade":
+            if not ensure_sudo():
+                continue
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Upgrade",
+                    "--programbox",
+                    "Upgrading distro...",
+                    "20",
+                    "80",
+                    "bash",
+                    "-lc",
+                    f"{self_cmd} upgrade",
+                ],
+                check=False,
+            )
+            continue
+        elif choice == "security":
+            if not ensure_sudo():
+                continue
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Security",
+                    "--programbox",
+                    "Applying security updates...",
+                    "20",
+                    "80",
+                    "bash",
+                    "-lc",
+                    f"{self_cmd} security",
+                ],
+                check=False,
+            )
+            continue
         else:
             cmd = [self_cmd, choice]
+
+        if choice in {"install-tools"}:
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck",
+                    "--programbox",
+                    "Running command...",
+                    "20",
+                    "80",
+                    "bash",
+                    "-lc",
+                    " ".join(cmd),
+                ],
+                check=False,
+            )
+            continue
 
         result = run(cmd, check=False, capture_output=True)
         if result.returncode != 0:
