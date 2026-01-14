@@ -4,6 +4,9 @@ One CLI to snapshot and restore your installed packages before a distro upgrade.
 
 Primary target: Ubuntu. Should work on other Debian-based distros with apt, and partially on any distro with snap/flatpak installed.
 
+<img width="1237" height="622" alt="image" src="https://github.com/user-attachments/assets/fdddb54a-573f-43c1-b5a7-8feae14e2b15" />
+
+
 ## Features
 
 - Export installed packages and package sources (including PPAs)
