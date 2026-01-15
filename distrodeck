@@ -1443,11 +1443,10 @@ def import_from_file(args: argparse.Namespace) -> None:
         for entry in data["config_files"]:
             path = ""
             content_b64 = ""
-            for part in entry.split():
-                if part.startswith("path="):
-                    path = part.split("=", 1)[1]
-                if part.startswith("content_b64="):
-                    content_b64 = part.split("=", 1)[1]
+            if " content_b64=" in entry and entry.startswith("path="):
+                path_part, content_part = entry.split(" content_b64=", 1)
+                path = path_part.split("=", 1)[1]
+                content_b64 = content_part
             if not path or not content_b64:
                 continue
             try:
@@ -1635,7 +1634,11 @@ def run_tui() -> None:
             input_file = dialog_fselect("Import", "Input file:", default_path)
             if not input_file:
                 continue
-            import_data = parse_export_file(Path(input_file))
+            try:
+                import_data = parse_export_file(Path(input_file))
+            except OSError as exc:
+                dialog_msgbox("Import", f"Failed to read file: {exc}")
+                continue
             apply = dialog_yesno("Import", "Apply installs now?")
             update_sources = dialog_yesno("Import", "Update apt source codenames?")
             items = [
