@@ -1833,15 +1833,10 @@ def run_tui() -> None:
                 run(["dialog", "--clear"], check=False)
                 run_update()
                 continue
+            run(["dialog", "--clear"], check=False)
             env = os.environ.copy()
-            env["DISTRODECK_DIALOG"] = "1"
             env["DISTRODECK_NO_NALA"] = "1"
-            dialog_run_command(
-                "Distrodeck Update",
-                "Updating packages...",
-                [self_cmd, "update"],
-                env=env,
-            )
+            run([self_cmd, "update"], check=False, env=env)
             continue
         elif choice == "upgrade":
             if not ensure_sudo():
