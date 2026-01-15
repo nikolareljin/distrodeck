@@ -12,6 +12,11 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ### Changed
 - Security updates now prefer `unattended-upgrade` and fall back safely when unavailable.
+- TUI update/upgrade/security now fall back to CLI when interactive output is needed.
+- TUI install-tools opens the checklist directly; removed the “install all” prompt from the TUI.
+- Added Ctrl+C handler to cleanly exit the TUI.
+- TUI import uses a file picker for the import file.
+- `install-tools` supports `--all` in CLI mode and adds PHP/Composer to the list.
 
 ## [0.1.0]
 

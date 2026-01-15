@@ -283,6 +283,14 @@ install_vscode() {
   fi
 }
 
+install_php() {
+  install_pkg "$1" php || log_warn "Failed to install PHP from repos."
+}
+
+install_composer() {
+  install_pkg "$1" composer || log_warn "Failed to install Composer from repos."
+}
+
 tool_desc() {
   case "$1" in
     bat) echo "bat (cat alternative)";;
@@ -307,6 +315,8 @@ tool_desc() {
     build-tools) echo "build-essential / toolchain";;
     go) echo "Go";;
     java) echo "Java (JDK)";;
+    php) echo "PHP";;
+    composer) echo "Composer (PHP)";;
     micro) echo "micro editor";;
     neovim) echo "Neovim";;
     node) echo "Node.js + npm";;
@@ -345,6 +355,8 @@ is_installed_tool() {
     build-tools) command -v make >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1;;
     go) command -v go >/dev/null 2>&1;;
     java) command -v java >/dev/null 2>&1;;
+    php) command -v php >/dev/null 2>&1;;
+    composer) command -v composer >/dev/null 2>&1;;
     micro) command -v micro >/dev/null 2>&1;;
     neovim) command -v nvim >/dev/null 2>&1;;
     node) command -v node >/dev/null 2>&1 || command -v npm >/dev/null 2>&1;;
@@ -379,21 +391,21 @@ main() {
     bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide
     starship tmux zsh duf htop ncdu
     build-tools go java micro neovim node rust
-    dialog docker lazydocker lazygit nala vscode
+    php composer dialog docker lazydocker lazygit nala vscode
   )
 
+  for tool in "${tools[@]}"; do
+    if is_installed_tool "$tool"; then
+      installed["$tool"]="true"
+    else
+      installed["$tool"]="false"
+    fi
+  done
   if ! $all; then
     ensure_dialog
     dialog_init
     dialog --stdout --title "Distrodeck Installer" \
       --infobox "Checking installed tools..." "$DIALOG_HEIGHT" "$DIALOG_WIDTH"
-    for tool in "${tools[@]}"; do
-      if is_installed_tool "$tool"; then
-        installed["$tool"]="true"
-      else
-        installed["$tool"]="false"
-      fi
-    done
     dialog --clear
 
     local items=()
@@ -407,17 +419,13 @@ main() {
       fi
       items+=("$tool" "$desc" "$status")
     done
+    local list_height=$((DIALOG_HEIGHT - 8))
+    (( list_height < 10 )) && list_height=10
     selected=$(dialog --stdout --title "Distrodeck Installer" \
-      --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" 0 \
+      --scrollbar \
+      --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
       "${items[@]}")
   else
-    for tool in "${tools[@]}"; do
-      if is_installed_tool "$tool"; then
-        installed["$tool"]="true"
-      else
-        installed["$tool"]="false"
-      fi
-    done
     selected="bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide starship tmux zsh duf htop ncdu build-tools go java micro neovim node rust dialog docker lazydocker lazygit nala vscode"
   fi
 
@@ -463,6 +471,8 @@ main() {
       lazygit) install_lazygit "$mgr";;
       lazydocker) install_lazydocker "$mgr";;
       java) install_java "$mgr";;
+      php) install_php "$mgr";;
+      composer) install_composer "$mgr";;
       rust) install_rust "$mgr";;
       go) install_go "$mgr";;
       vscode) install_vscode "$mgr";;
