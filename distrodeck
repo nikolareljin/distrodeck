@@ -1570,6 +1570,8 @@ def run_tui() -> None:
     while True:
         choice = dialog_menu("Distrodeck", "Select an action:", actions)
         if not choice or choice == "quit":
+            if cmd_exists("dialog"):
+                run(["dialog", "--clear"], check=False)
             break
         if choice == "export":
             output = dialog_input(

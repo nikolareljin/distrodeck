@@ -283,6 +283,81 @@ install_vscode() {
   fi
 }
 
+install_image_view() {
+  local mgr="$1"
+  if ! command -v cargo >/dev/null 2>&1; then
+    log_warn "cargo is required to install image-view; installing Rust..."
+    install_rust "$mgr" || true
+  fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    log_warn "cargo still missing; cannot install image-view."
+    return 1
+  fi
+  cargo install --git https://github.com/nikolareljin/image-view --bin image-view || \
+    log_warn "Failed to install image-view via cargo."
+}
+
+download_file() {
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -O "$dest" "$url"
+    return $?
+  fi
+  return 1
+}
+
+install_isoforge() {
+  local mgr="$1"
+  local deb_url="${ISOFORGE_DEB_URL:-${BURN_ISO_DEB_URL:-}}"
+  local repo_dir="${ISOFORGE_REPO_DIR:-${BURN_ISO_REPO_DIR:-}}"
+  local tmp_dir deb_path
+
+  if [[ -n "$deb_url" ]]; then
+    tmp_dir="$(mktemp -d)"
+    deb_path="$tmp_dir/isoforge.deb"
+    if download_file "$deb_url" "$deb_path"; then
+      sudo dpkg -i "$deb_path" || true
+      if [[ "$mgr" == "apt" ]]; then
+        sudo apt-get -f install -y
+      fi
+      if dpkg -s isoforge >/dev/null 2>&1; then
+        rm -rf "$tmp_dir"
+        return 0
+      fi
+    fi
+    rm -rf "$tmp_dir"
+  fi
+
+  if [[ -z "$repo_dir" ]]; then
+    repo_dir="$HOME/Projects/burn-iso"
+  fi
+  if [[ -d "$repo_dir" && -x "$repo_dir/tools/build-deb.sh" ]]; then
+    (cd "$repo_dir" && ./tools/build-deb.sh)
+    deb_path=$(ls -t "$repo_dir"/dist/*.deb 2>/dev/null | head -n1 || true)
+    if [[ -n "$deb_path" ]]; then
+      sudo dpkg -i "$deb_path" || true
+      if [[ "$mgr" == "apt" ]]; then
+        sudo apt-get -f install -y
+      fi
+      if dpkg -s isoforge >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+  fi
+
+  if [[ "$mgr" == "apt" ]]; then
+    install_pkg "$mgr" isoforge || log_warn "Failed to install isoforge from repos."
+    return 0
+  fi
+
+  log_warn "Isoforge install failed; set ISOFORGE_DEB_URL or ISOFORGE_REPO_DIR for fallback."
+  return 1
+}
+
 install_php() {
   install_pkg "$1" php || log_warn "Failed to install PHP from repos."
 }
@@ -327,6 +402,8 @@ tool_desc() {
     lazygit) echo "LazyGit";;
     nala) echo "Nala (apt UI)";;
     vscode) echo "VS Code (code)";;
+    isoforge) echo "Isoforge (burn-iso)";;
+    image-view) echo "image-view (Rust image viewer)";;
     *) echo "$1";;
   esac
 }
@@ -367,6 +444,8 @@ is_installed_tool() {
     lazygit) command -v lazygit >/dev/null 2>&1 || command -v lazygit-gm >/dev/null 2>&1;;
     nala) command -v nala >/dev/null 2>&1;;
     vscode) command -v code >/dev/null 2>&1;;
+    isoforge) command -v isoforge >/dev/null 2>&1;;
+    image-view) command -v image-view >/dev/null 2>&1;;
     *) return 1;;
   esac
 }
@@ -391,7 +470,7 @@ main() {
     bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide
     starship tmux zsh duf htop ncdu
     build-tools go java micro neovim node rust
-    php composer dialog docker lazydocker lazygit nala vscode
+    php composer dialog docker lazydocker lazygit nala vscode isoforge image-view
   )
 
   for tool in "${tools[@]}"; do
@@ -476,6 +555,8 @@ main() {
       rust) install_rust "$mgr";;
       go) install_go "$mgr";;
       vscode) install_vscode "$mgr";;
+      isoforge) install_isoforge "$mgr";;
+      image-view) install_image_view "$mgr";;
     esac
   done
 }
