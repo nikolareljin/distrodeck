@@ -85,6 +85,17 @@ def run(
     )
 
 
+def run_warn(cmd, title: str) -> subprocess.CompletedProcess:
+    result = run(cmd, check=False, capture_output=True)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        if details:
+            warn(f"{title} failed:\n{details}")
+        else:
+            warn(f"{title} failed.")
+    return result
+
+
 def get_log_dir() -> Path:
     state_home = os.getenv("XDG_STATE_HOME")
     if state_home:
@@ -1133,8 +1144,11 @@ def ensure_nala() -> bool:
         warn("apt-get not available; cannot install Nala")
         return False
     log("Installing Nala...")
-    run(["sudo", "apt-get", "update"])
-    run(["sudo", "apt-get", "install", "-y", "nala"])
+    update_result = run_warn(["sudo", "apt-get", "update"], "apt-get update")
+    if update_result.returncode != 0:
+        warn("Skipping Nala install due to apt-get update failure.")
+        return False
+    run_warn(["sudo", "apt-get", "install", "-y", "nala"], "apt-get install nala")
     return True
 
 
@@ -1145,11 +1159,14 @@ def run_update() -> None:
         if in_dialog_mode():
             update_cmd.extend(["-v"])
             upgrade_cmd.extend(["-v", "--raw-dpkg"])
-        run(update_cmd)
-        run(upgrade_cmd)
+        run_warn(update_cmd, "nala update")
+        run_warn(upgrade_cmd, "nala upgrade")
     elif cmd_exists("apt-get"):
-        run(["sudo", "apt-get", "update"])
-        run(["sudo", "apt-get", "upgrade", "-y"])
+        run_warn(["sudo", "apt-get", "update"], "apt-get update")
+        run_warn(["sudo", "apt-get", "upgrade", "-y"], "apt-get upgrade")
+    elif cmd_exists("apt"):
+        run_warn(["sudo", "apt", "update"], "apt update")
+        run_warn(["sudo", "apt", "upgrade", "-y"], "apt upgrade")
     elif cmd_exists("dnf"):
         run(["sudo", "dnf", "upgrade", "-y"])
     elif cmd_exists("zypper"):
