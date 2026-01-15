@@ -13,7 +13,7 @@ import shutil
 from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 VERSION = "0.3.0"
 VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
@@ -132,7 +132,7 @@ def require_dialog() -> None:
         fail("dialog not found. Install it or run distrodeck with CLI arguments.")
 
 
-def dialog_size(height_ratio: float = 0.6, width_ratio: float = 0.7) -> tuple[int, int]:
+def dialog_size(height_ratio: float = 0.6, width_ratio: float = 0.7) -> Tuple[int, int]:
     size = get_terminal_size(fallback=(80, 24))
     width = max(60, min(120, int(size.columns * width_ratio)))
     height = max(12, min(30, int(size.lines * height_ratio)))
@@ -973,7 +973,7 @@ def normalize_flatpak_entry(entry: str) -> str:
     return app
 
 
-def diff_items(desired: List[str], current: List[str]) -> tuple[List[str], List[str]]:
+def diff_items(desired: List[str], current: List[str]) -> Tuple[List[str], List[str]]:
     desired_set = {item for item in desired if item}
     current_set = {item for item in current if item}
     missing = sorted(desired_set - current_set)
