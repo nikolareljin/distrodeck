@@ -7,6 +7,9 @@ import sys
 import tempfile
 import time
 import signal
+import base64
+import socket
+import shutil
 from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,29 +28,72 @@ for path in (VERSION_FILE, SHARE_VERSION_FILE):
             VERSION = file_version
         break
 DEFAULT_EXPORT_FILE = "distrodeck-export.txt"
+LOG_PATH: Optional[Path] = None
 
 
 def log(message: str) -> None:
+    write_log("info", message)
     print(message)
 
 
 def warn(message: str) -> None:
+    write_log("warn", message)
     print(f"warning: {message}", file=sys.stderr)
 
 
 def fail(message: str) -> None:
+    write_log("error", message)
     print(f"error: {message}", file=sys.stderr)
     sys.exit(1)
 
 
-def run(cmd, check=True, capture_output=False, text=True, input_text=None):
+def run(
+    cmd, check=True, capture_output=False, text=True, input_text=None, env=None
+):
     return subprocess.run(
         cmd,
         check=check,
         capture_output=capture_output,
         text=text,
         input=input_text,
+        env=env,
     )
+
+
+def get_log_dir() -> Path:
+    state_home = os.getenv("XDG_STATE_HOME")
+    if state_home:
+        base = Path(state_home)
+    else:
+        base = Path.home() / ".local" / "state"
+    log_dir = base / "distrodeck" / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
+    except OSError:
+        fallback = Path("/tmp") / "distrodeck-logs"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+def init_logging() -> None:
+    global LOG_PATH
+    log_dir = get_log_dir()
+    hostname = socket.gethostname().split(".")[0]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    LOG_PATH = log_dir / f"distrodeck-{hostname}-{stamp}.log"
+    LOG_PATH.write_text(
+        f"distrodeck log {stamp} host={hostname}\n",
+        encoding="utf-8",
+    )
+
+
+def write_log(level: str, message: str) -> None:
+    if not LOG_PATH:
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(f"{stamp} [{level}] {message}\n")
 
 
 def cmd_exists(name: str) -> bool:
@@ -126,6 +172,32 @@ def dialog_fselect(title: str, prompt: str, path: str) -> Optional[str]:
     return result.stdout.strip()
 
 
+def dialog_checklist(title: str, prompt: str, items: List[tuple]) -> List[str]:
+    height, width = dialog_size(0.7, 0.85)
+    list_height = max(10, height - 8)
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--scrollbar",
+        "--checklist",
+        prompt,
+        str(height),
+        str(width),
+        str(list_height),
+    ]
+    for tag, desc, status in items:
+        args.extend([tag, desc, status])
+    result = run(args, check=False, capture_output=True)
+    if result.returncode != 0:
+        return []
+    raw = result.stdout.strip()
+    if not raw:
+        return []
+    return [item.strip('"') for item in raw.split()]
+
+
 def dialog_yesno(title: str, prompt: str) -> bool:
     height, width = dialog_size(0.35, 0.7)
     args = [
@@ -178,8 +250,44 @@ def dialog_msgbox(title: str, message: str) -> None:
     )
 
 
+def dialog_gauge(title: str, message: str) -> Optional[subprocess.Popen]:
+    if not cmd_exists("dialog"):
+        return None
+    height, width = dialog_size(0.5, 0.8)
+    return subprocess.Popen(
+        [
+            "dialog",
+            "--title",
+            title,
+            "--gauge",
+            message,
+            str(height),
+            str(width),
+            "0",
+        ],
+        stdin=subprocess.PIPE,
+        text=True,
+    )
+
+
+def dialog_gauge_update(proc: subprocess.Popen, percent: int, message: str) -> None:
+    if not proc or not proc.stdin:
+        return
+    proc.stdin.write(f"XXX\n{percent}\n{message}\nXXX\n")
+    proc.stdin.flush()
+
+
+def dialog_gauge_close(proc: subprocess.Popen) -> None:
+    if not proc or not proc.stdin:
+        return
+    proc.stdin.write("100\n")
+    proc.stdin.close()
+    proc.wait()
+
+
 def handle_sigint(signum, frame) -> None:
-    run(["dialog", "--clear"], check=False)
+    if cmd_exists("dialog"):
+        run(["dialog", "--clear"], check=False)
     sys.exit(130)
 
 
@@ -313,6 +421,198 @@ def get_appimage_dirs(arg_dirs: Optional[str]) -> List[str]:
         str(Path.home() / "AppImage"),
         str(Path.home() / "AppImages"),
     ]
+
+
+def get_config_dirs(arg_dirs: Optional[str]) -> List[str]:
+    if arg_dirs:
+        return [d for d in arg_dirs.split(":") if d]
+    return ["/etc", "/etc/apt", "/etc/dnf", "/etc/pacman.d"]
+
+
+def get_config_files(arg_files: Optional[str]) -> List[str]:
+    if arg_files:
+        return [os.path.expanduser(p) for p in arg_files.split(":") if p]
+    return [
+        "/etc/hosts",
+        "/etc/fstab",
+        os.path.expanduser("~/.ssh/config"),
+    ]
+
+
+def default_export_filename() -> str:
+    hostname = socket.gethostname().split(".")[0]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"distrodeck-export-{hostname}-{stamp}.txt"
+
+
+def run_preflight() -> List[str]:
+    results = []
+    try:
+        usage = shutil.disk_usage("/")
+        free_gb = usage.free / (1024**3)
+        if free_gb < 1.0:
+            results.append(f"WARN: disk space low on / ({free_gb:.1f} GB free)")
+        else:
+            results.append(f"OK: disk space on / ({free_gb:.1f} GB free)")
+    except OSError as exc:
+        results.append(f"WARN: disk space check failed: {exc}")
+
+    os_id = get_os_id()
+    supported = {
+        "ubuntu",
+        "debian",
+        "fedora",
+        "rhel",
+        "centos",
+        "arch",
+        "manjaro",
+        "opensuse",
+        "opensuse-leap",
+        "opensuse-tumbleweed",
+    }
+    if os_id in supported:
+        results.append(f"OK: os_id={os_id}")
+    else:
+        results.append(f"WARN: os_id={os_id} may be unsupported")
+
+    try:
+        with socket.create_connection(("1.1.1.1", 53), timeout=2):
+            results.append("OK: connectivity")
+    except OSError:
+        results.append("WARN: connectivity check failed")
+
+    reboot_required = Path("/var/run/reboot-required")
+    if reboot_required.exists():
+        results.append("WARN: reboot required (/var/run/reboot-required)")
+    elif cmd_exists("needs-restarting"):
+        result = run(["needs-restarting", "-r"], check=False)
+        if result.returncode != 0:
+            results.append("WARN: reboot required (needs-restarting)")
+        else:
+            results.append("OK: reboot not required")
+    else:
+        results.append("OK: reboot not required (no indicator)")
+    return results
+
+
+def run_logs(args: argparse.Namespace) -> None:
+    log_dir = get_log_dir()
+    logs = sorted(log_dir.glob("distrodeck-*.log"))
+    if not logs:
+        log("No logs found.")
+        return
+    if args.tail and not args.latest:
+        args.latest = True
+    if args.latest:
+        target = logs[-1]
+        if args.tail and args.tail > 0:
+            lines = target.read_text(encoding="utf-8").splitlines()
+            log("\n".join(lines[-args.tail :]))
+        else:
+            log(target.read_text(encoding="utf-8"))
+        return
+    for path in logs:
+        log(str(path))
+
+
+def run_preflight_cmd(_: argparse.Namespace) -> None:
+    results = run_preflight()
+    for line in results:
+        log(line)
+
+
+def get_latest_log_path() -> Optional[Path]:
+    log_dir = get_log_dir()
+    logs = sorted(log_dir.glob("distrodeck-*.log"))
+    return logs[-1] if logs else None
+
+
+def run_sysinfo(_: argparse.Namespace) -> None:
+    def section(title: str) -> None:
+        log("")
+        log(f"== {title} ==")
+
+    def run_capture(cmd: List[str], label: str) -> None:
+        if not cmd_exists(cmd[0]):
+            log(f"{label}: not available")
+            return
+        result = run(cmd, check=False, capture_output=True)
+        output = (result.stdout or result.stderr or "").strip()
+        if not output:
+            log(f"{label}: no output")
+            return
+        log(f"{label}:\n{output}")
+
+    section("OS")
+    log(f"os_id={get_os_id()}")
+    codename = get_codename()
+    if codename:
+        log(f"codename={codename}")
+    run_capture(["uname", "-a"], "kernel")
+
+    section("CPU")
+    run_capture(["lscpu"], "lscpu")
+
+    section("GPU")
+    run_capture(["lspci"], "lspci")
+
+    section("Memory")
+    run_capture(["free", "-h"], "free")
+    if cmd_exists("dmidecode") and cmd_exists("sudo"):
+        run_capture(["sudo", "dmidecode", "-t", "memory"], "dmidecode")
+    else:
+        log("dmidecode: not available (sudo required)")
+
+    section("Disks")
+    run_capture(["lsblk", "-o", "NAME,SIZE,TYPE,MODEL,SERIAL"], "lsblk")
+    run_capture(["df", "-h", "/"], "df /")
+
+    section("Network")
+    run_capture(["ip", "-br", "a"], "interfaces")
+    run_capture(["ip", "route"], "routes")
+    if cmd_exists("ss"):
+        run_capture(["ss", "-tulpen"], "open ports")
+    else:
+        log("open ports: ss not available")
+
+    section("Public IP")
+    if cmd_exists("curl"):
+        result = run(
+            ["curl", "-fsS", "--max-time", "3", "https://api.ipify.org"],
+            check=False,
+            capture_output=True,
+        )
+        output = (result.stdout or "").strip()
+        log(f"public_ip={output}" if output else "public_ip: unavailable")
+    else:
+        log("public_ip: curl not available")
+
+    section("Internet Speed")
+    if cmd_exists("speedtest"):
+        run_capture(["speedtest", "--accept-license", "--accept-gdpr"], "speedtest")
+    elif cmd_exists("speedtest-cli"):
+        run_capture(["speedtest-cli", "--simple"], "speedtest-cli")
+    else:
+        log("speedtest: not available")
+
+    section("USB")
+    run_capture(["lsusb"], "lsusb")
+
+
+def copy_to_clipboard(text: str) -> bool:
+    if cmd_exists("wl-copy"):
+        run(["wl-copy"], input_text=text, check=False)
+        return True
+    if cmd_exists("xclip"):
+        run(["xclip", "-selection", "clipboard"], input_text=text, check=False)
+        return True
+    if cmd_exists("xsel"):
+        run(["xsel", "--clipboard", "--input"], input_text=text, check=False)
+        return True
+    if cmd_exists("pbcopy"):
+        run(["pbcopy"], input_text=text, check=False)
+        return True
+    return False
 
 
 def export_apt_manual() -> List[str]:
@@ -460,49 +760,345 @@ def export_appimages(appimage_dirs: List[str]) -> List[str]:
     return sorted(found)
 
 
+def export_pipx() -> List[str]:
+    if not cmd_exists("pipx"):
+        return []
+    try:
+        out = run(["pipx", "list", "--short"], capture_output=True).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = []
+    for line in out.splitlines():
+        parts = line.strip().split()
+        if parts:
+            items.append(parts[0])
+    return sorted(set(items))
+
+
+def export_npm_globals() -> List[str]:
+    if not cmd_exists("npm"):
+        return []
+    try:
+        out = run(
+            ["npm", "ls", "-g", "--depth=0", "--parseable"], capture_output=True
+        ).stdout
+    except subprocess.CalledProcessError:
+        return []
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    if not lines:
+        return []
+    root = lines[0]
+    items = []
+    for line in lines[1:]:
+        if line == root:
+            continue
+        name = Path(line).name
+        if name:
+            items.append(name)
+    return sorted(set(items))
+
+
+def export_composer_globals() -> List[str]:
+    if not cmd_exists("composer"):
+        return []
+    try:
+        out = run(["composer", "global", "show", "-N"], capture_output=True).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = [line.strip() for line in out.splitlines() if line.strip()]
+    return sorted(set(items))
+
+
+def export_nuget_globals() -> List[str]:
+    if cmd_exists("dotnet"):
+        try:
+            out = run(["dotnet", "tool", "list", "-g"], capture_output=True).stdout
+        except subprocess.CalledProcessError:
+            return []
+        items = []
+        for line in out.splitlines():
+            parts = line.strip().split()
+            if parts and parts[0].lower() != "package":
+                items.append(parts[0])
+        return sorted(set(items))
+    return []
+
+
+def export_cargo_installs() -> List[str]:
+    if not cmd_exists("cargo"):
+        return []
+    try:
+        out = run(["cargo", "install", "--list"], capture_output=True).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = []
+    for line in out.splitlines():
+        match = re.match(r"^([A-Za-z0-9_-]+)\s+v[0-9]", line)
+        if match:
+            items.append(match.group(1))
+    return sorted(set(items))
+
+
+def export_gems() -> List[str]:
+    if not cmd_exists("gem"):
+        return []
+    try:
+        out = run(["gem", "list"], capture_output=True).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = []
+    for line in out.splitlines():
+        parts = line.strip().split()
+        if parts:
+            items.append(parts[0])
+    return sorted(set(items))
+
+
+def export_go_installs() -> List[str]:
+    if not cmd_exists("go"):
+        return []
+    try:
+        gobin = run(["go", "env", "GOBIN"], capture_output=True).stdout.strip()
+        gopath = run(["go", "env", "GOPATH"], capture_output=True).stdout.strip()
+    except subprocess.CalledProcessError:
+        return []
+    bin_dir = Path(gobin) if gobin else Path(gopath) / "bin"
+    if not bin_dir.exists():
+        return []
+    items = []
+    for entry in bin_dir.iterdir():
+        if entry.is_file() and os.access(entry, os.X_OK):
+            items.append(entry.name)
+    return sorted(set(items))
+
+
+def export_config_files(paths: List[str]) -> List[str]:
+    items = []
+    for path_str in paths:
+        path = Path(path_str)
+        if not path.exists() or not path.is_file():
+            warn(f"Config file not found, skipping: {path}")
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            warn(f"Failed to read config file: {path}")
+            continue
+        b64 = base64.b64encode(raw).decode("ascii")
+        items.append(f"path={path} content_b64={b64}")
+    return items
+
+
+def export_services_enabled() -> List[str]:
+    if not cmd_exists("systemctl"):
+        return []
+    try:
+        out = run(
+            ["systemctl", "list-unit-files", "--type=service", "--state=enabled"],
+            capture_output=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = []
+    for line in out.splitlines():
+        if not line or line.startswith("UNIT FILE") or line.startswith("-"):
+            continue
+        parts = line.split()
+        if parts:
+            items.append(parts[0])
+    return sorted(set(items))
+
+
+def export_services_active() -> List[str]:
+    if not cmd_exists("systemctl"):
+        return []
+    try:
+        out = run(
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--state=running",
+                "--no-legend",
+                "--no-pager",
+            ],
+            capture_output=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return []
+    items = []
+    for line in out.splitlines():
+        parts = line.split()
+        if parts:
+            items.append(parts[0])
+    return sorted(set(items))
+
+
+def normalize_snap_entry(entry: str) -> str:
+    parts = entry.split()
+    return parts[0] if parts else ""
+
+
+def normalize_flatpak_entry(entry: str) -> str:
+    app = ""
+    for part in entry.split():
+        if part.startswith("app="):
+            app = part.split("=", 1)[1]
+            break
+    return app
+
+
+def diff_items(desired: List[str], current: List[str]) -> tuple[List[str], List[str]]:
+    desired_set = {item for item in desired if item}
+    current_set = {item for item in current if item}
+    missing = sorted(desired_set - current_set)
+    extra = sorted(current_set - desired_set)
+    return missing, extra
+
+
+def log_diff(title: str, missing: List[str], extra: List[str]) -> None:
+    if not missing and not extra:
+        log(f"{title}: up to date.")
+        return
+    if missing:
+        log(f"{title}: missing ({len(missing)}): " + ", ".join(missing))
+    if extra:
+        log(f"{title}: extra ({len(extra)}): " + ", ".join(extra))
+
+
+def export_config_snapshot(
+    dirs: List[str], excludes: List[str], archive_path: Path
+) -> Optional[str]:
+    valid_dirs = [d for d in dirs if Path(d).exists()]
+    missing = [d for d in dirs if not Path(d).exists()]
+    for path in missing:
+        warn(f"Config dir not found, skipping: {path}")
+    if not valid_dirs:
+        return None
+    cmd = ["sudo", "tar", "-czf", str(archive_path)]
+    for pattern in excludes:
+        cmd.extend(["--exclude", pattern])
+    cmd.extend(valid_dirs)
+    run(cmd)
+    return str(archive_path)
+
+
 def export_all(args: argparse.Namespace) -> None:
     os_id = get_os_id()
     codename = get_codename()
+    if args.output == DEFAULT_EXPORT_FILE:
+        args.output = default_export_filename()
     appimage_dirs = get_appimage_dirs(args.appimage_dirs)
+    config_dirs = get_config_dirs(args.config_dirs) if args.config_dirs else []
+    config_excludes = args.config_exclude or []
+    if args.include_config and not config_dirs:
+        config_dirs = get_config_dirs(None)
+    if args.config_archive:
+        config_archive_path = Path(args.config_archive)
+    else:
+        out_path = Path(args.output)
+        if out_path.suffix:
+            config_archive_path = out_path.with_suffix(out_path.suffix + ".configs.tar.gz")
+        else:
+            config_archive_path = Path(f"{out_path}.configs.tar.gz")
+
+    def export_config_section() -> List[str]:
+        if not config_dirs:
+            return []
+        if not cmd_exists("sudo"):
+            warn("sudo not available; skipping config snapshot.")
+            return []
+        if in_dialog_mode():
+            if not ensure_sudo():
+                return []
+        archive = export_config_snapshot(
+            config_dirs, config_excludes, config_archive_path
+        )
+        if not archive:
+            return []
+        return [
+            f"archive={archive}",
+            f"dirs={':'.join(config_dirs)}",
+            *[f"exclude={pattern}" for pattern in config_excludes],
+        ]
+    sections = [
+        ("apt_manual", export_apt_manual, "Exporting apt packages..."),
+        ("apt_hold", export_apt_hold, "Exporting apt holds..."),
+        ("ppas", export_ppas, "Exporting PPAs..."),
+        ("apt_sources", export_apt_sources, "Exporting apt sources..."),
+        ("snap", export_snaps, "Exporting snaps..."),
+        ("flatpak", export_flatpaks, "Exporting flatpaks..."),
+        ("pacman", export_pacman, "Exporting pacman packages..."),
+        ("dnf", export_dnf, "Exporting dnf packages..."),
+        ("zypper", export_zypper, "Exporting zypper packages..."),
+        ("appimage", lambda: export_appimages(appimage_dirs), "Scanning AppImages..."),
+    ]
+    if config_dirs:
+        sections.append(
+            ("config_snapshot", export_config_section, "Saving config snapshot...")
+        )
+    config_files = get_config_files(args.config_files) if args.config_files else []
+    if args.include_config_files and not config_files:
+        config_files = get_config_files(None)
+    if config_files:
+        sections.append(
+            (
+                "config_files",
+                lambda: export_config_files(config_files),
+                "Exporting config files...",
+            )
+        )
+    if args.include_user_tools:
+        sections.extend(
+            [
+                ("pipx", export_pipx, "Exporting pipx tools..."),
+                ("npm_global", export_npm_globals, "Exporting npm globals..."),
+                ("composer_global", export_composer_globals, "Exporting Composer globals..."),
+                ("nuget_global", export_nuget_globals, "Exporting NuGet globals..."),
+                ("cargo", export_cargo_installs, "Exporting cargo installs..."),
+                ("gem", export_gems, "Exporting gems..."),
+                ("go", export_go_installs, "Exporting Go binaries..."),
+            ]
+        )
+    if args.include_services:
+        sections.extend(
+            [
+                ("services_enabled", export_services_enabled, "Exporting enabled services..."),
+                ("services_active", export_services_active, "Exporting active services..."),
+            ]
+        )
+    section_results = []
+    gauge = None
+    if in_dialog_mode() and cmd_exists("dialog"):
+        gauge = dialog_gauge("Distrodeck Export", "Starting export...")
+    total = len(sections)
+    for idx, (name, func, message) in enumerate(sections, start=1):
+        if gauge:
+            percent = min(99, int(idx * 100 / total))
+            dialog_gauge_update(gauge, percent, message)
+        section_results.append((name, func()))
+    if gauge:
+        dialog_gauge_update(gauge, 100, "Finalizing export...")
+        dialog_gauge_close(gauge)
     out_lines = [
         "# distrodeck export v1",
         f"exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
         f"distro_id={os_id}",
         f"codename={codename}",
         "",
-        "[apt_manual]",
-        *export_apt_manual(),
-        "",
-        "[apt_hold]",
-        *export_apt_hold(),
-        "",
-        "[ppas]",
-        *export_ppas(),
-        "",
-        "[apt_sources]",
-        *export_apt_sources(),
-        "",
-        "[snap]",
-        *export_snaps(),
-        "",
-        "[flatpak]",
-        *export_flatpaks(),
-        "",
-        "[pacman]",
-        *export_pacman(),
-        "",
-        "[dnf]",
-        *export_dnf(),
-        "",
-        "[zypper]",
-        *export_zypper(),
-        "",
-        "[appimage]",
-        *export_appimages(appimage_dirs),
-        "",
     ]
+    for name, items in section_results:
+        out_lines.extend([f"[{name}]", *items, ""])
     Path(args.output).write_text("\n".join(out_lines) + "\n", encoding="utf-8")
     log(f"Exported to {args.output}")
+    if "config_snapshot" in {name for name, _ in section_results}:
+        config_entry = next(
+            (items for name, items in section_results if name == "config_snapshot"), []
+        )
+        for line in config_entry:
+            if line.startswith("archive="):
+                log(f"Config snapshot archive: {line.split('=', 1)[1]}")
+                break
 
 
 def ensure_nala() -> bool:
@@ -611,6 +1207,17 @@ def parse_export_file(path: Path) -> dict:
         "dnf": [],
         "zypper": [],
         "appimage": [],
+        "pipx": [],
+        "npm_global": [],
+        "composer_global": [],
+        "nuget_global": [],
+        "cargo": [],
+        "gem": [],
+        "go": [],
+        "config_snapshot": [],
+        "services_enabled": [],
+        "services_active": [],
+        "config_files": [],
         "codename": "",
     }
     section = ""
@@ -634,6 +1241,30 @@ def import_from_file(args: argparse.Namespace) -> None:
     if not path.exists():
         fail(f"Input file not found: {args.input}")
     data = parse_export_file(path)
+    sections = {
+        "apt_manual",
+        "apt_hold",
+        "ppas",
+        "apt_sources",
+        "snap",
+        "flatpak",
+        "pacman",
+        "dnf",
+        "zypper",
+        "appimage",
+    }
+    if data["config_snapshot"]:
+        sections.add("config_snapshot")
+    if data["services_enabled"]:
+        sections.add("services_enabled")
+    if data["config_files"]:
+        sections.add("config_files")
+    if args.sections:
+        selected_sections = {item.strip() for item in args.sections.split(",") if item.strip()}
+    else:
+        selected_sections = sections
+    def wants(section: str) -> bool:
+        return section in selected_sections
     log(
         "Plan: "
         f"{len(data['apt_manual'])} apt packages, "
@@ -646,95 +1277,206 @@ def import_from_file(args: argparse.Namespace) -> None:
         f"{len(data['appimage'])} appimages"
     )
     if not args.apply:
-        log("Dry-run only. Re-run with --apply to install.")
-        return
+        log("Dry-run diff (desired vs current):")
+        current = {
+            "apt_manual": export_apt_manual(),
+            "apt_hold": export_apt_hold(),
+            "ppas": export_ppas(),
+            "apt_sources": export_apt_sources(),
+            "snap": [normalize_snap_entry(item) for item in export_snaps()],
+            "flatpak": [normalize_flatpak_entry(item) for item in export_flatpaks()],
+            "pacman": export_pacman(),
+            "dnf": export_dnf(),
+            "zypper": export_zypper(),
+            "appimage": export_appimages(get_appimage_dirs(args.appimage_dirs)),
+        }
+        if wants("apt_manual"):
+            log_diff("apt_manual", *diff_items(data["apt_manual"], current["apt_manual"]))
+        if wants("apt_hold"):
+            log_diff("apt_hold", *diff_items(data["apt_hold"], current["apt_hold"]))
+        if wants("ppas"):
+            log_diff("ppas", *diff_items(data["ppas"], current["ppas"]))
+        if wants("apt_sources"):
+            log_diff("apt_sources", *diff_items(data["apt_sources"], current["apt_sources"]))
+        if wants("snap"):
+            desired = [normalize_snap_entry(item) for item in data["snap"]]
+            log_diff("snap", *diff_items(desired, current["snap"]))
+        if wants("flatpak"):
+            desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
+            log_diff("flatpak", *diff_items(desired, current["flatpak"]))
+        if wants("appimage"):
+            log_diff("appimage", *diff_items(data["appimage"], current["appimage"]))
+            missing = [item for item in data["appimage"] if not Path(item).exists()]
+            if missing:
+                log("appimage missing on disk: " + ", ".join(missing))
+        if wants("config_files"):
+            log(f"config_files: {len(data['config_files'])} entries in export.")
+        if not args.apply_config and not args.apply_services and not args.cleanup_extras and not args.apply_config_files:
+            log("Dry-run only. Re-run with --apply to install.")
+            return
 
-    if data["ppas"] and cmd_exists("add-apt-repository"):
-        run(["sudo", "apt-get", "update"])
-        for ppa in data["ppas"]:
-            run(["sudo", "add-apt-repository", "-y", ppa])
+    if args.apply:
+        if wants("ppas") and data["ppas"] and cmd_exists("add-apt-repository"):
+            run(["sudo", "apt-get", "update"])
+            for ppa in data["ppas"]:
+                run(["sudo", "add-apt-repository", "-y", ppa])
 
-    if data["apt_sources"] and cmd_exists("apt-get"):
-        new_codename = get_codename()
-        sources_lines = []
-        for src in data["apt_sources"]:
-            if args.update_sources:
-                src = rewrite_codename(src, data["codename"], new_codename)
-            sources_lines.append(src)
-        content = "\n".join(sources_lines) + "\n"
-        run(
-            ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
-            input_text=content,
-        )
+        if wants("apt_sources") and data["apt_sources"] and cmd_exists("apt-get"):
+            new_codename = get_codename()
+            sources_lines = []
+            for src in data["apt_sources"]:
+                if args.update_sources:
+                    src = rewrite_codename(src, data["codename"], new_codename)
+                sources_lines.append(src)
+            content = "\n".join(sources_lines) + "\n"
+            run(
+                ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
+                input_text=content,
+            )
 
-    if data["apt_manual"] and cmd_exists("apt-get"):
-        run(["sudo", "apt-get", "update"])
-        run(["sudo", "apt-get", "install", "-y", *data["apt_manual"]])
-    elif data["apt_manual"]:
-        warn("apt-get not available; skipping apt package install")
+        if wants("apt_manual") and data["apt_manual"] and cmd_exists("apt-get"):
+            run(["sudo", "apt-get", "update"])
+            run(["sudo", "apt-get", "install", "-y", *data["apt_manual"]])
+        elif wants("apt_manual") and data["apt_manual"]:
+            warn("apt-get not available; skipping apt package install")
 
-    if data["apt_hold"] and cmd_exists("apt-mark"):
-        for pkg in data["apt_hold"]:
-            run(["sudo", "apt-mark", "hold", pkg])
+        if wants("apt_hold") and data["apt_hold"] and cmd_exists("apt-mark"):
+            for pkg in data["apt_hold"]:
+                run(["sudo", "apt-mark", "hold", pkg])
 
-    if data["snap"] and cmd_exists("snap"):
-        for entry in data["snap"]:
-            parts = entry.split()
-            name = parts[0] if parts else ""
-            channel = ""
-            classic = False
-            for part in parts[1:]:
-                if part.startswith("channel="):
-                    channel = part.split("=", 1)[1]
-                if part.startswith("classic="):
-                    classic = part.split("=", 1)[1] == "true"
-            if not name:
-                continue
-            cmd = ["sudo", "snap", "install", name]
-            if channel:
-                cmd.append(f"--channel={channel}")
-            if classic:
-                cmd.append("--classic")
-            run(cmd)
+        if wants("snap") and data["snap"] and cmd_exists("snap"):
+            for entry in data["snap"]:
+                parts = entry.split()
+                name = parts[0] if parts else ""
+                channel = ""
+                classic = False
+                for part in parts[1:]:
+                    if part.startswith("channel="):
+                        channel = part.split("=", 1)[1]
+                    if part.startswith("classic="):
+                        classic = part.split("=", 1)[1] == "true"
+                if not name:
+                    continue
+                cmd = ["sudo", "snap", "install", name]
+                if channel:
+                    cmd.append(f"--channel={channel}")
+                if classic:
+                    cmd.append("--classic")
+                run(cmd)
 
-    if data["flatpak"] and cmd_exists("flatpak"):
-        for entry in data["flatpak"]:
-            app = ""
-            remote = ""
+        if wants("flatpak") and data["flatpak"] and cmd_exists("flatpak"):
+            for entry in data["flatpak"]:
+                app = ""
+                remote = ""
+                for part in entry.split():
+                    if part.startswith("app="):
+                        app = part.split("=", 1)[1]
+                    if part.startswith("remote="):
+                        remote = part.split("=", 1)[1]
+                if not app:
+                    continue
+                if remote:
+                    run(["flatpak", "install", "-y", remote, app])
+                else:
+                    run(["flatpak", "install", "-y", app])
+
+        if wants("appimage") and data["appimage"]:
+            for path_str in data["appimage"]:
+                path = Path(path_str)
+                if path.exists():
+                    path.chmod(path.stat().st_mode | 0o111)
+                else:
+                    warn(f"AppImage not found: {path_str}")
+
+        if wants("pacman") and data["pacman"] and cmd_exists("pacman"):
+            run(["sudo", "pacman", "-S", "--needed", "--noconfirm", *data["pacman"]])
+        elif wants("pacman") and data["pacman"]:
+            warn("pacman not available; skipping pacman package install")
+
+        if wants("dnf") and data["dnf"] and cmd_exists("dnf"):
+            run(["sudo", "dnf", "install", "-y", *data["dnf"]])
+        elif wants("dnf") and data["dnf"]:
+            warn("dnf not available; skipping dnf package install")
+
+        if wants("zypper") and data["zypper"] and cmd_exists("zypper"):
+            run(["sudo", "zypper", "install", "-y", *data["zypper"]])
+        elif wants("zypper") and data["zypper"]:
+            warn("zypper not available; skipping zypper package install")
+
+    if args.apply_config and wants("config_snapshot"):
+        archive = args.config_archive
+        if not archive and data["config_snapshot"]:
+            for entry in data["config_snapshot"]:
+                if entry.startswith("archive="):
+                    archive = entry.split("=", 1)[1]
+                    break
+        if not archive:
+            warn("Config snapshot not found in export file.")
+        else:
+            if not Path(archive).exists():
+                warn(f"Config snapshot not found on disk: {archive}")
+            else:
+                run(["sudo", "tar", "-xzf", archive, "-C", "/"])
+
+    if args.apply_services and wants("services_enabled"):
+        if not cmd_exists("systemctl"):
+            warn("systemctl not available; skipping service enablement.")
+        else:
+            for service in data["services_enabled"]:
+                run(["sudo", "systemctl", "enable", service], check=False)
+
+    if args.cleanup_extras:
+        if wants("snap") and cmd_exists("snap"):
+            desired = [normalize_snap_entry(item) for item in data["snap"]]
+            _, extra = diff_items(desired, [normalize_snap_entry(item) for item in export_snaps()])
+            for name in extra:
+                run(["sudo", "snap", "remove", name], check=False)
+        if wants("flatpak") and cmd_exists("flatpak"):
+            desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
+            _, extra = diff_items(desired, [normalize_flatpak_entry(item) for item in export_flatpaks()])
+            for app in extra:
+                if app:
+                    run(["flatpak", "uninstall", "-y", app], check=False)
+
+    if args.apply_config_files and wants("config_files"):
+        home = Path.home().resolve()
+        for entry in data["config_files"]:
+            path = ""
+            content_b64 = ""
             for part in entry.split():
-                if part.startswith("app="):
-                    app = part.split("=", 1)[1]
-                if part.startswith("remote="):
-                    remote = part.split("=", 1)[1]
-            if not app:
+                if part.startswith("path="):
+                    path = part.split("=", 1)[1]
+                if part.startswith("content_b64="):
+                    content_b64 = part.split("=", 1)[1]
+            if not path or not content_b64:
                 continue
-            if remote:
-                run(["flatpak", "install", "-y", remote, app])
+            try:
+                content = base64.b64decode(content_b64.encode("ascii"))
+            except (ValueError, OSError):
+                warn(f"Invalid base64 content for: {path}")
+                continue
+            target = Path(path).expanduser()
+            try:
+                needs_sudo = not str(target.resolve()).startswith(str(home))
+            except OSError:
+                needs_sudo = True
+            if needs_sudo and not cmd_exists("sudo"):
+                warn(f"sudo not available; skipping config file: {path}")
+                continue
+            if needs_sudo:
+                parent = target.parent
+                run(["sudo", "mkdir", "-p", str(parent)], check=False)
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                run(["sudo", "install", "-m", "0644", tmp_path, str(target)], check=False)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             else:
-                run(["flatpak", "install", "-y", app])
-
-    if data["appimage"]:
-        for path_str in data["appimage"]:
-            path = Path(path_str)
-            if path.exists():
-                path.chmod(path.stat().st_mode | 0o111)
-            else:
-                warn(f"AppImage not found: {path_str}")
-
-    if data["pacman"] and cmd_exists("pacman"):
-        run(["sudo", "pacman", "-S", "--needed", "--noconfirm", *data["pacman"]])
-    elif data["pacman"]:
-        warn("pacman not available; skipping pacman package install")
-
-    if data["dnf"] and cmd_exists("dnf"):
-        run(["sudo", "dnf", "install", "-y", *data["dnf"]])
-    elif data["dnf"]:
-        warn("dnf not available; skipping dnf package install")
-
-    if data["zypper"] and cmd_exists("zypper"):
-        run(["sudo", "zypper", "install", "-y", *data["zypper"]])
-    elif data["zypper"]:
-        warn("zypper not available; skipping zypper package install")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
 
 
 def run_doctor() -> None:
@@ -795,7 +1537,10 @@ def run_tui() -> None:
         ("upgrade", "System: Upgrade distro"),
         ("security", "Security: Apply security updates"),
         ("install-tools", "Tools: Install optional tools"),
+        ("preflight", "Diagnostics: Preflight checks"),
         ("doctor", "Diagnostics: Check system prerequisites"),
+        ("sysinfo", "Diagnostics: Full system info"),
+        ("logs", "Diagnostics: View logs"),
         ("quit", "Exit"),
     ]
     while True:
@@ -804,23 +1549,135 @@ def run_tui() -> None:
             break
         if choice == "export":
             output = dialog_input(
-                "Export", "Output file:", DEFAULT_EXPORT_FILE
+                "Export", "Output file:", default_export_filename()
             )
             if not output:
                 continue
             appimage_dirs = dialog_input(
                 "Export", "AppImage dirs (colon-separated, blank for default):", ""
             )
+            include_user_tools = dialog_yesno(
+                "Export", "Include user-level tools (pipx/npm/composer/nuget/cargo/gem/go)?"
+            )
+            include_config = dialog_yesno(
+                "Export", "Include system config snapshot?"
+            )
+            include_services = dialog_yesno(
+                "Export", "Include enabled/active services?"
+            )
+            include_config_files = dialog_yesno(
+                "Export", "Include key config files (hosts/fstab/ssh config)?"
+            )
+            config_dirs = []
+            config_excludes = []
+            if include_config:
+                items = [
+                    ("/etc", "/etc", "on"),
+                    ("/etc/apt", "/etc/apt", "on"),
+                    ("/etc/dnf", "/etc/dnf", "on"),
+                    ("/etc/pacman.d", "/etc/pacman.d", "on"),
+                ]
+                config_dirs = dialog_checklist(
+                    "Export", "Select config dirs:", items
+                )
+                if not config_dirs:
+                    include_config = False
+                if include_config:
+                    exclude_input = dialog_input(
+                        "Export",
+                        "Exclude patterns (comma-separated, blank for none):",
+                        "",
+                    )
+                    if exclude_input:
+                        config_excludes = [
+                            part.strip()
+                            for part in exclude_input.split(",")
+                            if part.strip()
+                        ]
             cmd = [self_cmd, "export", "--output", output]
             if appimage_dirs:
                 cmd.extend(["--appimage-dirs", appimage_dirs])
+            if include_user_tools:
+                cmd.append("--include-user-tools")
+            if include_config:
+                if not ensure_sudo():
+                    continue
+                cmd.append("--include-config")
+                if config_dirs:
+                    cmd.extend(["--config-dirs", ":".join(config_dirs)])
+                for pattern in config_excludes:
+                    cmd.extend(["--config-exclude", pattern])
+            if include_services:
+                cmd.append("--include-services")
+            if include_config_files:
+                items = [
+                    ("/etc/hosts", "/etc/hosts", "on"),
+                    ("/etc/fstab", "/etc/fstab", "on"),
+                    ("~/.ssh/config", "~/.ssh/config", "on"),
+                ]
+                selected_files = dialog_checklist(
+                    "Export", "Select config files:", items
+                )
+                extra_input = dialog_input(
+                    "Export",
+                    "Additional config files (colon-separated, blank for none):",
+                    "",
+                )
+                extra_files = []
+                if extra_input:
+                    extra_files = [p for p in extra_input.split(":") if p.strip()]
+                combined = selected_files + extra_files
+                if combined:
+                    cmd.append("--include-config-files")
+                    cmd.extend(["--config-files", ":".join(combined)])
         elif choice == "import":
             default_path = str(Path.cwd() / DEFAULT_EXPORT_FILE)
             input_file = dialog_fselect("Import", "Input file:", default_path)
             if not input_file:
                 continue
+            import_data = parse_export_file(Path(input_file))
             apply = dialog_yesno("Import", "Apply installs now?")
             update_sources = dialog_yesno("Import", "Update apt source codenames?")
+            items = [
+                ("apt_manual", "Apt packages", "on" if import_data["apt_manual"] else "off"),
+                ("apt_hold", "Apt holds", "on" if import_data["apt_hold"] else "off"),
+                ("ppas", "PPAs", "on" if import_data["ppas"] else "off"),
+                ("apt_sources", "Apt sources", "on" if import_data["apt_sources"] else "off"),
+                ("snap", "Snap packages", "on" if import_data["snap"] else "off"),
+                ("flatpak", "Flatpak apps", "on" if import_data["flatpak"] else "off"),
+                ("pacman", "Pacman packages", "on" if import_data["pacman"] else "off"),
+                ("dnf", "DNF packages", "on" if import_data["dnf"] else "off"),
+                ("zypper", "Zypper packages", "on" if import_data["zypper"] else "off"),
+                ("appimage", "AppImages", "on" if import_data["appimage"] else "off"),
+                ("config_files", "Config files", "on" if import_data["config_files"] else "off"),
+                ("config_snapshot", "Config snapshot", "on" if import_data["config_snapshot"] else "off"),
+                ("services_enabled", "Enabled services", "on" if import_data["services_enabled"] else "off"),
+            ]
+            selected_sections = dialog_checklist(
+                "Import", "Select sections to restore:", items
+            )
+            if not selected_sections:
+                continue
+            apply_config = False
+            apply_services = False
+            if "config_snapshot" in selected_sections:
+                apply_config = dialog_yesno(
+                    "Import", "Restore config snapshot?"
+                )
+            if "services_enabled" in selected_sections:
+                apply_services = dialog_yesno(
+                    "Import", "Enable services from export?"
+                )
+            apply_config_files = False
+            if "config_files" in selected_sections:
+                apply_config_files = dialog_yesno(
+                    "Import", "Restore config files to their paths?"
+                )
+            cleanup_extras = False
+            if "snap" in selected_sections or "flatpak" in selected_sections:
+                cleanup_extras = dialog_yesno(
+                    "Import", "Remove snap/flatpak extras not in export?"
+                )
             appimage_dirs = dialog_input(
                 "Import", "AppImage dirs (colon-separated, blank for default):", ""
             )
@@ -829,6 +1686,24 @@ def run_tui() -> None:
                 cmd.append("--apply")
             if update_sources:
                 cmd.append("--update-sources")
+            if apply_config:
+                if not ensure_sudo():
+                    continue
+                cmd.append("--apply-config")
+            if apply_services:
+                if not ensure_sudo():
+                    continue
+                cmd.append("--apply-services")
+            if apply_config_files:
+                if not ensure_sudo():
+                    continue
+                cmd.append("--apply-config-files")
+            if cleanup_extras:
+                if not ensure_sudo():
+                    continue
+                cmd.append("--cleanup-extras")
+            if selected_sections:
+                cmd.extend(["--sections", ",".join(selected_sections)])
             if appimage_dirs:
                 cmd.extend(["--appimage-dirs", appimage_dirs])
         elif choice == "install-tools":
@@ -836,6 +1711,63 @@ def run_tui() -> None:
                 continue
             run(["dialog", "--clear"], check=False)
             run([self_cmd, "install-tools"], check=False)
+            continue
+        elif choice == "preflight":
+            results = run_preflight()
+            dialog_msgbox("Preflight", "\n".join(results))
+            continue
+        elif choice == "logs":
+            latest = get_latest_log_path()
+            if not latest:
+                dialog_msgbox("Logs", "No logs found.")
+                continue
+            height, width = dialog_size(0.8, 0.9)
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Logs",
+                    "--textbox",
+                    str(latest),
+                    str(height),
+                    str(width),
+                ],
+                check=False,
+            )
+            continue
+        elif choice == "sysinfo":
+            result = run([self_cmd, "sysinfo"], check=False, capture_output=True)
+            output = (result.stdout or result.stderr or "No output").strip()
+            height, width = dialog_size(0.85, 0.9)
+            temp = Path(tempfile.mkstemp(prefix="distrodeck-sysinfo-")[1])
+            temp.write_text(output + "\n", encoding="utf-8")
+            dialog_result = run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck System Info",
+                    "--extra-button",
+                    "--extra-label",
+                    "Copy",
+                    "--textbox",
+                    str(temp),
+                    str(height),
+                    str(width),
+                ],
+                check=False,
+            )
+            if dialog_result.returncode == 3:
+                if copy_to_clipboard(output + "\n"):
+                    dialog_msgbox("Distrodeck System Info", "Copied to clipboard.")
+                else:
+                    dialog_msgbox(
+                        "Distrodeck System Info",
+                        "Clipboard tool not found (wl-copy/xclip/xsel/pbcopy).",
+                    )
+            try:
+                temp.unlink()
+            except OSError:
+                pass
             continue
         elif choice == "update":
             if not ensure_sudo():
@@ -880,7 +1812,11 @@ def run_tui() -> None:
         else:
             cmd = [self_cmd, choice]
 
-        result = run(cmd, check=False, capture_output=True)
+        env = None
+        if choice == "export":
+            env = os.environ.copy()
+            env["DISTRODECK_DIALOG"] = "1"
+        result = run(cmd, check=False, capture_output=True, env=env)
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "Command failed").strip()
             dialog_msgbox("Distrodeck Error", message)
@@ -899,12 +1835,83 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd = sub.add_parser("export", help="Export installed packages and sources")
     export_cmd.add_argument("--output", default=DEFAULT_EXPORT_FILE)
     export_cmd.add_argument("--appimage-dirs", default=None)
+    export_cmd.add_argument(
+        "--include-config",
+        action="store_true",
+        help="Include system config snapshots (opt-in)",
+    )
+    export_cmd.add_argument(
+        "--config-dirs",
+        default=None,
+        help="Colon-separated config dirs (default: /etc:/etc/apt:/etc/dnf:/etc/pacman.d)",
+    )
+    export_cmd.add_argument(
+        "--config-exclude",
+        action="append",
+        default=[],
+        help="Exclude patterns for config snapshot (repeatable)",
+    )
+    export_cmd.add_argument(
+        "--config-archive",
+        default=None,
+        help="Path for config snapshot archive",
+    )
+    export_cmd.add_argument(
+        "--include-config-files",
+        action="store_true",
+        help="Include key config files as entries",
+    )
+    export_cmd.add_argument(
+        "--config-files",
+        default=None,
+        help="Colon-separated config files (default: /etc/hosts:/etc/fstab:~/.ssh/config)",
+    )
+    export_cmd.add_argument(
+        "--include-user-tools",
+        action="store_true",
+        help="Include user-level tools (pipx, npm, composer, nuget, cargo, gem, go)",
+    )
+    export_cmd.add_argument(
+        "--include-services",
+        action="store_true",
+        help="Include enabled/active systemd services",
+    )
     export_cmd.set_defaults(func=export_all)
 
     import_cmd = sub.add_parser("import", help="Import packages and sources")
     import_cmd.add_argument("--input", required=True)
     import_cmd.add_argument("--apply", action="store_true")
     import_cmd.add_argument("--update-sources", action="store_true")
+    import_cmd.add_argument(
+        "--apply-config",
+        action="store_true",
+        help="Restore config snapshot from the export file",
+    )
+    import_cmd.add_argument(
+        "--config-archive",
+        default=None,
+        help="Override config snapshot archive path",
+    )
+    import_cmd.add_argument(
+        "--apply-services",
+        action="store_true",
+        help="Enable systemd services captured in the export",
+    )
+    import_cmd.add_argument(
+        "--apply-config-files",
+        action="store_true",
+        help="Restore exported config files to their paths",
+    )
+    import_cmd.add_argument(
+        "--sections",
+        default=None,
+        help="Comma-separated sections to restore (e.g., apt_manual,snap,flatpak)",
+    )
+    import_cmd.add_argument(
+        "--cleanup-extras",
+        action="store_true",
+        help="Remove snap/flatpak extras not present in the export",
+    )
     import_cmd.add_argument("--appimage-dirs", default=None)
     import_cmd.set_defaults(func=import_from_file)
 
@@ -931,10 +1938,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     install_cmd.set_defaults(func=run_install_tools)
 
+    preflight_cmd = sub.add_parser("preflight", help="Run preflight checks")
+    preflight_cmd.set_defaults(func=run_preflight_cmd)
+
+    logs_cmd = sub.add_parser("logs", help="View logs")
+    logs_cmd.add_argument("--latest", action="store_true", help="Show latest log")
+    logs_cmd.add_argument(
+        "--tail",
+        type=int,
+        default=0,
+        help="Show last N lines (implies --latest)",
+    )
+    logs_cmd.set_defaults(func=run_logs)
+
+    sysinfo_cmd = sub.add_parser("sysinfo", help="Show full system info")
+    sysinfo_cmd.set_defaults(func=run_sysinfo)
+
     return parser
 
 
 def main() -> None:
+    init_logging()
     signal.signal(signal.SIGINT, handle_sigint)
     if len(sys.argv) == 1:
         run_tui()

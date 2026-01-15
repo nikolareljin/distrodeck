@@ -17,6 +17,16 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Added Ctrl+C handler to cleanly exit the TUI.
 - TUI import uses a file picker for the import file.
 - `install-tools` supports `--all` in CLI mode and adds PHP/Composer to the list.
+- Export can optionally include pipx, npm globals, composer globals, nuget globals, cargo installs, gem installs, and Go binaries.
+- Export shows a progress gauge in the TUI.
+- Export/import can optionally include config snapshots for key system directories.
+- Export can optionally include enabled/active systemd services; import can restore enablement.
+- Import supports selective sections, dry-run diffs, and optional snap/flatpak cleanup.
+- Export/import can optionally include key config files (hosts/fstab/ssh config).
+- Export uses host/timestamp filenames by default and logs config snapshot archive paths.
+- Added preflight checks (disk, OS, connectivity, reboot requirement).
+- Added per-run logs and a `logs` command for viewing them.
+- Added a `sysinfo` command with full system diagnostics (CPU/GPU/memory/storage/network/USB/ports/public IP/speed where available).
 
 ## [0.1.0]
 

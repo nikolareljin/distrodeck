@@ -39,7 +39,19 @@ distrodeck  # opens the TUI menu
 
 distrodeck export --output backup.txt
 
+distrodeck export --output backup.txt --include-user-tools
+
+distrodeck export --output backup.txt --include-config
+
+distrodeck export --output backup.txt --include-services
+
+distrodeck export --output backup.txt --include-config-files
+
 distrodeck import --input backup.txt --apply --update-sources
+
+distrodeck import --input backup.txt --apply-config
+
+distrodeck import --input backup.txt --apply-config-files
 
 distrodeck update
 
@@ -49,7 +61,13 @@ distrodeck security
 
 distrodeck doctor
 
+distrodeck preflight
+
+distrodeck logs
+
 distrodeck install-tools
+
+distrodeck sysinfo
 
 distrodeck install-tools --all
 ```
