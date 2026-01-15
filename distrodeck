@@ -29,6 +29,7 @@ for path in (VERSION_FILE, SHARE_VERSION_FILE):
         break
 DEFAULT_EXPORT_FILE = "distrodeck-export.txt"
 LOG_PATH: Optional[Path] = None
+VERBOSE = False
 
 
 def log(message: str) -> None:
@@ -1485,19 +1486,43 @@ def run_doctor() -> None:
     if codename:
         log(f"codename={codename}")
     checks = [
-        "apt-get",
-        "nala",
-        "snap",
-        "flatpak",
-        "add-apt-repository",
-        "do-release-upgrade",
-        "dnf",
-        "zypper",
-        "pacman",
+        ("apt-get", "Debian/Ubuntu package manager (base system updates)"),
+        ("nala", "Apt UI/formatter (faster output)"),
+        ("snap", "Snap package manager"),
+        ("flatpak", "Flatpak package manager"),
+        ("add-apt-repository", "Manage PPAs and apt repositories"),
+        ("do-release-upgrade", "Ubuntu distro upgrade tool"),
+        ("dnf", "Fedora/RHEL package manager"),
+        ("zypper", "openSUSE package manager"),
+        ("pacman", "Arch package manager"),
     ]
-    for name in checks:
+
+    def command_path(name: str) -> str:
+        path = shutil.which(name)
+        return path or ""
+
+    def command_version(name: str) -> str:
+        for flag in ("--version", "-V", "-v"):
+            result = run([name, flag], check=False, capture_output=True)
+            output = (result.stdout or result.stderr or "").strip()
+            if result.returncode == 0 and output:
+                return output.splitlines()[0]
+        return ""
+
+    for name, desc in checks:
         status = "ok" if cmd_exists(name) else "missing"
-        log(f"{name}: {status}")
+        if VERBOSE:
+            path = command_path(name)
+            version = command_version(name) if status == "ok" else ""
+            details = []
+            if path:
+                details.append(f"path={path}")
+            if version:
+                details.append(f"version={version}")
+            detail_str = f" ({', '.join(details)})" if details else ""
+            log(f"{name}: {status} - {desc}{detail_str}")
+        else:
+            log(f"{name}: {status}")
 
 
 def run_install_tools(args: argparse.Namespace) -> None:
@@ -1739,6 +1764,9 @@ def run_tui() -> None:
             )
             continue
         elif choice == "sysinfo":
+            if cmd_exists("dmidecode") and cmd_exists("sudo"):
+                if not ensure_sudo():
+                    continue
             result = run([self_cmd, "sysinfo"], check=False, capture_output=True)
             output = (result.stdout or result.stderr or "No output").strip()
             height, width = dialog_size(0.85, 0.9)
@@ -1812,6 +1840,29 @@ def run_tui() -> None:
                 env=env,
             )
             continue
+        elif choice == "doctor":
+            result = run([self_cmd, "--verbose", "doctor"], check=False, capture_output=True)
+            output = (result.stdout or result.stderr or "No output").strip()
+            height, width = dialog_size(0.85, 0.9)
+            temp = Path(tempfile.mkstemp(prefix="distrodeck-doctor-")[1])
+            temp.write_text(output + "\n", encoding="utf-8")
+            run(
+                [
+                    "dialog",
+                    "--title",
+                    "Distrodeck Doctor",
+                    "--textbox",
+                    str(temp),
+                    str(height),
+                    str(width),
+                ],
+                check=False,
+            )
+            try:
+                temp.unlink()
+            except OSError:
+                pass
+            continue
         else:
             cmd = [self_cmd, choice]
 
@@ -1831,6 +1882,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="distrodeck",
         description="Export and restore packages before distro upgrades.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output where applicable",
     )
     parser.add_argument("--version", action="version", version=VERSION)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1968,6 +2025,8 @@ def main() -> None:
         return
     parser = build_parser()
     args = parser.parse_args()
+    global VERBOSE
+    VERBOSE = args.verbose
     args.func(args)
 
 

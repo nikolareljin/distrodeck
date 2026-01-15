@@ -13,6 +13,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Added preflight checks (disk, OS, connectivity, reboot requirement).
 - Added per-run logs and a `logs` command for viewing them.
 - Added a `sysinfo` command with full system diagnostics (CPU/GPU/memory/storage/network/USB/ports/public IP/speed where available).
+- Added a global `--verbose` flag; doctor now shows detailed explanations and versions.
 
 ### Changed
 - Security updates now prefer `unattended-upgrade` and fall back safely when unavailable.

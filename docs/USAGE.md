@@ -99,6 +99,7 @@ Check availability of package managers and upgrade tools.
 
 ```
 distrodeck doctor
+distrodeck doctor --verbose
 ```
 
 ### preflight
