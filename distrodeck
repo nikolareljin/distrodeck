@@ -32,6 +32,30 @@ LOG_PATH: Optional[Path] = None
 VERBOSE = False
 
 
+def require_python_version() -> None:
+    if sys.version_info >= (3, 8):
+        return
+    os_id = get_os_id()
+    hints = {
+        "ubuntu": "sudo apt-get update && sudo apt-get install -y python3",
+        "debian": "sudo apt-get update && sudo apt-get install -y python3",
+        "fedora": "sudo dnf install -y python3",
+        "rhel": "sudo dnf install -y python3",
+        "centos": "sudo dnf install -y python3",
+        "arch": "sudo pacman -S --noconfirm python",
+        "manjaro": "sudo pacman -S --noconfirm python",
+        "opensuse": "sudo zypper install -y python3",
+        "opensuse-leap": "sudo zypper install -y python3",
+        "opensuse-tumbleweed": "sudo zypper install -y python3",
+    }
+    hint = hints.get(os_id, "Install Python 3.8+ using your package manager.")
+    fail(
+        "Python 3.8+ is required.\n"
+        f"Detected: {sys.version.split()[0]}\n"
+        f"Upgrade: {hint}"
+    )
+
+
 def log(message: str) -> None:
     write_log("info", message)
     print(message)
@@ -2020,6 +2044,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    require_python_version()
     init_logging()
     signal.signal(signal.SIGINT, handle_sigint)
     if len(sys.argv) == 1:
