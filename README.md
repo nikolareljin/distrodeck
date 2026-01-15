@@ -69,6 +69,8 @@ distrodeck install-tools
 
 distrodeck sysinfo
 
+distrodeck config-edit
+
 distrodeck install-tools --all
 ```
 

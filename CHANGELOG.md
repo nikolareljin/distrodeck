@@ -14,6 +14,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Added per-run logs and a `logs` command for viewing them.
 - Added a `sysinfo` command with full system diagnostics (CPU/GPU/memory/storage/network/USB/ports/public IP/speed where available).
 - Added a global `--verbose` flag; doctor now shows detailed explanations and versions.
+- Added a `config-edit` TUI for common system config files (nginx/apache/ssh/network/php).
 
 ### Changed
 - Security updates now prefer `unattended-upgrade` and fall back safely when unavailable.

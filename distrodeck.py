@@ -14,6 +14,7 @@ from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
+from glob import glob
 
 VERSION = "0.3.0"
 VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
@@ -285,6 +286,93 @@ def dialog_msgbox(title: str, message: str) -> None:
         check=False,
     )
 
+
+def edit_config_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        dialog_msgbox("Config Editor", f"File not found: {path}")
+        return
+    height, width = dialog_size(0.85, 0.9)
+    tmp = Path(tempfile.mkstemp(prefix="distrodeck-edit-")[1])
+    tmp.write_bytes(path.read_bytes())
+    result = run(
+        [
+            "dialog",
+            "--title",
+            f"Edit {path}",
+            "--editbox",
+            str(tmp),
+            str(height),
+            str(width),
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return
+    new_content = tmp.read_bytes()
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    if new_content == path.read_bytes():
+        return
+    needs_sudo = not str(path.resolve()).startswith(str(Path.home().resolve()))
+    if needs_sudo:
+        if not ensure_sudo():
+            return
+        run(["sudo", "tee", str(path)], input_text=new_content.decode("utf-8", "ignore"))
+    else:
+        path.write_bytes(new_content)
+
+
+def config_edit_targets() -> List[Tuple[str, str]]:
+    candidates = [
+        ("Nginx", "/etc/nginx/nginx.conf"),
+        ("Apache (Debian)", "/etc/apache2/apache2.conf"),
+        ("Apache (RHEL)", "/etc/httpd/conf/httpd.conf"),
+        ("SSH server", "/etc/ssh/sshd_config"),
+        ("SSH client", "/etc/ssh/ssh_config"),
+        ("Fstab", "/etc/fstab"),
+        ("Network (interfaces)", "/etc/network/interfaces"),
+        ("Network (netplan)", "/etc/netplan/*.yaml"),
+        ("Network (ifcfg)", "/etc/sysconfig/network-scripts/ifcfg-*"),
+        ("PHP (cli)", "/etc/php/*/cli/php.ini"),
+        ("PHP (fpm)", "/etc/php/*/fpm/php.ini"),
+        ("PHP (apache2)", "/etc/php/*/apache2/php.ini"),
+        ("PHP (system)", "/etc/php.ini"),
+    ]
+    items: List[Tuple[str, str]] = []
+    for label, pattern in candidates:
+        matches = glob(pattern)
+        if not matches and "*" not in pattern:
+            if Path(pattern).exists():
+                items.append((label, pattern))
+            continue
+        for match in matches:
+            items.append((f"{label}: {match}", match))
+    return items
+
+
+def run_config_edit_tui() -> None:
+    require_dialog()
+    while True:
+        items = [("custom", "Custom path...", "off")]
+        for label, path in config_edit_targets():
+            items.append((path, label, "off"))
+        items.append(("back", "Back", "off"))
+        choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
+        if not choices or "back" in choices:
+            break
+        for choice in choices:
+            if choice == "custom":
+                custom = dialog_fselect("Config Editor", "Pick a file:", "/etc/")
+                if custom:
+                    edit_config_file(Path(custom))
+            else:
+                edit_config_file(Path(choice))
 
 def dialog_gauge(title: str, message: str) -> Optional[subprocess.Popen]:
     if not cmd_exists("dialog"):
@@ -1602,6 +1690,7 @@ def run_tui() -> None:
         ("upgrade", "System: Upgrade distro"),
         ("security", "Security: Apply security updates"),
         ("install-tools", "Tools: Install optional tools"),
+        ("config-edit", "System: Edit config files"),
         ("preflight", "Diagnostics: Preflight checks"),
         ("doctor", "Diagnostics: Check system prerequisites"),
         ("sysinfo", "Diagnostics: Full system info"),
@@ -1782,6 +1871,9 @@ def run_tui() -> None:
                 continue
             run(["dialog", "--clear"], check=False)
             run([self_cmd, "install-tools"], check=False)
+            continue
+        elif choice == "config-edit":
+            run_config_edit_tui()
             continue
         elif choice == "preflight":
             results = run_preflight()
@@ -2051,6 +2143,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sysinfo_cmd = sub.add_parser("sysinfo", help="Show full system info")
     sysinfo_cmd.set_defaults(func=run_sysinfo)
+
+    config_cmd = sub.add_parser(
+        "config-edit",
+        help="Edit common system config files (TUI)",
+    )
+    config_cmd.set_defaults(func=lambda _: run_config_edit_tui())
 
     return parser
 

@@ -128,6 +128,14 @@ Show full system info (CPU/GPU/memory/disks/network/public IP/ports/USB, plus sp
 distrodeck sysinfo
 ```
 
+### config-edit
+
+Edit common system config files in a TUI editor (nginx/apache/ssh/network/php).
+
+```
+distrodeck config-edit
+```
+
 ## Export file sections
 
 ```
