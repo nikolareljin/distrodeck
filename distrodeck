@@ -108,6 +108,24 @@ def dialog_input(title: str, prompt: str, default: str = "") -> Optional[str]:
     return result.stdout.strip()
 
 
+def dialog_fselect(title: str, prompt: str, path: str) -> Optional[str]:
+    height, width = dialog_size(0.6, 0.8)
+    args = [
+        "dialog",
+        "--stdout",
+        "--title",
+        title,
+        "--fselect",
+        path,
+        str(height),
+        str(width),
+    ]
+    result = run(args, check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def dialog_yesno(title: str, prompt: str) -> bool:
     height, width = dialog_size(0.35, 0.7)
     args = [
@@ -158,6 +176,11 @@ def dialog_msgbox(title: str, message: str) -> None:
         ],
         check=False,
     )
+
+
+def handle_sigint(signum, frame) -> None:
+    run(["dialog", "--clear"], check=False)
+    sys.exit(130)
 
 
 def dialog_run_command(
@@ -523,7 +546,7 @@ def run_update() -> None:
 
 def run_security() -> None:
     if cmd_exists("unattended-upgrade"):
-        result = run(["sudo", "unattended-upgrade"], check=False)
+        result = run(["sudo", "unattended-upgrade", "--verbose"], check=False)
         if result.returncode != 0:
             warn("unattended-upgrade failed; trying package-manager security updates.")
         else:
@@ -792,7 +815,8 @@ def run_tui() -> None:
             if appimage_dirs:
                 cmd.extend(["--appimage-dirs", appimage_dirs])
         elif choice == "import":
-            input_file = dialog_input("Import", "Input file:", "")
+            default_path = str(Path.cwd() / DEFAULT_EXPORT_FILE)
+            input_file = dialog_fselect("Import", "Input file:", default_path)
             if not input_file:
                 continue
             apply = dialog_yesno("Import", "Apply installs now?")
@@ -810,12 +834,9 @@ def run_tui() -> None:
         elif choice == "install-tools":
             if not ensure_sudo():
                 continue
-            install_all = dialog_yesno(
-                "Install Tools", "Install all tools without selection?"
-            )
-            cmd = [self_cmd, "install-tools"]
-            if install_all:
-                cmd.append("--all")
+            run(["dialog", "--clear"], check=False)
+            run([self_cmd, "install-tools"], check=False)
+            continue
         elif choice == "update":
             if not ensure_sudo():
                 continue
@@ -842,43 +863,22 @@ def run_tui() -> None:
         elif choice == "security":
             if not ensure_sudo():
                 continue
-            height, width = dialog_size(0.7, 0.85)
-            run(
-                [
-                    "dialog",
-                    "--title",
-                    "Distrodeck Security",
-                    "--programbox",
-                    "Applying security updates...",
-                    str(height),
-                    str(width),
-                    "bash",
-                    "-lc",
-                    f"{self_cmd} security",
-                ],
-                check=False,
+            if cmd_exists("nala") or cmd_exists("unattended-upgrade"):
+                run(["dialog", "--clear"], check=False)
+                run_security()
+                continue
+            env = os.environ.copy()
+            env["DISTRODECK_DIALOG"] = "1"
+            env["DISTRODECK_NO_NALA"] = "1"
+            dialog_run_command(
+                "Distrodeck Security",
+                "Applying security updates...",
+                [self_cmd, "security"],
+                env=env,
             )
             continue
         else:
             cmd = [self_cmd, choice]
-
-        if choice in {"install-tools"}:
-            run(
-                [
-                    "dialog",
-                    "--title",
-                    "Distrodeck",
-                    "--programbox",
-                    "Running command...",
-                    "20",
-                    "80",
-                    "bash",
-                    "-lc",
-                    " ".join(cmd),
-                ],
-                check=False,
-            )
-            continue
 
         result = run(cmd, check=False, capture_output=True)
         if result.returncode != 0:
@@ -935,6 +935,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    signal.signal(signal.SIGINT, handle_sigint)
     if len(sys.argv) == 1:
         run_tui()
         return
