@@ -4,6 +4,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
+import signal
 from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,6 +158,99 @@ def dialog_msgbox(title: str, message: str) -> None:
         ],
         check=False,
     )
+
+
+def dialog_run_command(
+    title: str,
+    message: str,
+    command: List[str],
+    allow_input: bool = False,
+    env: Optional[dict] = None,
+) -> int:
+    height, width = dialog_size(0.7, 0.85)
+    with tempfile.NamedTemporaryFile(
+        prefix="distrodeck-", suffix=".log", delete=False, mode="w", encoding="utf-8"
+    ) as log_file:
+        log_path = log_file.name
+        log_file.write(f"{message}\n\n")
+        log_file.flush()
+
+    out_handle = open(log_path, "a", encoding="utf-8", buffering=1)
+    proc = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=out_handle,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+
+    tail = run(
+        [
+            "dialog",
+            "--stdout",
+            "--title",
+            title,
+            "--tailboxbg",
+            log_path,
+            str(height),
+            str(width),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    tail_pid = int(tail.stdout.strip()) if tail.stdout.strip().isdigit() else None
+
+    if allow_input:
+        prompt = "Send input (blank to refresh, Cancel to abort):"
+        while proc.poll() is None:
+            result = run(
+                [
+                    "dialog",
+                    "--stdout",
+                    "--keep-window",
+                    "--title",
+                    title,
+                    "--inputbox",
+                    prompt,
+                    str(height),
+                    str(width),
+                    "",
+                ],
+                check=False,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                if dialog_yesno(title, "Abort the running command?"):
+                    proc.terminate()
+                    break
+                continue
+            text = result.stdout.rstrip("\n")
+            if text and proc.stdin:
+                proc.stdin.write(text + "\n")
+                proc.stdin.flush()
+            time.sleep(0.1)
+    else:
+        proc.wait()
+
+    if proc.stdin:
+        proc.stdin.close()
+    out_handle.close()
+    if tail_pid:
+        try:
+            os.kill(tail_pid, signal.SIGTERM)
+        except OSError:
+            pass
+    run(["dialog", "--clear"], check=False)
+    return proc.returncode or 0
+
+
+def in_dialog_mode() -> bool:
+    return os.getenv("DISTRODECK_DIALOG") == "1"
+
+
+def allow_nala() -> bool:
+    return os.getenv("DISTRODECK_NO_NALA") != "1"
 
 
 def read_os_release() -> dict:
@@ -399,9 +495,14 @@ def ensure_nala() -> bool:
 
 
 def run_update() -> None:
-    if ensure_nala():
-        run(["sudo", "nala", "update"])
-        run(["sudo", "nala", "upgrade", "-y"])
+    if allow_nala() and ensure_nala():
+        update_cmd = ["sudo", "nala", "update"]
+        upgrade_cmd = ["sudo", "nala", "upgrade", "-y"]
+        if in_dialog_mode():
+            update_cmd.extend(["-v"])
+            upgrade_cmd.extend(["-v", "--raw-dpkg"])
+        run(update_cmd)
+        run(upgrade_cmd)
     elif cmd_exists("apt-get"):
         run(["sudo", "apt-get", "update"])
         run(["sudo", "apt-get", "upgrade", "-y"])
@@ -427,12 +528,18 @@ def run_security() -> None:
             warn("unattended-upgrade failed; trying package-manager security updates.")
         else:
             return
-    if cmd_exists("nala"):
-        result = run(["sudo", "nala", "upgrade", "-y", "--security"], check=False)
+    if allow_nala() and cmd_exists("nala"):
+        cmd = ["sudo", "nala", "upgrade", "-y", "--security"]
+        if in_dialog_mode():
+            cmd.extend(["-v", "--raw-dpkg"])
+        result = run(cmd, check=False)
         if result.returncode == 0:
             return
         warn("nala does not support --security; falling back to a full upgrade.")
-        run(["sudo", "nala", "upgrade", "-y"])
+        cmd = ["sudo", "nala", "upgrade", "-y"]
+        if in_dialog_mode():
+            cmd.extend(["-v", "--raw-dpkg"])
+        run(cmd)
         return
     if cmd_exists("apt-get"):
         run(["sudo", "apt-get", "update"])
@@ -455,7 +562,10 @@ def run_upgrade() -> None:
     if os_id == "ubuntu":
         if not cmd_exists("do-release-upgrade"):
             fail("do-release-upgrade not available")
-        run(["sudo", "do-release-upgrade"])
+        cmd = ["sudo", "do-release-upgrade"]
+        if in_dialog_mode():
+            cmd.extend(["-f", "DistUpgradeViewText"])
+        run(cmd)
         return
     warn(f"Distro upgrade not implemented for {os_id}")
 
@@ -709,42 +819,25 @@ def run_tui() -> None:
         elif choice == "update":
             if not ensure_sudo():
                 continue
-            height, width = dialog_size(0.7, 0.85)
-            run(
-                [
-                    "dialog",
-                    "--title",
-                    "Distrodeck Update",
-                    "--programbox",
-                    "Updating packages...",
-                    str(height),
-                    str(width),
-                    "bash",
-                    "-lc",
-                    f"{self_cmd} update",
-                ],
-                check=False,
+            if cmd_exists("nala"):
+                run(["dialog", "--clear"], check=False)
+                run_update()
+                continue
+            env = os.environ.copy()
+            env["DISTRODECK_DIALOG"] = "1"
+            env["DISTRODECK_NO_NALA"] = "1"
+            dialog_run_command(
+                "Distrodeck Update",
+                "Updating packages...",
+                [self_cmd, "update"],
+                env=env,
             )
             continue
         elif choice == "upgrade":
             if not ensure_sudo():
                 continue
-            height, width = dialog_size(0.7, 0.85)
-            run(
-                [
-                    "dialog",
-                    "--title",
-                    "Distrodeck Upgrade",
-                    "--programbox",
-                    "Upgrading distro...",
-                    str(height),
-                    str(width),
-                    "bash",
-                    "-lc",
-                    f"{self_cmd} upgrade",
-                ],
-                check=False,
-            )
+            run(["dialog", "--clear"], check=False)
+            run_upgrade()
             continue
         elif choice == "security":
             if not ensure_sudo():
