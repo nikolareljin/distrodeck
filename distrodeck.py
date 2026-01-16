@@ -1865,6 +1865,147 @@ def ensure_sudo() -> bool:
     return True
 
 
+def build_git_askpass_script() -> Path:
+    script = tempfile.NamedTemporaryFile(
+        delete=False, prefix="distrodeck-askpass-", mode="w", encoding="utf-8"
+    )
+    script.write(
+        "#!/usr/bin/env bash\n"
+        "prompt=\"$1\"\n"
+        "case \"$prompt\" in\n"
+        "  *Username*|*username*) echo \"${ANSIBLE_GIT_USERNAME:-}\";;\n"
+        "  *Password*|*password*|*token*) echo \"${ANSIBLE_GIT_PASSWORD:-}\";;\n"
+        "  *) echo \"\";;\n"
+        "esac\n"
+    )
+    script.flush()
+    os.fchmod(script.fileno(), 0o700)
+    script.close()
+    return Path(script.name)
+
+
+def run_automate_tui() -> None:
+    if not cmd_exists("ansible-pull"):
+        dialog_msgbox(
+            "Automate",
+            "ansible-pull is not installed.\nRun install-tools and install ansible, then retry.",
+        )
+        return
+    if not cmd_exists("git"):
+        dialog_msgbox(
+            "Automate",
+            "git is required for ansible-pull.\nRun install-tools and install git, then retry.",
+        )
+        return
+    url = dialog_input("Automate", "Ansible pull URL (git repo):", "")
+    if not url:
+        return
+    playbook = dialog_input("Automate", "Playbook path (in repo):", "site.yml")
+    if playbook is None:
+        return
+    if not playbook:
+        playbook = "site.yml"
+    inventory = dialog_input(
+        "Automate", "Inventory path (optional, in repo or local):", ""
+    )
+    if inventory is None:
+        return
+    auth_method = dialog_menu(
+        "Automate",
+        "Select authentication method:",
+        [
+            ("none", "Public repo / SSH agent"),
+            ("ssh", "SSH key"),
+            ("userpass", "HTTPS username/password"),
+            ("token", "HTTPS token"),
+        ],
+    )
+    if not auth_method:
+        return
+    env_vars = {}
+    askpass_path = None
+    if auth_method == "ssh":
+        key_path_input = dialog_input(
+            "Automate", "SSH key path:", "~/.ssh/id_rsa"
+        )
+        if not key_path_input:
+            return
+        key_path = Path(key_path_input).expanduser()
+        if not key_path.exists():
+            dialog_msgbox("Automate", f"SSH key not found: {key_path}")
+            return
+        env_vars["GIT_SSH_COMMAND"] = (
+            f"ssh -i {key_path} -o IdentitiesOnly=yes"
+        )
+    elif auth_method in {"userpass", "token"}:
+        default_user = "token" if auth_method == "token" else ""
+        username = dialog_input("Automate", "Username:", default_user)
+        if username is None:
+            return
+        if not username.strip():
+            dialog_msgbox("Automate", "Username is required.")
+            return
+        password = dialog_password(
+            "Automate", "Password:" if auth_method == "userpass" else "Token:"
+        )
+        if password is None:
+            return
+        if not password:
+            dialog_msgbox("Automate", "Password/token is required.")
+            return
+        askpass_path = build_git_askpass_script()
+        env_vars.update(
+            {
+                "ANSIBLE_GIT_USERNAME": username,
+                "ANSIBLE_GIT_PASSWORD": password,
+                "GIT_ASKPASS": str(askpass_path),
+                "GIT_TERMINAL_PROMPT": "0",
+            }
+        )
+    use_sudo = dialog_yesno("Automate", "Run ansible-pull with sudo?")
+    if use_sudo and not ensure_sudo():
+        return
+    base_cmd = ["ansible-pull", "-U", url]
+    if inventory:
+        base_cmd.extend(["-i", inventory])
+    if playbook:
+        base_cmd.append(playbook)
+    try:
+        if use_sudo:
+            cmd = ["sudo"]
+            if env_vars:
+                cmd.append("env")
+                cmd.extend([f"{key}={value}" for key, value in env_vars.items()])
+            cmd.extend(base_cmd)
+            exit_code = dialog_run_command(
+                "Automate",
+                "Running ansible-pull...",
+                cmd,
+            )
+        else:
+            env = os.environ.copy()
+            env.update(env_vars)
+            exit_code = dialog_run_command(
+                "Automate",
+                "Running ansible-pull...",
+                base_cmd,
+                env=env,
+            )
+    finally:
+        if askpass_path:
+            try:
+                askpass_path.unlink()
+            except OSError:
+                pass
+    if exit_code != 0:
+        dialog_msgbox(
+            "Automate",
+            f"Automation failed (exit {exit_code}). Check logs for details.",
+        )
+    else:
+        dialog_msgbox("Automate", "Automation completed.")
+
+
 def run_tui() -> None:
     require_dialog()
     self_cmd = str(Path(__file__).resolve())
@@ -1876,6 +2017,7 @@ def run_tui() -> None:
         ("upgrade", "System: Upgrade distro"),
         ("security", "Security: Apply security updates"),
         ("install-tools", "Tools: Install optional tools"),
+        ("automate", "Automation: Run Ansible pull"),
         ("net-tools", "Network: Run installed tools"),
         ("config-edit", "System: Edit config files"),
         ("doctor", "Diagnostics: Check system prerequisites"),
@@ -2057,6 +2199,9 @@ def run_tui() -> None:
                 continue
             run(["dialog", "--clear"], check=False)
             run([self_cmd, "install-tools"], check=False)
+            continue
+        elif choice == "automate":
+            run_automate_tui()
             continue
         elif choice == "net-tools":
             run_network_tools_tui()

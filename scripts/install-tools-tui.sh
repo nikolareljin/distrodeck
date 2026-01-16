@@ -125,6 +125,19 @@ install_git() {
   install_pkg "$1" git
 }
 
+install_ansible() {
+  install_pkg "$1" ansible || log_warn "Failed to install ansible from repos."
+}
+
+install_adb() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" android-tools-adb;;
+    dnf|pacman|zypper) install_pkg "$mgr" android-tools;;
+    *) log_warn "adb install not supported for this distro.";;
+  esac
+}
+
 install_git_lfs() {
   install_pkg "$1" git-lfs || log_warn "Failed to install git-lfs from repos."
 }
@@ -378,6 +391,8 @@ tool_desc() {
     fd) echo "fd (find alternative)";;
     fzf) echo "fzf (fuzzy finder)";;
     git) echo "git";;
+    ansible) echo "Ansible (ansible-pull)";;
+    adb) echo "adb (Android Debug Bridge)";;
     git-lfs) echo "git-lfs";;
     jq) echo "jq (JSON CLI)";;
     ripgrep) echo "ripgrep (rg)";;
@@ -440,6 +455,8 @@ is_installed_tool() {
     fd) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1;;
     fzf) command -v fzf >/dev/null 2>&1;;
     git) command -v git >/dev/null 2>&1;;
+    ansible) command -v ansible-pull >/dev/null 2>&1 || command -v ansible >/dev/null 2>&1;;
+    adb) command -v adb >/dev/null 2>&1;;
     git-lfs) command -v git-lfs >/dev/null 2>&1;;
     jq) command -v jq >/dev/null 2>&1;;
     ripgrep) command -v rg >/dev/null 2>&1;;
@@ -522,7 +539,7 @@ main() {
     # Storage/backup
     borgbackup duplicity fdupes lz4 tar unzip
     # Dev/tooling
-    build-tools composer git git-lfs go java node php rust
+    build-tools composer git ansible adb git-lfs go java node php rust
     # Containers/tools
     dialog docker lazydocker lazygit nala ufw vscode
     # Apps
@@ -561,7 +578,7 @@ main() {
       --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
       "${items[@]}")
   else
-    selected="bat eza fd fzf jq ripgrep tree yq zoxide mc micro neovim screen tmux zsh cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget borgbackup duplicity fdupes lz4 tar unzip build-tools composer git git-lfs go java node php rust dialog docker lazydocker lazygit nala ufw vscode image-view isoforge"
+    selected="bat eza fd fzf jq ripgrep tree yq zoxide mc micro neovim screen tmux zsh cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget borgbackup duplicity fdupes lz4 tar unzip build-tools composer git ansible adb git-lfs go java node php rust dialog docker lazydocker lazygit nala ufw vscode image-view isoforge"
   fi
 
   if [[ -z "$selected" ]]; then
@@ -587,6 +604,8 @@ main() {
       curl) install_curl "$mgr";;
       wget) install_wget "$mgr";;
       git) install_git "$mgr";;
+      ansible) install_ansible "$mgr";;
+      adb) install_adb "$mgr";;
       git-lfs) install_git_lfs "$mgr";;
       zsh) install_zsh "$mgr";;
       starship) install_starship "$mgr";;
