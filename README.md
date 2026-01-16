@@ -14,6 +14,8 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 - Update/upgrade system packages (uses Nala)
 - Trigger distro upgrades on Ubuntu
 - Apply security updates
+- Repair apt repo issues (disable broken sources, refresh keys)
+- Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
 
 ## Install
@@ -39,7 +41,19 @@ distrodeck  # opens the TUI menu
 
 distrodeck export --output backup.txt
 
+distrodeck export --output backup.txt --include-user-tools
+
+distrodeck export --output backup.txt --include-config
+
+distrodeck export --output backup.txt --include-services
+
+distrodeck export --output backup.txt --include-config-files
+
 distrodeck import --input backup.txt --apply --update-sources
+
+distrodeck import --input backup.txt --apply-config
+
+distrodeck import --input backup.txt --apply-config-files
 
 distrodeck update
 
@@ -47,9 +61,23 @@ distrodeck upgrade
 
 distrodeck security
 
+distrodeck repo-repair
+
 distrodeck doctor
 
+distrodeck preflight
+
+distrodeck logs
+
 distrodeck install-tools
+
+distrodeck sysinfo
+
+distrodeck config-edit
+
+distrodeck net-tools
+
+distrodeck  # use the TUI "Automate" action
 
 distrodeck install-tools --all
 ```

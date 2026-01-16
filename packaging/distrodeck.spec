@@ -25,6 +25,7 @@ install -m 0644 docs/man/distrodeck.1 %{buildroot}/usr/share/man/man1/distrodeck
 
 %files
 /usr/bin/distrodeck
+/usr/bin/distrodeck.py
 /usr/share/distrodeck/VERSION
 /usr/share/man/man1/distrodeck.1
 

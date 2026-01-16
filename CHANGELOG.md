@@ -2,13 +2,24 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
-## [0.2.0]
+## [0.3.0]
 
 ### Added
-- TUI main menu when running `distrodeck` with no arguments.
-- TUI-driven flows for export/import/update/upgrade/security/doctor/install-tools.
-- Install-tools enhancements: grouped options, installed detection, `--all`, lazygit/lazygit-gm fallback, lazydocker fallback install.
-- Packaging support for DEB/PPA/RPM/Homebrew with CI integration.
+- Export can optionally include pipx, npm globals, composer globals, nuget globals, cargo installs, gem installs, and Go binaries.
+- Export/import can optionally include config snapshots for key system directories.
+- Export can optionally include enabled/active systemd services; import can restore enablement.
+- Import supports selective sections, dry-run diffs, and optional snap/flatpak cleanup.
+- Export/import can optionally include key config files (hosts/fstab/ssh config).
+- Added preflight checks (disk, OS, connectivity, reboot requirement).
+- Added per-run logs and a `logs` command for viewing them.
+- Added a `sysinfo` command with full system diagnostics (CPU/GPU/memory/storage/network/USB/ports/public IP/speed where available).
+- Added a global `--verbose` flag; doctor now shows detailed explanations and versions.
+- Added a `config-edit` TUI for common system config files (nginx/apache/ssh/network/php).
+- Added a `net-tools` TUI to run installed network tools with auto-detected networks.
+- Added a TUI automation action that runs `ansible-pull` with URL/auth prompts.
+- Added a `repo-repair` action to disable broken apt sources and refresh missing keys.
+- Install-tools now offers Ansible and adb (Android Debug Bridge).
+- Config editor now lists repository source files for quick editing.
 
 ### Changed
 - Security updates now prefer `unattended-upgrade` and fall back safely when unavailable.
@@ -17,6 +28,19 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Added Ctrl+C handler to cleanly exit the TUI.
 - TUI import uses a file picker for the import file.
 - `install-tools` supports `--all` in CLI mode and adds PHP/Composer to the list.
+- Export shows a progress gauge in the TUI.
+- Export uses host/timestamp filenames by default and logs config snapshot archive paths.
+- Upgrade/import re-enable commented apt sources that still reference the previous codename.
+- LazyGit install now prefers the LazyGit PPA on apt-based systems with multiple fallbacks.
+- LazyDocker fallback install now uses the upstream Linux install script.
+
+## [0.2.0]
+
+### Added
+- TUI main menu when running `distrodeck` with no arguments.
+- TUI-driven flows for export/import/update/upgrade/security/doctor/install-tools.
+- Install-tools enhancements: grouped options, installed detection, `--all`, lazygit/lazygit-gm fallback, lazydocker fallback install.
+- Packaging support for DEB/PPA/RPM/Homebrew with CI integration.
 
 ## [0.1.0]
 

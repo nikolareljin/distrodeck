@@ -125,6 +125,19 @@ install_git() {
   install_pkg "$1" git
 }
 
+install_ansible() {
+  install_pkg "$1" ansible || log_warn "Failed to install ansible from repos."
+}
+
+install_adb() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" android-tools-adb;;
+    dnf|pacman|zypper) install_pkg "$mgr" android-tools;;
+    *) log_warn "adb install not supported for this distro.";;
+  esac
+}
+
 install_git_lfs() {
   install_pkg "$1" git-lfs || log_warn "Failed to install git-lfs from repos."
 }
@@ -186,10 +199,102 @@ install_node() {
 }
 
 install_lazygit() {
-  if install_pkg "$1" lazygit; then
+  local mgr="$1"
+  if [[ "$mgr" == "apt" ]]; then
+    if ! command -v add-apt-repository >/dev/null 2>&1; then
+      install_pkg "$mgr" software-properties-common || true
+    fi
+    if command -v add-apt-repository >/dev/null 2>&1; then
+      sudo add-apt-repository -y ppa:lazygit-team/release || true
+      sudo apt update || true
+      if sudo apt install -y lazygit; then
+        return
+      fi
+    fi
+  else
+    if install_pkg "$mgr" lazygit; then
+      return
+    fi
+    if install_pkg "$mgr" lazygit-gm; then
+      return
+    fi
+  fi
+  if ! command -v go >/dev/null 2>&1; then
+    log_warn "Go is required for lazygit go-install fallback; installing Go..."
+    install_go "$mgr" || true
+  fi
+  if command -v go >/dev/null 2>&1; then
+    GOBIN="${GOBIN:-$HOME/.local/bin}"
+    mkdir -p "$GOBIN"
+    log_info "Installing lazygit via go install..."
+    if GOBIN="$GOBIN" go install github.com/jesseduffield/lazygit@latest; then
+      return
+    fi
+    log_warn "go install failed; falling back to release tarball."
+  fi
+
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    log_warn "curl or wget is required for lazygit fallback download."
     return
   fi
-  install_pkg "$1" lazygit-gm || log_warn "Failed to install lazygit (tried lazygit and lazygit-gm)."
+  local os arch url tmp_dir bin_path
+  os="$(uname -s)"
+  case "$os" in
+    Linux) os="Linux";;
+    Darwin) os="Darwin";;
+    *) log_warn "Fallback lazygit install not supported for OS: $os"; return;;
+  esac
+
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x86_64";;
+    aarch64|arm64) arch="arm64";;
+    armv7l|armv7) arch="armv7";;
+    i386|i686) arch="386";;
+    *) log_warn "Fallback lazygit install not supported for arch: $arch"; return;;
+  esac
+
+  url="https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${os}_${arch}.tar.gz"
+  tmp_dir="$(mktemp -d)"
+  bin_path="$tmp_dir/lazygit"
+  if ! download_file "$url" "$tmp_dir/lazygit.tar.gz"; then
+    local version api_url
+    api_url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
+    if download_file "$api_url" "$tmp_dir/lazygit-release.json"; then
+      version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
+    fi
+    if [[ -n "$version" ]]; then
+      version="${version#v}"
+      url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
+      download_file "$url" "$tmp_dir/lazygit.tar.gz"
+    fi
+  fi
+  if [[ -f "$tmp_dir/lazygit.tar.gz" ]]; then
+    if tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir"; then
+      if [[ -f "$bin_path" ]]; then
+        sudo install -m 0755 "$bin_path" /usr/local/bin/lazygit
+        log_info "Installed lazygit to /usr/local/bin/lazygit"
+      else
+        log_warn "Fallback lazygit install failed: binary not found in archive."
+      fi
+    else
+      log_warn "Fallback lazygit install failed: unable to extract archive."
+    fi
+  else
+    log_warn "Fallback lazygit install failed: download error."
+  fi
+  rm -rf "$tmp_dir"
+
+  if command -v snap >/dev/null 2>&1; then
+    log_info "Installing lazygit via snap..."
+    if sudo snap install lazygit; then
+      return
+    fi
+    if sudo snap install lazygit-gm; then
+      return
+    fi
+    log_warn "Snap install failed for lazygit."
+  fi
 }
 
 install_lazydocker() {
@@ -201,42 +306,13 @@ install_lazydocker() {
     log_warn "Failed to install lazydocker from repos, and curl is missing for fallback install."
     return
   fi
-
-  local os arch url tmp_dir bin_path
-  os="$(uname -s)"
-  case "$os" in
-    Linux) os="Linux";;
-    Darwin) os="Darwin";;
-    *) log_warn "Fallback lazydocker install not supported for OS: $os"; return;;
-  esac
-
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) arch="x86_64";;
-    aarch64|arm64) arch="arm64";;
-    armv7l|armv7) arch="armv7";;
-    i386|i686) arch="386";;
-    *) log_warn "Fallback lazydocker install not supported for arch: $arch"; return;;
-  esac
-
-  url="https://github.com/jesseduffield/lazydocker/releases/latest/download/lazydocker_${os}_${arch}.tar.gz"
-  tmp_dir="$(mktemp -d)"
-  bin_path="$tmp_dir/lazydocker"
-  if curl -fsSL "$url" -o "$tmp_dir/lazydocker.tar.gz"; then
-    if tar -xzf "$tmp_dir/lazydocker.tar.gz" -C "$tmp_dir"; then
-      if [[ -f "$bin_path" ]]; then
-        sudo install -m 0755 "$bin_path" /usr/local/bin/lazydocker
-        log_info "Installed lazydocker to /usr/local/bin/lazydocker"
-      else
-        log_warn "Fallback lazydocker install failed: binary not found in archive."
-      fi
-    else
-      log_warn "Fallback lazydocker install failed: unable to extract archive."
-    fi
-  else
-    log_warn "Fallback lazydocker install failed: download error."
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    log_warn "Fallback lazydocker install is only supported on Linux."
+    return
   fi
-  rm -rf "$tmp_dir"
+  log_info "Installing lazydocker via upstream install script..."
+  curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | bash || \
+    log_warn "Fallback lazydocker install failed."
 }
 
 install_java() {
@@ -283,6 +359,85 @@ install_vscode() {
   fi
 }
 
+install_pkg_simple() {
+  install_pkg "$1" "$2" || log_warn "Failed to install $2 from repos."
+}
+
+install_image_view() {
+  local mgr="$1"
+  if ! command -v cargo >/dev/null 2>&1; then
+    log_warn "cargo is required to install image-view; installing Rust..."
+    install_rust "$mgr" || true
+  fi
+  if ! command -v cargo >/dev/null 2>&1; then
+    log_warn "cargo still missing; cannot install image-view."
+    return 1
+  fi
+  cargo install --git https://github.com/nikolareljin/image-view --bin image-view || \
+    log_warn "Failed to install image-view via cargo."
+}
+
+download_file() {
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -q -O "$dest" "$url"
+    return $?
+  fi
+  return 1
+}
+
+install_isoforge() {
+  local mgr="$1"
+  local deb_url="${ISOFORGE_DEB_URL:-${BURN_ISO_DEB_URL:-}}"
+  local repo_dir="${ISOFORGE_REPO_DIR:-${BURN_ISO_REPO_DIR:-}}"
+  local tmp_dir deb_path
+
+  if [[ -n "$deb_url" ]]; then
+    tmp_dir="$(mktemp -d)"
+    deb_path="$tmp_dir/isoforge.deb"
+    if download_file "$deb_url" "$deb_path"; then
+      sudo dpkg -i "$deb_path" || true
+      if [[ "$mgr" == "apt" ]]; then
+        sudo apt-get -f install -y
+      fi
+      if dpkg -s isoforge >/dev/null 2>&1; then
+        rm -rf "$tmp_dir"
+        return 0
+      fi
+    fi
+    rm -rf "$tmp_dir"
+  fi
+
+  if [[ -z "$repo_dir" ]]; then
+    repo_dir="$HOME/Projects/burn-iso"
+  fi
+  if [[ -d "$repo_dir" && -x "$repo_dir/tools/build-deb.sh" ]]; then
+    (cd "$repo_dir" && ./tools/build-deb.sh)
+    deb_path=$(ls -t "$repo_dir"/dist/*.deb 2>/dev/null | head -n1 || true)
+    if [[ -n "$deb_path" ]]; then
+      sudo dpkg -i "$deb_path" || true
+      if [[ "$mgr" == "apt" ]]; then
+        sudo apt-get -f install -y
+      fi
+      if dpkg -s isoforge >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+  fi
+
+  if [[ "$mgr" == "apt" ]]; then
+    install_pkg "$mgr" isoforge || log_warn "Failed to install isoforge from repos."
+    return 0
+  fi
+
+  log_warn "Isoforge install failed; set ISOFORGE_DEB_URL or ISOFORGE_REPO_DIR for fallback."
+  return 1
+}
+
 install_php() {
   install_pkg "$1" php || log_warn "Failed to install PHP from repos."
 }
@@ -299,6 +454,8 @@ tool_desc() {
     fd) echo "fd (find alternative)";;
     fzf) echo "fzf (fuzzy finder)";;
     git) echo "git";;
+    ansible) echo "Ansible (ansible-pull)";;
+    adb) echo "adb (Android Debug Bridge)";;
     git-lfs) echo "git-lfs";;
     jq) echo "jq (JSON CLI)";;
     ripgrep) echo "ripgrep (rg)";;
@@ -327,6 +484,28 @@ tool_desc() {
     lazygit) echo "LazyGit";;
     nala) echo "Nala (apt UI)";;
     vscode) echo "VS Code (code)";;
+    isoforge) echo "Isoforge (burn-iso)";;
+    image-view) echo "image-view (Rust image viewer)";;
+    lm-sensors) echo "lm-sensors (hardware sensors)";;
+    usbutils) echo "usbutils (lsusb)";;
+    pciutils) echo "pciutils (lspci)";;
+    borgbackup) echo "borgbackup";;
+    duplicity) echo "duplicity";;
+    fdupes) echo "fdupes";;
+    lz4) echo "lz4";;
+    tar) echo "tar";;
+    unzip) echo "unzip";;
+    mc) echo "mc (Midnight Commander)";;
+    nmap) echo "nmap";;
+    iperf3) echo "iperf3";;
+    mtr) echo "mtr";;
+    net-tools) echo "net-tools";;
+    tcpdump) echo "tcpdump";;
+    traceroute) echo "traceroute";;
+    bind-tools) echo "bind-tools (dig/nslookup)";;
+    screen) echo "screen";;
+    cron) echo "cron";;
+    ufw) echo "ufw firewall";;
     *) echo "$1";;
   esac
 }
@@ -339,6 +518,8 @@ is_installed_tool() {
     fd) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1;;
     fzf) command -v fzf >/dev/null 2>&1;;
     git) command -v git >/dev/null 2>&1;;
+    ansible) command -v ansible-pull >/dev/null 2>&1 || command -v ansible >/dev/null 2>&1;;
+    adb) command -v adb >/dev/null 2>&1;;
     git-lfs) command -v git-lfs >/dev/null 2>&1;;
     jq) command -v jq >/dev/null 2>&1;;
     ripgrep) command -v rg >/dev/null 2>&1;;
@@ -367,6 +548,28 @@ is_installed_tool() {
     lazygit) command -v lazygit >/dev/null 2>&1 || command -v lazygit-gm >/dev/null 2>&1;;
     nala) command -v nala >/dev/null 2>&1;;
     vscode) command -v code >/dev/null 2>&1;;
+    isoforge) command -v isoforge >/dev/null 2>&1;;
+    image-view) command -v image-view >/dev/null 2>&1;;
+    lm-sensors) command -v sensors >/dev/null 2>&1;;
+    usbutils) command -v lsusb >/dev/null 2>&1;;
+    pciutils) command -v lspci >/dev/null 2>&1;;
+    borgbackup) command -v borg >/dev/null 2>&1;;
+    duplicity) command -v duplicity >/dev/null 2>&1;;
+    fdupes) command -v fdupes >/dev/null 2>&1;;
+    lz4) command -v lz4 >/dev/null 2>&1;;
+    tar) command -v tar >/dev/null 2>&1;;
+    unzip) command -v unzip >/dev/null 2>&1;;
+    mc) command -v mc >/dev/null 2>&1;;
+    nmap) command -v nmap >/dev/null 2>&1;;
+    iperf3) command -v iperf3 >/dev/null 2>&1;;
+    mtr) command -v mtr >/dev/null 2>&1;;
+    net-tools) command -v ifconfig >/dev/null 2>&1;;
+    tcpdump) command -v tcpdump >/dev/null 2>&1;;
+    traceroute) command -v traceroute >/dev/null 2>&1;;
+    bind-tools) command -v dig >/dev/null 2>&1 || command -v nslookup >/dev/null 2>&1;;
+    screen) command -v screen >/dev/null 2>&1;;
+    cron) command -v crontab >/dev/null 2>&1;;
+    ufw) command -v ufw >/dev/null 2>&1;;
     *) return 1;;
   esac
 }
@@ -388,10 +591,22 @@ main() {
 
   declare -A installed=()
   local tools=(
-    bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide
-    starship tmux zsh duf htop ncdu
-    build-tools go java micro neovim node rust
-    php composer dialog docker lazydocker lazygit nala vscode
+    # Shell UX
+    bat eza fd fzf jq ripgrep tree yq zoxide
+    # Editors/terminal
+    mc micro neovim screen tmux zsh
+    # System/monitoring
+    cron duf htop lm-sensors ncdu pciutils usbutils
+    # Networking
+    bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget
+    # Storage/backup
+    borgbackup duplicity fdupes lz4 tar unzip
+    # Dev/tooling
+    build-tools composer git ansible adb git-lfs go java node php rust
+    # Containers/tools
+    dialog docker lazydocker lazygit nala ufw vscode
+    # Apps
+    image-view isoforge
   )
 
   for tool in "${tools[@]}"; do
@@ -426,7 +641,7 @@ main() {
       --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
       "${items[@]}")
   else
-    selected="bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide starship tmux zsh duf htop ncdu build-tools go java micro neovim node rust dialog docker lazydocker lazygit nala vscode"
+    selected="bat eza fd fzf jq ripgrep tree yq zoxide mc micro neovim screen tmux zsh cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget borgbackup duplicity fdupes lz4 tar unzip build-tools composer git ansible adb git-lfs go java node php rust dialog docker lazydocker lazygit nala ufw vscode image-view isoforge"
   fi
 
   if [[ -z "$selected" ]]; then
@@ -452,6 +667,8 @@ main() {
       curl) install_curl "$mgr";;
       wget) install_wget "$mgr";;
       git) install_git "$mgr";;
+      ansible) install_ansible "$mgr";;
+      adb) install_adb "$mgr";;
       git-lfs) install_git_lfs "$mgr";;
       zsh) install_zsh "$mgr";;
       starship) install_starship "$mgr";;
@@ -476,6 +693,42 @@ main() {
       rust) install_rust "$mgr";;
       go) install_go "$mgr";;
       vscode) install_vscode "$mgr";;
+      isoforge) install_isoforge "$mgr";;
+      image-view) install_image_view "$mgr";;
+      lm-sensors) install_pkg_simple "$mgr" lm-sensors;;
+      usbutils) install_pkg_simple "$mgr" usbutils;;
+      pciutils) install_pkg_simple "$mgr" pciutils;;
+      borgbackup) install_pkg_simple "$mgr" borgbackup;;
+      duplicity) install_pkg_simple "$mgr" duplicity;;
+      fdupes) install_pkg_simple "$mgr" fdupes;;
+      lz4) install_pkg_simple "$mgr" lz4;;
+      tar) install_pkg_simple "$mgr" tar;;
+      unzip) install_pkg_simple "$mgr" unzip;;
+      mc) install_pkg_simple "$mgr" mc;;
+      nmap) install_pkg_simple "$mgr" nmap;;
+      iperf3) install_pkg_simple "$mgr" iperf3;;
+      mtr) install_pkg_simple "$mgr" mtr;;
+      net-tools) install_pkg_simple "$mgr" net-tools;;
+      tcpdump) install_pkg_simple "$mgr" tcpdump;;
+      traceroute) install_pkg_simple "$mgr" traceroute;;
+      bind-tools)
+        case "$mgr" in
+          apt) install_pkg_simple "$mgr" dnsutils;;
+          dnf|pacman|zypper) install_pkg_simple "$mgr" bind-tools;;
+          *) log_warn "bind-tools install not supported for this distro.";;
+        esac
+        ;;
+      screen) install_pkg_simple "$mgr" screen;;
+      cron)
+        case "$mgr" in
+          apt) install_pkg_simple "$mgr" cron;;
+          dnf) install_pkg_simple "$mgr" cronie;;
+          pacman) install_pkg_simple "$mgr" cronie;;
+          zypper) install_pkg_simple "$mgr" cron;;
+          *) log_warn "cron install not supported for this distro.";;
+        esac
+        ;;
+      ufw) install_pkg_simple "$mgr" ufw;;
     esac
   done
 }

@@ -8,4 +8,4 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/ci.yml@production
     with:
       python_version: "3.12"
-      build_command: "python3 -m py_compile distrodeck"
+      build_command: "python3 -m py_compile distrodeck.py"

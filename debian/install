@@ -1,3 +1,4 @@
 distrodeck usr/bin/
+distrodeck.py usr/bin/
 docs/man/distrodeck.1 usr/share/man/man1/
 VERSION usr/share/distrodeck/VERSION

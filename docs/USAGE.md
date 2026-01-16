@@ -23,6 +23,29 @@ distrodeck export --output backup.txt
 Options:
 - `--output FILE`: export destination (default: `distrodeck-export.txt`)
 - `--appimage-dirs DIRS`: colon-separated AppImage search dirs
+- `--include-config`: include a config snapshot of selected system directories
+- `--config-dirs DIRS`: colon-separated config dirs (default: `/etc:/etc/apt:/etc/dnf:/etc/pacman.d`)
+- `--config-exclude PATTERN`: exclude pattern for config snapshot (repeatable)
+- `--config-archive PATH`: override config snapshot archive path
+- `--include-config-files`: include key config files as entries
+- `--config-files FILES`: colon-separated config files (default: `/etc/hosts:/etc/fstab:~/.ssh/config`)
+- `--include-user-tools`: include pipx, npm globals, composer globals, nuget globals, cargo installs, gem installs, and go binaries
+- `--include-services`: include enabled/active systemd services
+
+Opt-in user-level tools export:
+
+```
+distrodeck export --output backup.txt --include-user-tools
+```
+
+Opt-in config snapshot with filters:
+
+```
+distrodeck export --output backup.txt --include-config \
+  --config-dirs /etc:/etc/apt \
+  --config-exclude "*.bak" \
+  --config-exclude "*/cache/*"
+```
 
 ### import
 
@@ -32,11 +55,19 @@ Import packages and sources from a file. Dry-run by default.
 distrodeck import --input backup.txt --apply --update-sources
 ```
 
+Dry-run shows a diff (desired vs current) and highlights missing/extra entries.
+
 Options:
 - `--input FILE`: export file to import
 - `--apply`: perform installs (default: dry-run)
 - `--update-sources`: replace old distro codename with the current one
 - `--appimage-dirs DIRS`: colon-separated AppImage search dirs
+- `--apply-config`: restore config snapshot from the export file
+- `--config-archive PATH`: override config snapshot archive path
+- `--apply-services`: enable services captured in the export
+- `--sections`: comma-separated sections to restore (e.g., `apt_manual,snap,flatpak`)
+- `--cleanup-extras`: remove snap/flatpak extras not present in the export
+- `--apply-config-files`: restore exported config files to their paths
 
 ### update
 
@@ -62,12 +93,73 @@ Apply security updates when supported.
 distrodeck security
 ```
 
+### repo-repair
+
+Detect apt repo errors, optionally disable broken sources, and refresh missing keys.
+
+```
+distrodeck repo-repair
+```
+
 ### doctor
 
 Check availability of package managers and upgrade tools.
 
 ```
 distrodeck doctor
+distrodeck doctor --verbose
+```
+
+### preflight
+
+Run preflight checks (disk space, OS, connectivity, reboot requirement).
+
+```
+distrodeck preflight
+```
+
+### logs
+
+View run logs.
+
+```
+distrodeck logs
+distrodeck logs --latest
+distrodeck logs --tail 50
+```
+
+### sysinfo
+
+Show full system info (CPU/GPU/memory/disks/network/public IP/ports/USB, plus speed test if available).
+
+```
+distrodeck sysinfo
+```
+
+### config-edit
+
+Edit common system config files or repository sources in a TUI editor (nginx/apache/ssh/network/php, apt/yum/zypper/pacman sources).
+
+```
+distrodeck config-edit
+```
+
+### automate (TUI)
+
+Run an `ansible-pull` automation from the TUI, including auth prompts and playbook/inventory selection.
+
+```
+distrodeck  # open TUI, choose "Automate"
+```
+
+Requires `ansible-pull` (install via `distrodeck install-tools`).
+
+### net-tools
+
+Run installed network tools from a TUI menu (nmap, mtr, iperf3, traceroute, tcpdump).
+
+```
+distrodeck net-tools
 ```
 
 ## Export file sections
@@ -83,7 +175,27 @@ distrodeck doctor
 [dnf]          # dnf packages (Fedora/RHEL)
 [zypper]       # zypper packages (openSUSE)
 [appimage]     # discovered AppImages by path
+[config_snapshot] # config snapshot archive and metadata
+[config_files]    # individual config file entries (base64 content)
+[services_enabled] # systemd enabled services
+[services_active] # running services at export time
+[pipx]         # pipx-installed apps
+[npm_global]   # npm global packages
+[composer_global] # composer global packages
+[nuget_global] # dotnet global tools
+[cargo]        # cargo-installed apps
+[gem]          # ruby gems
+[go]           # Go binaries
 ```
+
+`config_snapshot` entries include:
+- `archive=...` path to the tar.gz snapshot
+- `dirs=...` colon-separated source dirs
+- `exclude=...` exclude patterns (optional, repeatable)
+
+`config_files` entries include:
+- `path=...` file path to restore
+- `content_b64=...` base64-encoded file contents
 
 ## AppImage discovery
 

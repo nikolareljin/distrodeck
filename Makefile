@@ -8,7 +8,7 @@ deb:
 
 fpm:
 	fpm -s dir -t deb -n $(PACKAGE_NAME) -v $(VERSION) \
-		--prefix=/usr/bin distrodeck
+		--prefix=/usr/bin distrodeck distrodeck.py
 
 man:
 	./tools/gen-man.sh
