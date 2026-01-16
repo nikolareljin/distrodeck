@@ -1444,10 +1444,14 @@ def run_upgrade() -> None:
     if os_id == "ubuntu":
         if not cmd_exists("do-release-upgrade"):
             fail("do-release-upgrade not available")
+        old_codename = get_codename()
         cmd = ["sudo", "do-release-upgrade"]
         if in_dialog_mode():
             cmd.extend(["-f", "DistUpgradeViewText"])
         run(cmd)
+        new_codename = get_codename()
+        if old_codename and new_codename and old_codename != new_codename:
+            reenable_commented_apt_sources(old_codename, new_codename)
         return
     warn(f"Distro upgrade not implemented for {os_id}")
 
@@ -1456,6 +1460,49 @@ def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
     if not old_codename or not new_codename:
         return line
     return line.replace(old_codename, new_codename)
+
+
+def write_root_file(path: Path, content: str) -> None:
+    if not content.endswith("\n"):
+        content += "\n"
+    if os.geteuid() == 0:
+        path.write_text(content, encoding="utf-8")
+        return
+    run(["sudo", "tee", str(path)], input_text=content)
+
+
+def reenable_commented_apt_sources(old_codename: str, new_codename: str) -> None:
+    if not old_codename or not new_codename:
+        warn("Skipping apt source re-enable; missing release codename.")
+        return
+    sources = [Path("/etc/apt/sources.list")]
+    sources_dir = Path("/etc/apt/sources.list.d")
+    if sources_dir.exists():
+        sources.extend(sorted(sources_dir.glob("*.list")))
+    for path in sources:
+        if not path.exists():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            warn(f"Failed to read apt sources: {path}")
+            continue
+        changed = 0
+        updated_lines = []
+        for line in lines:
+            match = re.match(r"^\s*#\s*(deb(?:-src)?\s+.+)$", line)
+            if match:
+                deb_line = match.group(1).strip()
+                if old_codename in deb_line:
+                    updated_lines.append(
+                        rewrite_codename(deb_line, old_codename, new_codename)
+                    )
+                    changed += 1
+                    continue
+            updated_lines.append(line)
+        if changed:
+            write_root_file(path, "\n".join(updated_lines))
+            log(f"Re-enabled {changed} apt source(s) in {path}")
 
 
 def parse_export_file(path: Path) -> dict:
@@ -1596,6 +1643,8 @@ def import_from_file(args: argparse.Namespace) -> None:
                 ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
                 input_text=content,
             )
+            if args.update_sources:
+                reenable_commented_apt_sources(data["codename"], new_codename)
 
         if wants("apt_manual") and data["apt_manual"] and cmd_exists("apt-get"):
             run(["sudo", "apt-get", "update"])
