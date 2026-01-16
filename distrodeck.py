@@ -324,41 +324,23 @@ def edit_config_file(path: Path) -> None:
     if not path.exists() or not path.is_file():
         dialog_msgbox("Config Editor", f"File not found: {path}")
         return
-    height, width = dialog_size(0.85, 0.9)
-    tmp = Path(tempfile.mkstemp(prefix="distrodeck-edit-")[1])
-    tmp.write_bytes(path.read_bytes())
-    result = run(
-        [
-            "dialog",
-            "--title",
-            f"Edit {path}",
-            "--editbox",
-            str(tmp),
-            str(height),
-            str(width),
-        ],
-        check=False,
-    )
-    if result.returncode != 0:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        return
-    new_content = tmp.read_bytes()
-    try:
-        tmp.unlink()
-    except OSError:
-        pass
-    if new_content == path.read_bytes():
+    editor = os.getenv("EDITOR") or ""
+    if not editor:
+        for candidate in ("nano", "vim", "vi"):
+            if cmd_exists(candidate):
+                editor = candidate
+                break
+    if not editor:
+        dialog_msgbox("Config Editor", "No editor found (set $EDITOR or install nano/vim/vi).")
         return
     needs_sudo = not str(path.resolve()).startswith(str(Path.home().resolve()))
+    run(["dialog", "--clear"], check=False)
     if needs_sudo:
         if not ensure_sudo():
             return
-        run(["sudo", "tee", str(path)], input_text=new_content.decode("utf-8", "ignore"))
+        run(["sudo", editor, str(path)], check=False)
     else:
-        path.write_bytes(new_content)
+        run([editor, str(path)], check=False)
 
 
 def config_edit_targets() -> List[Tuple[str, str]]:
