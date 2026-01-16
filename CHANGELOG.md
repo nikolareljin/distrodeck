@@ -17,6 +17,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Added a `config-edit` TUI for common system config files (nginx/apache/ssh/network/php).
 - Added a `net-tools` TUI to run installed network tools with auto-detected networks.
 - Added a TUI automation action that runs `ansible-pull` with URL/auth prompts.
+- Added a `repo-repair` action to disable broken apt sources and refresh missing keys.
 - Install-tools now offers Ansible and adb (Android Debug Bridge).
 - Config editor now lists repository source files for quick editing.
 

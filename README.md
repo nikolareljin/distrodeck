@@ -14,6 +14,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 - Update/upgrade system packages (uses Nala)
 - Trigger distro upgrades on Ubuntu
 - Apply security updates
+- Repair apt repo issues (disable broken sources, refresh keys)
 - Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
 
@@ -59,6 +60,8 @@ distrodeck update
 distrodeck upgrade
 
 distrodeck security
+
+distrodeck repo-repair
 
 distrodeck doctor
 

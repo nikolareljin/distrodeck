@@ -93,6 +93,14 @@ Apply security updates when supported.
 distrodeck security
 ```
 
+### repo-repair
+
+Detect apt repo errors, optionally disable broken sources, and refresh missing keys.
+
+```
+distrodeck repo-repair
+```
+
 ### doctor
 
 Check availability of package managers and upgrade tools.

@@ -411,6 +411,14 @@ def repo_source_targets() -> List[Tuple[str, str]]:
     return items
 
 
+def apt_source_files() -> List[Path]:
+    files = [Path("/etc/apt/sources.list")]
+    sources_dir = Path("/etc/apt/sources.list.d")
+    if sources_dir.exists():
+        files.extend(sorted(sources_dir.glob("*.list")))
+    return [path for path in files if path.exists()]
+
+
 def run_config_edit_tui() -> None:
     require_dialog()
     while True:
@@ -1422,34 +1430,48 @@ def ensure_nala() -> bool:
     return True
 
 
-def run_update() -> None:
+def run_update() -> bool:
+    had_errors = False
     if allow_nala() and ensure_nala():
         update_cmd = ["sudo", "nala", "update"]
         upgrade_cmd = ["sudo", "nala", "upgrade", "-y"]
         if in_dialog_mode():
             update_cmd.extend(["-v"])
             upgrade_cmd.extend(["-v", "--raw-dpkg"])
-        run_warn(update_cmd, "nala update")
-        run_warn(upgrade_cmd, "nala upgrade")
+        if run_warn(update_cmd, "nala update").returncode != 0:
+            had_errors = True
+        if run_warn(upgrade_cmd, "nala upgrade").returncode != 0:
+            had_errors = True
     elif cmd_exists("apt-get"):
-        run_warn(["sudo", "apt-get", "update"], "apt-get update")
-        run_warn(["sudo", "apt-get", "upgrade", "-y"], "apt-get upgrade")
+        if run_warn(["sudo", "apt-get", "update"], "apt-get update").returncode != 0:
+            had_errors = True
+        if run_warn(["sudo", "apt-get", "upgrade", "-y"], "apt-get upgrade").returncode != 0:
+            had_errors = True
     elif cmd_exists("apt"):
-        run_warn(["sudo", "apt", "update"], "apt update")
-        run_warn(["sudo", "apt", "upgrade", "-y"], "apt upgrade")
+        if run_warn(["sudo", "apt", "update"], "apt update").returncode != 0:
+            had_errors = True
+        if run_warn(["sudo", "apt", "upgrade", "-y"], "apt upgrade").returncode != 0:
+            had_errors = True
     elif cmd_exists("dnf"):
-        run(["sudo", "dnf", "upgrade", "-y"])
+        if run(["sudo", "dnf", "upgrade", "-y"], check=False).returncode != 0:
+            had_errors = True
     elif cmd_exists("zypper"):
-        run(["sudo", "zypper", "refresh"])
-        run(["sudo", "zypper", "update", "-y"])
+        if run(["sudo", "zypper", "refresh"], check=False).returncode != 0:
+            had_errors = True
+        if run(["sudo", "zypper", "update", "-y"], check=False).returncode != 0:
+            had_errors = True
     elif cmd_exists("pacman"):
-        run(["sudo", "pacman", "-Syu", "--noconfirm"])
+        if run(["sudo", "pacman", "-Syu", "--noconfirm"], check=False).returncode != 0:
+            had_errors = True
     else:
         warn("No supported package manager for update.")
     if cmd_exists("snap"):
-        run(["sudo", "snap", "refresh"])
+        if run(["sudo", "snap", "refresh"], check=False).returncode != 0:
+            had_errors = True
     if cmd_exists("flatpak"):
-        run(["flatpak", "update", "-y"])
+        if run(["flatpak", "update", "-y"], check=False).returncode != 0:
+            had_errors = True
+    return not had_errors
 
 
 def run_security() -> None:
@@ -1518,6 +1540,164 @@ def write_root_file(path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
         return
     run(["sudo", "tee", str(path)], input_text=content)
+
+
+def parse_apt_update_issues(output: str) -> Tuple[List[str], List[str]]:
+    urls = set()
+    key_ids = set()
+    for line in output.splitlines():
+        if "NO_PUBKEY" in line:
+            for match in re.findall(r"NO_PUBKEY\s+([0-9A-F]+)", line):
+                key_ids.add(match)
+        is_error = False
+        if line.startswith(("E:", "Err:", "Error:")):
+            is_error = True
+        if "Failed to fetch" in line:
+            is_error = True
+        if "does not have a Release file" in line:
+            is_error = True
+        if not is_error:
+            continue
+        match = re.search(r"The repository '([^']+)' does not have a Release file", line)
+        if match:
+            repo = match.group(1).split()[0]
+            urls.add(repo)
+            continue
+        for match in re.findall(r"(https?://[^\s']+)", line):
+            urls.add(match)
+    return sorted(urls), sorted(key_ids)
+
+
+def comment_out_apt_repos(urls: List[str]) -> List[str]:
+    if not urls:
+        return []
+    changed_files = []
+    for path in apt_source_files():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            warn(f"Failed to read apt sources: {path}")
+            continue
+        updated = []
+        changed = 0
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                updated.append(line)
+                continue
+            if not (stripped.startswith("deb ") or stripped.startswith("deb-src ")):
+                updated.append(line)
+                continue
+            if any(url in line for url in urls):
+                updated.append(f"# disabled by distrodeck repo-repair: {line}")
+                changed += 1
+            else:
+                updated.append(line)
+        if changed:
+            write_root_file(path, "\n".join(updated))
+            changed_files.append(str(path))
+    return changed_files
+
+
+def refresh_apt_keys(key_ids: List[str]) -> List[str]:
+    if not key_ids:
+        return []
+    if not cmd_exists("gpg"):
+        warn("gpg not available; cannot refresh apt keys.")
+        return []
+    refreshed = []
+    with tempfile.TemporaryDirectory(prefix="distrodeck-gnupg-") as gnupg_home:
+        env = os.environ.copy()
+        env["GNUPGHOME"] = gnupg_home
+        for key_id in key_ids:
+            result = run(
+                ["gpg", "--batch", "--keyserver", "keyserver.ubuntu.com", "--recv-keys", key_id],
+                check=False,
+                env=env,
+            )
+            if result.returncode != 0:
+                warn(f"Failed to fetch key: {key_id}")
+                continue
+            tmp_key = Path(tempfile.mkstemp(prefix="distrodeck-key-", suffix=".gpg")[1])
+            run(
+                ["gpg", "--batch", "--yes", "--output", str(tmp_key), "--export", key_id],
+                check=False,
+                env=env,
+            )
+            if tmp_key.exists():
+                run(
+                    ["sudo", "install", "-m", "0644", str(tmp_key), f"/etc/apt/trusted.gpg.d/{key_id}.gpg"],
+                    check=False,
+                )
+                try:
+                    tmp_key.unlink()
+                except OSError:
+                    pass
+                refreshed.append(key_id)
+    return refreshed
+
+
+def run_repo_repair() -> None:
+    if not cmd_exists("apt-get"):
+        msg = "apt-get not available; repo repair is only supported for apt-based systems."
+        if in_dialog_mode() and cmd_exists("dialog"):
+            dialog_msgbox("Repo Repair", msg)
+        else:
+            warn(msg)
+        return
+    if not ensure_sudo():
+        return
+    result = run(["sudo", "apt-get", "update"], check=False, capture_output=True)
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    urls, key_ids = parse_apt_update_issues(output)
+    if not urls and not key_ids:
+        msg = "No apt repo issues detected."
+        if in_dialog_mode() and cmd_exists("dialog"):
+            dialog_msgbox("Repo Repair", msg)
+        else:
+            log(msg)
+        return
+    summary_lines = []
+    if urls:
+        summary_lines.append("Repositories to disable:")
+        summary_lines.extend([f"  {url}" for url in urls])
+    if key_ids:
+        summary_lines.append("Keys to refresh:")
+        summary_lines.extend([f"  {key_id}" for key_id in key_ids])
+    summary = "\n".join(summary_lines)
+    confirm = False
+    if in_dialog_mode() and cmd_exists("dialog"):
+        confirm = dialog_yesno("Repo Repair", f"{summary}\n\nApply these changes?")
+    elif sys.stdin.isatty():
+        reply = input(f"{summary}\n\nApply these changes? [y/N]: ").strip().lower()
+        confirm = reply in {"y", "yes"}
+    if not confirm:
+        return
+    changed_files = comment_out_apt_repos(urls)
+    refreshed_keys = refresh_apt_keys(key_ids)
+    if in_dialog_mode() and cmd_exists("dialog"):
+        run(["dialog", "--clear"], check=False)
+        dialog_run_command(
+            "Repo Repair",
+            "Re-running apt-get update...",
+            ["sudo", "apt-get", "update"],
+        )
+    else:
+        run(["sudo", "apt-get", "update"], check=False)
+    details = []
+    if changed_files:
+        details.append("Disabled repos in:")
+        details.extend([f"  {path}" for path in changed_files])
+    if refreshed_keys:
+        details.append("Refreshed keys:")
+        details.extend([f"  {key_id}" for key_id in refreshed_keys])
+    if not details:
+        details.append("No sources or keys were changed.")
+    message = "\n".join(details)
+    if in_dialog_mode() and cmd_exists("dialog"):
+        dialog_msgbox("Repo Repair", message)
+    else:
+        log(message)
 
 
 def reenable_commented_apt_sources(old_codename: str, new_codename: str) -> None:
@@ -2065,6 +2245,7 @@ def run_tui() -> None:
         ("update", "System: Update packages"),
         ("upgrade", "System: Upgrade distro"),
         ("security", "Security: Apply security updates"),
+        ("repo-repair", "Packages: Repo repair (apt issues)"),
         ("install-tools", "Tools: Install optional tools"),
         ("automate", "Automation: Run Ansible pull"),
         ("net-tools", "Network: Run installed tools"),
@@ -2323,7 +2504,9 @@ def run_tui() -> None:
                 continue
             if cmd_exists("nala"):
                 run(["dialog", "--clear"], check=False)
-                run_update()
+                if not run_update():
+                    if dialog_yesno("Update Issues", "Updates reported errors. Run repo repair?"):
+                        run_repo_repair()
                 continue
             run(["dialog", "--clear"], check=False)
             env = os.environ.copy()
@@ -2352,6 +2535,9 @@ def run_tui() -> None:
                 [self_cmd, "security"],
                 env=env,
             )
+            continue
+        elif choice == "repo-repair":
+            run_repo_repair()
             continue
         elif choice == "doctor":
             result = run([self_cmd, "--verbose", "doctor"], check=False, capture_output=True)
@@ -2496,6 +2682,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     security_cmd = sub.add_parser("security", help="Apply security upgrades")
     security_cmd.set_defaults(func=lambda _: run_security())
+
+    repair_cmd = sub.add_parser("repo-repair", help="Repair apt repo issues")
+    repair_cmd.set_defaults(func=lambda _: run_repo_repair())
 
     doctor_cmd = sub.add_parser("doctor", help="Check system prerequisites")
     doctor_cmd.set_defaults(func=lambda _: run_doctor())
