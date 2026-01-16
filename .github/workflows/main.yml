@@ -8,7 +8,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/deb-build.yml@production
     with:
       working_directory: "."
-      prebuild_command: "./tools/gen-man.sh"
+      prebuild_command: "git submodule update --init --recursive && ./tools/gen-man.sh && mkdir -p vendor && ln -sfn scripts/script-helpers vendor/script-helpers"
       artifact_glob: "../*.deb"
 
   ppa:
@@ -30,7 +30,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/rpm-build.yml@production
     with:
       working_directory: "."
-      prebuild_command: "git submodule update --init --recursive && ./tools/gen-man.sh"
+      prebuild_command: "git submodule update --init --recursive && ./tools/gen-man.sh && mkdir -p vendor && ln -sfn scripts/script-helpers vendor/script-helpers"
       spec_path: "packaging/distrodeck.spec"
       artifact_glob: "dist/*.rpm"
 
@@ -38,7 +38,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/homebrew-package.yml@production
     with:
       working_directory: "."
-      prebuild_command: "git submodule update --init --recursive && ./tools/gen-man.sh"
+      prebuild_command: "git submodule update --init --recursive && ./tools/gen-man.sh && mkdir -p vendor && ln -sfn scripts/script-helpers vendor/script-helpers"
       name: "distrodeck"
       desc: "Export and restore packages before distro upgrades"
       homepage: "https://github.com/nikolareljin/distrodeck"
