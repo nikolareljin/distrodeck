@@ -16,6 +16,9 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Added a global `--verbose` flag; doctor now shows detailed explanations and versions.
 - Added a `config-edit` TUI for common system config files (nginx/apache/ssh/network/php).
 - Added a `net-tools` TUI to run installed network tools with auto-detected networks.
+- Added a TUI automation action that runs `ansible-pull` with URL/auth prompts.
+- Install-tools now offers Ansible and adb (Android Debug Bridge).
+- Config editor now lists repository source files for quick editing.
 
 ### Changed
 - Security updates now prefer `unattended-upgrade` and fall back safely when unavailable.
@@ -26,6 +29,9 @@ This project follows Keep a Changelog and Semantic Versioning.
 - `install-tools` supports `--all` in CLI mode and adds PHP/Composer to the list.
 - Export shows a progress gauge in the TUI.
 - Export uses host/timestamp filenames by default and logs config snapshot archive paths.
+- Upgrade/import re-enable commented apt sources that still reference the previous codename.
+- LazyGit install now prefers the LazyGit PPA on apt-based systems with multiple fallbacks.
+- LazyDocker fallback install now uses the upstream Linux install script.
 
 ## [0.2.0]
 

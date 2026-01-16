@@ -284,6 +284,17 @@ install_lazygit() {
     log_warn "Fallback lazygit install failed: download error."
   fi
   rm -rf "$tmp_dir"
+
+  if command -v snap >/dev/null 2>&1; then
+    log_info "Installing lazygit via snap..."
+    if sudo snap install lazygit; then
+      return
+    fi
+    if sudo snap install lazygit-gm; then
+      return
+    fi
+    log_warn "Snap install failed for lazygit."
+  fi
 }
 
 install_lazydocker() {

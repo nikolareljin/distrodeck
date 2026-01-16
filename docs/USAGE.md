@@ -130,11 +130,21 @@ distrodeck sysinfo
 
 ### config-edit
 
-Edit common system config files in a TUI editor (nginx/apache/ssh/network/php).
+Edit common system config files or repository sources in a TUI editor (nginx/apache/ssh/network/php, apt/yum/zypper/pacman sources).
 
 ```
 distrodeck config-edit
 ```
+
+### automate (TUI)
+
+Run an `ansible-pull` automation from the TUI, including auth prompts and playbook/inventory selection.
+
+```
+distrodeck  # open TUI, choose "Automate"
+```
+
+Requires `ansible-pull` (install via `distrodeck install-tools`).
 
 ### net-tools
 

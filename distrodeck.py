@@ -345,7 +345,7 @@ def edit_config_file(path: Path) -> None:
         return
     editor = os.getenv("EDITOR") or ""
     if not editor:
-        for candidate in ("nano", "vim", "vi"):
+        for candidate in ("nano", "micro", "vi", "vim"):
             if cmd_exists(candidate):
                 editor = candidate
                 break
@@ -390,22 +390,71 @@ def config_edit_targets() -> List[Tuple[str, str]]:
     return items
 
 
+def repo_source_targets() -> List[Tuple[str, str]]:
+    candidates = [
+        ("Apt sources", "/etc/apt/sources.list"),
+        ("Apt sources", "/etc/apt/sources.list.d/*.list"),
+        ("DNF/Yum repos", "/etc/yum.repos.d/*.repo"),
+        ("Zypper repos", "/etc/zypp/repos.d/*.repo"),
+        ("Pacman config", "/etc/pacman.conf"),
+        ("Pacman repos", "/etc/pacman.d/*.conf"),
+    ]
+    items: List[Tuple[str, str]] = []
+    for label, pattern in candidates:
+        matches = glob(pattern)
+        if not matches and "*" not in pattern:
+            if Path(pattern).exists():
+                items.append((f"{label}: {pattern}", pattern))
+            continue
+        for match in matches:
+            items.append((f"{label}: {match}", match))
+    return items
+
+
 def run_config_edit_tui() -> None:
     require_dialog()
     while True:
-        items = [("custom", "Custom path...", "off")]
-        for label, path in config_edit_targets():
-            items.append((path, label, "off"))
-        items.append(("back", "Back", "off"))
-        choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
-        if not choices or "back" in choices:
+        section = dialog_menu(
+            "Config Editor",
+            "Select what to edit:",
+            [
+                ("sources", "Repository sources"),
+                ("configs", "System configs"),
+                ("custom", "Custom path..."),
+                ("back", "Back"),
+            ],
+        )
+        if not section or section == "back":
             break
-        for choice in choices:
-            if choice == "custom":
-                custom = dialog_fselect("Config Editor", "Pick a file:", "/etc/")
-                if custom:
-                    edit_config_file(Path(custom))
-            else:
+        if section == "custom":
+            custom = dialog_fselect("Config Editor", "Pick a file:", "/etc/")
+            if custom:
+                edit_config_file(Path(custom))
+            continue
+        if section == "sources":
+            sources = repo_source_targets()
+            if not sources:
+                dialog_msgbox("Config Editor", "No repository source files found.")
+                continue
+            items = []
+            for label, path in sources:
+                items.append((path, label, "off"))
+            items.append(("back", "Back", "off"))
+            choices = dialog_checklist("Config Editor", "Select sources to edit:", items)
+            if not choices or "back" in choices:
+                continue
+            for choice in choices:
+                edit_config_file(Path(choice))
+            continue
+        if section == "configs":
+            items = []
+            for label, path in config_edit_targets():
+                items.append((path, label, "off"))
+            items.append(("back", "Back", "off"))
+            choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
+            if not choices or "back" in choices:
+                continue
+            for choice in choices:
                 edit_config_file(Path(choice))
 
 def dialog_gauge(title: str, message: str) -> Optional[subprocess.Popen]:

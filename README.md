@@ -14,6 +14,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 - Update/upgrade system packages (uses Nala)
 - Trigger distro upgrades on Ubuntu
 - Apply security updates
+- Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
 
 ## Install
@@ -72,6 +73,8 @@ distrodeck sysinfo
 distrodeck config-edit
 
 distrodeck net-tools
+
+distrodeck  # use the TUI "Automate" action
 
 distrodeck install-tools --all
 ```
