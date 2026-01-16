@@ -283,6 +283,10 @@ install_vscode() {
   fi
 }
 
+install_pkg_simple() {
+  install_pkg "$1" "$2" || log_warn "Failed to install $2 from repos."
+}
+
 install_image_view() {
   local mgr="$1"
   if ! command -v cargo >/dev/null 2>&1; then
@@ -404,6 +408,26 @@ tool_desc() {
     vscode) echo "VS Code (code)";;
     isoforge) echo "Isoforge (burn-iso)";;
     image-view) echo "image-view (Rust image viewer)";;
+    lm-sensors) echo "lm-sensors (hardware sensors)";;
+    usbutils) echo "usbutils (lsusb)";;
+    pciutils) echo "pciutils (lspci)";;
+    borgbackup) echo "borgbackup";;
+    duplicity) echo "duplicity";;
+    fdupes) echo "fdupes";;
+    lz4) echo "lz4";;
+    tar) echo "tar";;
+    unzip) echo "unzip";;
+    mc) echo "mc (Midnight Commander)";;
+    nmap) echo "nmap";;
+    iperf3) echo "iperf3";;
+    mtr) echo "mtr";;
+    net-tools) echo "net-tools";;
+    tcpdump) echo "tcpdump";;
+    traceroute) echo "traceroute";;
+    bind-tools) echo "bind-tools (dig/nslookup)";;
+    screen) echo "screen";;
+    cron) echo "cron";;
+    ufw) echo "ufw firewall";;
     *) echo "$1";;
   esac
 }
@@ -446,6 +470,26 @@ is_installed_tool() {
     vscode) command -v code >/dev/null 2>&1;;
     isoforge) command -v isoforge >/dev/null 2>&1;;
     image-view) command -v image-view >/dev/null 2>&1;;
+    lm-sensors) command -v sensors >/dev/null 2>&1;;
+    usbutils) command -v lsusb >/dev/null 2>&1;;
+    pciutils) command -v lspci >/dev/null 2>&1;;
+    borgbackup) command -v borg >/dev/null 2>&1;;
+    duplicity) command -v duplicity >/dev/null 2>&1;;
+    fdupes) command -v fdupes >/dev/null 2>&1;;
+    lz4) command -v lz4 >/dev/null 2>&1;;
+    tar) command -v tar >/dev/null 2>&1;;
+    unzip) command -v unzip >/dev/null 2>&1;;
+    mc) command -v mc >/dev/null 2>&1;;
+    nmap) command -v nmap >/dev/null 2>&1;;
+    iperf3) command -v iperf3 >/dev/null 2>&1;;
+    mtr) command -v mtr >/dev/null 2>&1;;
+    net-tools) command -v ifconfig >/dev/null 2>&1;;
+    tcpdump) command -v tcpdump >/dev/null 2>&1;;
+    traceroute) command -v traceroute >/dev/null 2>&1;;
+    bind-tools) command -v dig >/dev/null 2>&1 || command -v nslookup >/dev/null 2>&1;;
+    screen) command -v screen >/dev/null 2>&1;;
+    cron) command -v crontab >/dev/null 2>&1;;
+    ufw) command -v ufw >/dev/null 2>&1;;
     *) return 1;;
   esac
 }
@@ -467,10 +511,22 @@ main() {
 
   declare -A installed=()
   local tools=(
-    bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide
-    starship tmux zsh duf htop ncdu
-    build-tools go java micro neovim node rust
-    php composer dialog docker lazydocker lazygit nala vscode isoforge image-view
+    # Shell UX
+    bat eza fd fzf jq ripgrep tree yq zoxide
+    # Editors/terminal
+    mc micro neovim screen tmux zsh
+    # System/monitoring
+    cron duf htop lm-sensors ncdu pciutils usbutils
+    # Networking
+    bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget
+    # Storage/backup
+    borgbackup duplicity fdupes lz4 tar unzip
+    # Dev/tooling
+    build-tools composer git git-lfs go java node php rust
+    # Containers/tools
+    dialog docker lazydocker lazygit nala ufw vscode
+    # Apps
+    image-view isoforge
   )
 
   for tool in "${tools[@]}"; do
@@ -505,7 +561,7 @@ main() {
       --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
       "${items[@]}")
   else
-    selected="bat curl eza fd fzf git git-lfs jq ripgrep tree wget yq zoxide starship tmux zsh duf htop ncdu build-tools go java micro neovim node rust dialog docker lazydocker lazygit nala vscode"
+    selected="bat eza fd fzf jq ripgrep tree yq zoxide mc micro neovim screen tmux zsh cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget borgbackup duplicity fdupes lz4 tar unzip build-tools composer git git-lfs go java node php rust dialog docker lazydocker lazygit nala ufw vscode image-view isoforge"
   fi
 
   if [[ -z "$selected" ]]; then
@@ -557,6 +613,40 @@ main() {
       vscode) install_vscode "$mgr";;
       isoforge) install_isoforge "$mgr";;
       image-view) install_image_view "$mgr";;
+      lm-sensors) install_pkg_simple "$mgr" lm-sensors;;
+      usbutils) install_pkg_simple "$mgr" usbutils;;
+      pciutils) install_pkg_simple "$mgr" pciutils;;
+      borgbackup) install_pkg_simple "$mgr" borgbackup;;
+      duplicity) install_pkg_simple "$mgr" duplicity;;
+      fdupes) install_pkg_simple "$mgr" fdupes;;
+      lz4) install_pkg_simple "$mgr" lz4;;
+      tar) install_pkg_simple "$mgr" tar;;
+      unzip) install_pkg_simple "$mgr" unzip;;
+      mc) install_pkg_simple "$mgr" mc;;
+      nmap) install_pkg_simple "$mgr" nmap;;
+      iperf3) install_pkg_simple "$mgr" iperf3;;
+      mtr) install_pkg_simple "$mgr" mtr;;
+      net-tools) install_pkg_simple "$mgr" net-tools;;
+      tcpdump) install_pkg_simple "$mgr" tcpdump;;
+      traceroute) install_pkg_simple "$mgr" traceroute;;
+      bind-tools)
+        case "$mgr" in
+          apt) install_pkg_simple "$mgr" dnsutils;;
+          dnf|pacman|zypper) install_pkg_simple "$mgr" bind-tools;;
+          *) log_warn "bind-tools install not supported for this distro.";;
+        esac
+        ;;
+      screen) install_pkg_simple "$mgr" screen;;
+      cron)
+        case "$mgr" in
+          apt) install_pkg_simple "$mgr" cron;;
+          dnf) install_pkg_simple "$mgr" cronie;;
+          pacman) install_pkg_simple "$mgr" cronie;;
+          zypper) install_pkg_simple "$mgr" cron;;
+          *) log_warn "cron install not supported for this distro.";;
+        esac
+        ;;
+      ufw) install_pkg_simple "$mgr" ufw;;
     esac
   done
 }

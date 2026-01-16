@@ -136,6 +136,14 @@ Edit common system config files in a TUI editor (nginx/apache/ssh/network/php).
 distrodeck config-edit
 ```
 
+### net-tools
+
+Run installed network tools from a TUI menu (nmap, mtr, iperf3, traceroute, tcpdump).
+
+```
+distrodeck net-tools
+```
+
 ## Export file sections
 
 ```

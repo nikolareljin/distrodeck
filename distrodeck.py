@@ -738,6 +738,93 @@ def run_sysinfo(_: argparse.Namespace) -> None:
     run_capture(["lsusb"], "lsusb")
 
 
+def get_network_cidrs() -> List[str]:
+    if not cmd_exists("ip"):
+        return []
+    result = run(["ip", "-o", "-f", "inet", "addr", "show"], check=False, capture_output=True)
+    cidrs = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if "inet" in parts:
+            idx = parts.index("inet")
+            if idx + 1 < len(parts):
+                cidrs.append(parts[idx + 1])
+    return sorted(set(cidrs))
+
+
+def run_network_tools_tui() -> None:
+    require_dialog()
+    cidrs = get_network_cidrs()
+    cidr_label = ", ".join(cidrs) if cidrs else "none"
+    tools = [
+        ("nmap", "Scan local networks with nmap"),
+        ("mtr", "Trace route with mtr"),
+        ("iperf3", "Throughput test (client mode)"),
+        ("traceroute", "Trace route to target"),
+        ("tcpdump", "Capture packets (interactive)"),
+        ("back", "Back"),
+    ]
+    while True:
+        choice = dialog_menu("Network Tools", f"Detected networks: {cidr_label}", tools)
+        if not choice or choice == "back":
+            break
+        if choice == "nmap":
+            if not cmd_exists("nmap"):
+                dialog_msgbox("Network Tools", "nmap not installed.")
+                continue
+            targets = cidrs if cidrs else []
+            custom = dialog_input("nmap", "Targets (space-separated, blank = auto):", " ".join(targets))
+            if custom:
+                targets = custom.split()
+            if not targets:
+                dialog_msgbox("nmap", "No targets available.")
+                continue
+            run(["dialog", "--clear"], check=False)
+            run(["nmap", "-sV", *targets], check=False)
+            continue
+        if choice == "mtr":
+            if not cmd_exists("mtr"):
+                dialog_msgbox("Network Tools", "mtr not installed.")
+                continue
+            host = dialog_input("mtr", "Host/IP:", "")
+            if not host:
+                continue
+            run(["dialog", "--clear"], check=False)
+            run(["mtr", host], check=False)
+            continue
+        if choice == "iperf3":
+            if not cmd_exists("iperf3"):
+                dialog_msgbox("Network Tools", "iperf3 not installed.")
+                continue
+            host = dialog_input("iperf3", "Server host/IP:", "")
+            if not host:
+                continue
+            run(["dialog", "--clear"], check=False)
+            run(["iperf3", "-c", host], check=False)
+            continue
+        if choice == "traceroute":
+            if not cmd_exists("traceroute"):
+                dialog_msgbox("Network Tools", "traceroute not installed.")
+                continue
+            host = dialog_input("traceroute", "Host/IP:", "")
+            if not host:
+                continue
+            run(["dialog", "--clear"], check=False)
+            run(["traceroute", host], check=False)
+            continue
+        if choice == "tcpdump":
+            if not cmd_exists("tcpdump"):
+                dialog_msgbox("Network Tools", "tcpdump not installed.")
+                continue
+            iface = dialog_input("tcpdump", "Interface (blank = default):", "")
+            cmd = ["tcpdump"]
+            if iface:
+                cmd.extend(["-i", iface])
+            run(["dialog", "--clear"], check=False)
+            run(cmd, check=False)
+            continue
+
+
 def copy_to_clipboard(text: str) -> bool:
     if cmd_exists("wl-copy"):
         run(["wl-copy"], input_text=text, check=False)
@@ -1705,6 +1792,7 @@ def run_tui() -> None:
         ("upgrade", "System: Upgrade distro"),
         ("security", "Security: Apply security updates"),
         ("install-tools", "Tools: Install optional tools"),
+        ("net-tools", "Network: Run installed tools"),
         ("config-edit", "System: Edit config files"),
         ("preflight", "Diagnostics: Preflight checks"),
         ("doctor", "Diagnostics: Check system prerequisites"),
@@ -1886,6 +1974,9 @@ def run_tui() -> None:
                 continue
             run(["dialog", "--clear"], check=False)
             run([self_cmd, "install-tools"], check=False)
+            continue
+        elif choice == "net-tools":
+            run_network_tools_tui()
             continue
         elif choice == "config-edit":
             run_config_edit_tui()
@@ -2164,6 +2255,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Edit common system config files (TUI)",
     )
     config_cmd.set_defaults(func=lambda _: run_config_edit_tui())
+
+    net_cmd = sub.add_parser("net-tools", help="Run installed network tools (TUI)")
+    net_cmd.set_defaults(func=lambda _: run_network_tools_tui())
 
     return parser
 

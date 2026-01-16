@@ -71,6 +71,8 @@ distrodeck sysinfo
 
 distrodeck config-edit
 
+distrodeck net-tools
+
 distrodeck install-tools --all
 ```
 
