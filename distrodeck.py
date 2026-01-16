@@ -1786,6 +1786,7 @@ def run_tui() -> None:
     require_dialog()
     self_cmd = str(Path(__file__).resolve())
     actions = [
+        ("preflight", "Diagnostics: Preflight checks"),
         ("export", "Packages: Export installed packages"),
         ("import", "Packages: Import from export file"),
         ("update", "System: Update packages"),
@@ -1794,7 +1795,6 @@ def run_tui() -> None:
         ("install-tools", "Tools: Install optional tools"),
         ("net-tools", "Network: Run installed tools"),
         ("config-edit", "System: Edit config files"),
-        ("preflight", "Diagnostics: Preflight checks"),
         ("doctor", "Diagnostics: Check system prerequisites"),
         ("sysinfo", "Diagnostics: Full system info"),
         ("logs", "Diagnostics: View logs"),
