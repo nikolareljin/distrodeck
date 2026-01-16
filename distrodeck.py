@@ -320,6 +320,25 @@ def dialog_msgbox(title: str, message: str) -> None:
     )
 
 
+def confirm_risky_extract(archive: str) -> bool:
+    message = (
+        "About to extract a config snapshot to the root filesystem (/).\n"
+        "This can overwrite system files. Only continue if you trust the archive.\n\n"
+        f"Archive: {archive}\n\n"
+        "Continue?"
+    )
+    if in_dialog_mode() and cmd_exists("dialog"):
+        return dialog_yesno("Config Snapshot Warning", message)
+    if sys.stdin.isatty():
+        try:
+            response = input(f"warning: {message}\n[y/N]: ")
+        except EOFError:
+            return False
+        return response.strip().lower() in {"y", "yes"}
+    warn("Non-interactive session; skipping config snapshot extraction.")
+    return False
+
+
 def edit_config_file(path: Path) -> None:
     if not path.exists() or not path.is_file():
         dialog_msgbox("Config Editor", f"File not found: {path}")
@@ -412,15 +431,21 @@ def dialog_gauge(title: str, message: str) -> Optional[subprocess.Popen]:
 def dialog_gauge_update(proc: subprocess.Popen, percent: int, message: str) -> None:
     if not proc or not proc.stdin:
         return
-    proc.stdin.write(f"XXX\n{percent}\n{message}\nXXX\n")
-    proc.stdin.flush()
+    try:
+        proc.stdin.write(f"XXX\n{percent}\n{message}\nXXX\n")
+        proc.stdin.flush()
+    except (BrokenPipeError, ValueError):
+        return
 
 
 def dialog_gauge_close(proc: subprocess.Popen) -> None:
     if not proc or not proc.stdin:
         return
-    proc.stdin.write("100\n")
-    proc.stdin.close()
+    try:
+        proc.stdin.write("100\n")
+        proc.stdin.close()
+    except (BrokenPipeError, ValueError):
+        pass
     proc.wait()
 
 
@@ -497,14 +522,20 @@ def dialog_run_command(
                 continue
             text = result.stdout.rstrip("\n")
             if text and proc.stdin:
-                proc.stdin.write(text + "\n")
-                proc.stdin.flush()
+                try:
+                    proc.stdin.write(text + "\n")
+                    proc.stdin.flush()
+                except (BrokenPipeError, ValueError):
+                    pass
             time.sleep(0.1)
     else:
         proc.wait()
 
     if proc.stdin:
-        proc.stdin.close()
+        try:
+            proc.stdin.close()
+        except (BrokenPipeError, ValueError):
+            pass
     out_handle.close()
     if tail_pid:
         try:
@@ -1648,7 +1679,10 @@ def import_from_file(args: argparse.Namespace) -> None:
             if not Path(archive).exists():
                 warn(f"Config snapshot not found on disk: {archive}")
             else:
-                run(["sudo", "tar", "-xzf", archive, "-C", "/"])
+                if confirm_risky_extract(archive):
+                    run(["sudo", "tar", "-xzf", archive, "-C", "/"])
+                else:
+                    warn("Skipped config snapshot extraction.")
 
     if args.apply_services and wants("services_enabled"):
         if not cmd_exists("systemctl"):
@@ -1683,7 +1717,7 @@ def import_from_file(args: argparse.Namespace) -> None:
                 continue
             try:
                 content = base64.b64decode(content_b64.encode("ascii"))
-            except (ValueError, OSError):
+            except ValueError:
                 warn(f"Invalid base64 content for: {path}")
                 continue
             target = Path(path).expanduser()
