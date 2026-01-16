@@ -144,6 +144,39 @@ def require_dialog() -> None:
         fail("dialog not found. Install it or run distrodeck with CLI arguments.")
 
 
+def detect_pkg_mgr() -> str:
+    if cmd_exists("apt-get"):
+        return "apt"
+    if cmd_exists("dnf"):
+        return "dnf"
+    if cmd_exists("pacman"):
+        return "pacman"
+    if cmd_exists("zypper"):
+        return "zypper"
+    return "unknown"
+
+
+def install_dialog_cli() -> bool:
+    mgr = detect_pkg_mgr()
+    if mgr == "unknown":
+        warn("No supported package manager found to install dialog.")
+        return False
+    if mgr == "apt":
+        run_warn(["sudo", "apt-get", "update"], "apt-get update")
+        result = run_warn(["sudo", "apt-get", "install", "-y", "dialog"], "apt-get install dialog")
+        return result.returncode == 0
+    if mgr == "dnf":
+        result = run_warn(["sudo", "dnf", "install", "-y", "dialog"], "dnf install dialog")
+        return result.returncode == 0
+    if mgr == "pacman":
+        result = run_warn(["sudo", "pacman", "-S", "--noconfirm", "dialog"], "pacman install dialog")
+        return result.returncode == 0
+    if mgr == "zypper":
+        result = run_warn(["sudo", "zypper", "install", "-y", "dialog"], "zypper install dialog")
+        return result.returncode == 0
+    return False
+
+
 def dialog_size(height_ratio: float = 0.6, width_ratio: float = 0.7) -> Tuple[int, int]:
     size = get_terminal_size(fallback=(80, 24))
     width = max(60, min(120, int(size.columns * width_ratio)))
@@ -2158,6 +2191,16 @@ def main() -> None:
     init_logging()
     signal.signal(signal.SIGINT, handle_sigint)
     if len(sys.argv) == 1:
+        if not cmd_exists("dialog"):
+            print("dialog is required for the TUI.")
+            reply = input("Install dialog now? [y/N]: ").strip().lower()
+            if reply in {"y", "yes"}:
+                if not install_dialog_cli():
+                    fail("Failed to install dialog.")
+            else:
+                parser = build_parser()
+                parser.print_help()
+                return
         run_tui()
         return
     parser = build_parser()
