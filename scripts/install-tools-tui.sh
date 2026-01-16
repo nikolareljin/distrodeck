@@ -199,10 +199,91 @@ install_node() {
 }
 
 install_lazygit() {
-  if install_pkg "$1" lazygit; then
+  local mgr="$1"
+  if [[ "$mgr" == "apt" ]]; then
+    if ! command -v add-apt-repository >/dev/null 2>&1; then
+      install_pkg "$mgr" software-properties-common || true
+    fi
+    if command -v add-apt-repository >/dev/null 2>&1; then
+      sudo add-apt-repository -y ppa:lazygit-team/release || true
+      sudo apt update || true
+      if sudo apt install -y lazygit; then
+        return
+      fi
+    fi
+  else
+    if install_pkg "$mgr" lazygit; then
+      return
+    fi
+    if install_pkg "$mgr" lazygit-gm; then
+      return
+    fi
+  fi
+  if ! command -v go >/dev/null 2>&1; then
+    log_warn "Go is required for lazygit go-install fallback; installing Go..."
+    install_go "$mgr" || true
+  fi
+  if command -v go >/dev/null 2>&1; then
+    GOBIN="${GOBIN:-$HOME/.local/bin}"
+    mkdir -p "$GOBIN"
+    log_info "Installing lazygit via go install..."
+    if GOBIN="$GOBIN" go install github.com/jesseduffield/lazygit@latest; then
+      return
+    fi
+    log_warn "go install failed; falling back to release tarball."
+  fi
+
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    log_warn "curl or wget is required for lazygit fallback download."
     return
   fi
-  install_pkg "$1" lazygit-gm || log_warn "Failed to install lazygit (tried lazygit and lazygit-gm)."
+  local os arch url tmp_dir bin_path
+  os="$(uname -s)"
+  case "$os" in
+    Linux) os="Linux";;
+    Darwin) os="Darwin";;
+    *) log_warn "Fallback lazygit install not supported for OS: $os"; return;;
+  esac
+
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x86_64";;
+    aarch64|arm64) arch="arm64";;
+    armv7l|armv7) arch="armv7";;
+    i386|i686) arch="386";;
+    *) log_warn "Fallback lazygit install not supported for arch: $arch"; return;;
+  esac
+
+  url="https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${os}_${arch}.tar.gz"
+  tmp_dir="$(mktemp -d)"
+  bin_path="$tmp_dir/lazygit"
+  if ! download_file "$url" "$tmp_dir/lazygit.tar.gz"; then
+    local version api_url
+    api_url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
+    if download_file "$api_url" "$tmp_dir/lazygit-release.json"; then
+      version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
+    fi
+    if [[ -n "$version" ]]; then
+      version="${version#v}"
+      url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
+      download_file "$url" "$tmp_dir/lazygit.tar.gz"
+    fi
+  fi
+  if [[ -f "$tmp_dir/lazygit.tar.gz" ]]; then
+    if tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir"; then
+      if [[ -f "$bin_path" ]]; then
+        sudo install -m 0755 "$bin_path" /usr/local/bin/lazygit
+        log_info "Installed lazygit to /usr/local/bin/lazygit"
+      else
+        log_warn "Fallback lazygit install failed: binary not found in archive."
+      fi
+    else
+      log_warn "Fallback lazygit install failed: unable to extract archive."
+    fi
+  else
+    log_warn "Fallback lazygit install failed: download error."
+  fi
+  rm -rf "$tmp_dir"
 }
 
 install_lazydocker() {
@@ -214,42 +295,13 @@ install_lazydocker() {
     log_warn "Failed to install lazydocker from repos, and curl is missing for fallback install."
     return
   fi
-
-  local os arch url tmp_dir bin_path
-  os="$(uname -s)"
-  case "$os" in
-    Linux) os="Linux";;
-    Darwin) os="Darwin";;
-    *) log_warn "Fallback lazydocker install not supported for OS: $os"; return;;
-  esac
-
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) arch="x86_64";;
-    aarch64|arm64) arch="arm64";;
-    armv7l|armv7) arch="armv7";;
-    i386|i686) arch="386";;
-    *) log_warn "Fallback lazydocker install not supported for arch: $arch"; return;;
-  esac
-
-  url="https://github.com/jesseduffield/lazydocker/releases/latest/download/lazydocker_${os}_${arch}.tar.gz"
-  tmp_dir="$(mktemp -d)"
-  bin_path="$tmp_dir/lazydocker"
-  if curl -fsSL "$url" -o "$tmp_dir/lazydocker.tar.gz"; then
-    if tar -xzf "$tmp_dir/lazydocker.tar.gz" -C "$tmp_dir"; then
-      if [[ -f "$bin_path" ]]; then
-        sudo install -m 0755 "$bin_path" /usr/local/bin/lazydocker
-        log_info "Installed lazydocker to /usr/local/bin/lazydocker"
-      else
-        log_warn "Fallback lazydocker install failed: binary not found in archive."
-      fi
-    else
-      log_warn "Fallback lazydocker install failed: unable to extract archive."
-    fi
-  else
-    log_warn "Fallback lazydocker install failed: download error."
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    log_warn "Fallback lazydocker install is only supported on Linux."
+    return
   fi
-  rm -rf "$tmp_dir"
+  log_info "Installing lazydocker via upstream install script..."
+  curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | bash || \
+    log_warn "Fallback lazydocker install failed."
 }
 
 install_java() {
