@@ -35,4 +35,4 @@ ppa:your-launchpad-id/distrodeck
 - The distro series is taken from `debian/changelog`. Update it before publishing.
 - The workflow regenerates the man page via `tools/gen-man.sh` before building.
 - RPM and Homebrew artifacts use reusable `ci-helpers` workflows backed by `script-helpers`.
-- CI invokes wrapper scripts under `vendor/script-helpers` to bootstrap the submodule.
+- CI invokes bootstrap wrapper scripts under `vendor/script-helpers` (from `ci-helpers`) which set up the actual `scripts/script-helpers` submodule.
