@@ -33,6 +33,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Upgrade/import re-enable commented apt sources that still reference the previous codename.
 - LazyGit install now prefers the LazyGit PPA on apt-based systems with multiple fallbacks.
 - LazyDocker fallback install now uses the upstream Linux install script.
+- CI packaging now relies on ci-helpers bootstrap to locate `script-helpers`.
 
 ## [0.2.0]
 
