@@ -71,6 +71,10 @@ distrodeck logs
 
 distrodeck install-tools
 
+distrodeck git-status set
+
+distrodeck git-status unset
+
 distrodeck sysinfo
 
 distrodeck config-edit

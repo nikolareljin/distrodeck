@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-01-18" "distrodeck 0.1.0" "User Commands"
+.TH DISTRODECK 1 "2026-01-18" "distrodeck 0.4.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -31,6 +31,9 @@ Check system prerequisites
 .TP
 .B install-tools
 Install optional tools via a TUI checklist
+.TP
+.B git-status
+Enable or disable git status in the shell prompt
 .TP
 .B preflight
 Run preflight checks
@@ -144,6 +147,13 @@ usage: distrodeck install-tools [-h] [--all]
 options:
   -h, --help  show this help message and exit
   --all       Install all tools without showing the TUI
+.fi
+.SS git-status
+.nf
+usage: distrodeck git-status [-h] {set,unset}
+
+options:
+  -h, --help  show this help message and exit
 .fi
 .SS preflight
 .nf

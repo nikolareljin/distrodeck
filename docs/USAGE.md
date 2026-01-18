@@ -162,6 +162,16 @@ Run installed network tools from a TUI menu (nmap, mtr, iperf3, traceroute, tcpd
 distrodeck net-tools
 ```
 
+### git-status
+
+Enable or disable git branch status in your shell prompt (branch name plus ahead/behind counts).
+Defaults to bash, but uses the active shell when available (bash, zsh, fish).
+
+```
+distrodeck git-status set
+distrodeck git-status unset
+```
+
 ## Export file sections
 
 ```
