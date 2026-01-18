@@ -2335,6 +2335,7 @@ def run_git_status_set(_: argparse.Namespace) -> None:
     block = git_status_block(shell_name, script_path)
     write_shell_block(shell_config, block)
     log(f"git-status enabled for {shell_name} in {shell_config}")
+    log(f"Reload your shell config: source {shell_config}")
 
 
 def run_git_status_unset(_: argparse.Namespace) -> None:
@@ -2365,6 +2366,10 @@ def shell_config_path(shell_name: str) -> Path:
     return home / ".bashrc"
 
 
+def shell_source_command(shell_config: Path) -> str:
+    return f"source {shell_config}"
+
+
 def run_git_status_tui() -> None:
     choice = dialog_menu(
         "Git Status",
@@ -2379,7 +2384,15 @@ def run_git_status_tui() -> None:
         return
     if choice == "set":
         run_git_status_set(argparse.Namespace())
-        dialog_msgbox("Git Status", "Git status prompt enabled.")
+        shell_name = detect_shell_name()
+        if shell_name not in {"bash", "zsh", "fish"}:
+            shell_name = "bash"
+        shell_config = shell_config_path(shell_name)
+        dialog_msgbox(
+            "Git Status",
+            "Git status prompt enabled.\n"
+            f"Reload your shell config:\n{shell_source_command(shell_config)}",
+        )
     else:
         run_git_status_unset(argparse.Namespace())
         dialog_msgbox("Git Status", "Git status prompt disabled.")
