@@ -2,6 +2,10 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [0.4.0]
+
+
+
 ## [0.3.0]
 
 ### Added
