@@ -89,8 +89,17 @@ distrodeck install-tools --all
 Example prompt segment after `git-status set`:
 
 ```
-user@host ~/repo (main+2-1)$
+user@host ~/repo (main 2↑)$
+user@host ~/repo (main 3↓)$
+user@host ~/repo (main ≡)$
+user@host ~/repo (main 2↑1↓)$
 ```
+
+Legend:
+- `≡` green: up to date with remote
+- `N↑` yellow: ahead by N commits
+- `N↓` red: behind by N commits
+- `A↑B↓` red: diverged (ahead by A, behind by B)
 
 ## Documentation
 
