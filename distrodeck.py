@@ -2130,7 +2130,7 @@ def git_status_shell_script() -> str:
             "  if [[ \"$behind\" != \"0\" ]]; then",
             "    status+=\"-$behind\"",
             "  fi",
-            "  local color_prefix color_suffix",
+            "  local color_prefix color_suffix color_code reset_code",
             "  if [[ \"$behind\" != \"0\" ]]; then",
             "    color_prefix=\"red\"",
             "  elif [[ \"$ahead\" != \"0\" ]]; then",
@@ -2141,13 +2141,13 @@ def git_status_shell_script() -> str:
             "  if [[ -n \"${ZSH_VERSION:-}\" ]]; then",
             "    printf \"%%F{%s}(%s%s)%%f\" \"$color_prefix\" \"$branch\" \"$status\"",
             "  else",
+            "    reset_code=$(tput sgr0 2>/dev/null || true)",
             "    case \"$color_prefix\" in",
-            "      red) color_prefix=\"\\[\\e[91m\\]\";;",
-            "      yellow) color_prefix=\"\\[\\e[93m\\]\";;",
-            "      green) color_prefix=\"\\[\\e[92m\\]\";;",
+            "      red) color_code=$(tput setaf 1 2>/dev/null || true);;",
+            "      yellow) color_code=$(tput setaf 3 2>/dev/null || true);;",
+            "      green) color_code=$(tput setaf 2 2>/dev/null || true);;",
             "    esac",
-            "    color_suffix=\"\\[\\e[00m\\]\"",
-            "    printf \"%s(%s%s)%s\" \"$color_prefix\" \"$branch\" \"$status\" \"$color_suffix\"",
+            "    printf \"%s(%s%s)%s\" \"$color_code\" \"$branch\" \"$status\" \"$reset_code\"",
             "  fi",
             "}",
             "",
@@ -2323,6 +2323,11 @@ def run_git_status_set(_: argparse.Namespace) -> None:
         shell_name = "bash"
     script_path = git_status_script_path(shell_name)
     script_path.parent.mkdir(parents=True, exist_ok=True)
+    if script_path.exists():
+        try:
+            script_path.unlink()
+        except OSError:
+            warn(f"Failed to replace existing {script_path}")
     if shell_name == "fish":
         script_path.write_text(git_status_fish_script(), encoding="utf-8")
     else:
