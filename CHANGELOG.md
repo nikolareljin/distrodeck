@@ -4,6 +4,16 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [0.4.0]
 
+### Added
+- New `git-status` command (and TUI action) to enable/disable git status in the shell prompt.
+- Prompt shows branch name plus compact status symbols: `≡` (up to date), `N↑` (ahead), `N↓` (behind), and `A↑B↓` (diverged).
+- Dirty working tree indicator (`*`) for uncommitted changes.
+- Auto-detection of bash/zsh/fish and safe prompt injection with automatic removal.
+- Prompt color rules: branch name stays green; status color reflects state (green/yellow/red).
+- Examples and legend added to README, USAGE, and man page.
+
+### Changed
+- git-status install now overwrites the generated script on each set, ensures executable permissions, and instructs users to reload the shell config.
 
 
 ## [0.3.0]
