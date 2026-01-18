@@ -89,10 +89,10 @@ distrodeck install-tools --all
 Example prompt segment after `git-status set`:
 
 ```
-user@host ~/repo (main 2↑)$
-user@host ~/repo (main 3↓)$
-user@host ~/repo (main ≡)$
-user@host ~/repo (main 2↑1↓)$
+user@host ~/repo(main 2↑)$
+user@host ~/repo(main 3↓)$
+user@host ~/repo(main ≡)$
+user@host ~/repo(main 2↑1↓)$
 ```
 
 Legend:
