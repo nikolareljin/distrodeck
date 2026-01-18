@@ -86,6 +86,12 @@ distrodeck  # use the TUI "Automate" action
 distrodeck install-tools --all
 ```
 
+Example prompt segment after `git-status set`:
+
+```
+user@host ~/repo (main+2-1)$
+```
+
 ## Documentation
 
 - Usage guide: `docs/USAGE.md`

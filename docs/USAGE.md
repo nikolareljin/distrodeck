@@ -164,12 +164,18 @@ distrodeck net-tools
 
 ### git-status
 
-Enable or disable git branch status in your shell prompt (branch name plus ahead/behind counts).
+Enable or disable git branch status in your shell prompt (compact `branch+ahead-behind` format).
 Defaults to bash, but uses the active shell when available (bash, zsh, fish).
 
 ```
 distrodeck git-status set
 distrodeck git-status unset
+```
+
+Example prompt segment:
+
+```
+user@host ~/repo (main+2-1)$
 ```
 
 ## Export file sections
