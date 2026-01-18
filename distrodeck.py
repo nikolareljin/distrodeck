@@ -2327,6 +2327,10 @@ def run_git_status_set(_: argparse.Namespace) -> None:
         script_path.write_text(git_status_fish_script(), encoding="utf-8")
     else:
         script_path.write_text(git_status_shell_script(), encoding="utf-8")
+    try:
+        script_path.chmod(0o755)
+    except OSError:
+        warn(f"Failed to set executable permissions on {script_path}")
     shell_config = shell_config_path(shell_name)
     block = git_status_block(shell_name, script_path)
     write_shell_block(shell_config, block)
