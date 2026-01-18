@@ -165,6 +165,8 @@ N\[u2191] (yellow) ahead by N commits
 N\[u2193] (red) behind by N commits
 .IP \[bu] 2
 A\[u2191]B\[u2193] (red) diverged (ahead by A, behind by B)
+.IP \[bu] 2
+* (yellow) local uncommitted changes
 .PP
 Example prompt segment:
 .nf
@@ -172,6 +174,7 @@ user@host ~/repo (main 2↑)$
 user@host ~/repo (main 3↓)$
 user@host ~/repo (main ≡)$
 user@host ~/repo (main 2↑1↓)$
+user@host ~/repo (main * 2↑)$
 .fi
 .SS preflight
 .nf

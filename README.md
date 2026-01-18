@@ -100,6 +100,7 @@ Legend:
 - `N↑` yellow: ahead by N commits
 - `N↓` red: behind by N commits
 - `A↑B↓` red: diverged (ahead by A, behind by B)
+- `*` yellow: local uncommitted changes
 
 ## Documentation
 

@@ -170,6 +170,7 @@ Branch name stays green; status shows as:
 - `N↑` yellow when ahead by N commits
 - `N↓` red when behind by N commits
 - `A↑B↓` red when diverged (ahead by A, behind by B)
+- `*` yellow when there are local uncommitted changes
 Defaults to bash, but uses the active shell when available (bash, zsh, fish).
 
 ```
@@ -184,6 +185,7 @@ user@host ~/repo (main 2↑)$
 user@host ~/repo (main 3↓)$
 user@host ~/repo (main ≡)$
 user@host ~/repo (main 2↑1↓)$
+user@host ~/repo (main * 2↑)$
 ```
 
 ## Export file sections
