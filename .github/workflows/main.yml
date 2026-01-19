@@ -8,7 +8,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/deb-build.yml@production
     with:
       working_directory: "."
-      prebuild_command: "./tools/gen-man.sh"
+      prebuild_command: "./tools/ci-prebuild.sh"
       artifact_glob: "../*.deb"
 
   ppa:
@@ -16,7 +16,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/ppa-deb.yml@production
     with:
       working_directory: "."
-      prebuild_command: "./tools/gen-man.sh"
+      prebuild_command: "./tools/ci-prebuild.sh"
       ppa_target: "ppa:your-launchpad-id/distrodeck"
       deb_fullname: "Nikola Reljin"
       deb_email: "nikola.reljin@gmail.com"
@@ -30,7 +30,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/rpm-build.yml@production
     with:
       working_directory: "."
-      prebuild_command: "./tools/gen-man.sh"
+      prebuild_command: "./tools/ci-prebuild.sh"
       spec_path: "packaging/distrodeck.spec"
       artifact_glob: "dist/*.rpm"
 
@@ -38,7 +38,7 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/homebrew-package.yml@production
     with:
       working_directory: "."
-      prebuild_command: "./tools/gen-man.sh"
+      prebuild_command: "./tools/ci-prebuild.sh"
       name: "distrodeck"
       desc: "Export and restore packages before distro upgrades"
       homepage: "https://github.com/nikolareljin/distrodeck"
