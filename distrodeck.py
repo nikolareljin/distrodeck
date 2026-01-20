@@ -97,6 +97,12 @@ def run_warn(cmd, title: str) -> subprocess.CompletedProcess:
     return result
 
 
+def run_warn_live(cmd, title: str) -> subprocess.CompletedProcess:
+    if in_dialog_mode():
+        return run(cmd, check=False)
+    return run_warn(cmd, title)
+
+
 def get_log_dir() -> Path:
     state_home = os.getenv("XDG_STATE_HOME")
     if state_home:
@@ -1422,11 +1428,11 @@ def ensure_nala() -> bool:
         warn("apt-get not available; cannot install Nala")
         return False
     log("Installing Nala...")
-    update_result = run_warn(["sudo", "apt-get", "update"], "apt-get update")
+    update_result = run_warn_live(["sudo", "apt-get", "update"], "apt-get update")
     if update_result.returncode != 0:
         warn("Skipping Nala install due to apt-get update failure.")
         return False
-    run_warn(["sudo", "apt-get", "install", "-y", "nala"], "apt-get install nala")
+    run_warn_live(["sudo", "apt-get", "install", "-y", "nala"], "apt-get install nala")
     return True
 
 
@@ -1438,19 +1444,25 @@ def run_update() -> bool:
         if in_dialog_mode():
             update_cmd.extend(["-v"])
             upgrade_cmd.extend(["-v", "--raw-dpkg"])
-        if run_warn(update_cmd, "nala update").returncode != 0:
+        if run_warn_live(update_cmd, "nala update").returncode != 0:
             had_errors = True
-        if run_warn(upgrade_cmd, "nala upgrade").returncode != 0:
+        if run_warn_live(upgrade_cmd, "nala upgrade").returncode != 0:
             had_errors = True
     elif cmd_exists("apt-get"):
-        if run_warn(["sudo", "apt-get", "update"], "apt-get update").returncode != 0:
+        if (
+            run_warn_live(["sudo", "apt-get", "update"], "apt-get update").returncode
+            != 0
+        ):
             had_errors = True
-        if run_warn(["sudo", "apt-get", "upgrade", "-y"], "apt-get upgrade").returncode != 0:
+        if (
+            run_warn_live(["sudo", "apt-get", "upgrade", "-y"], "apt-get upgrade").returncode
+            != 0
+        ):
             had_errors = True
     elif cmd_exists("apt"):
-        if run_warn(["sudo", "apt", "update"], "apt update").returncode != 0:
+        if run_warn_live(["sudo", "apt", "update"], "apt update").returncode != 0:
             had_errors = True
-        if run_warn(["sudo", "apt", "upgrade", "-y"], "apt upgrade").returncode != 0:
+        if run_warn_live(["sudo", "apt", "upgrade", "-y"], "apt upgrade").returncode != 0:
             had_errors = True
     elif cmd_exists("dnf"):
         if run(["sudo", "dnf", "upgrade", "-y"], check=False).returncode != 0:
@@ -2892,19 +2904,31 @@ def run_tui() -> None:
                 continue
             if cmd_exists("nala"):
                 run(["dialog", "--clear"], check=False)
+                log(
+                    "Starting system update with Nala (refresh package lists, then upgrade packages)."
+                )
+                previous_dialog = os.environ.get("DISTRODECK_DIALOG")
+                os.environ["DISTRODECK_DIALOG"] = "1"
                 if not run_update():
                     if dialog_yesno("Update Issues", "Updates reported errors. Run repo repair?"):
                         run_repo_repair()
+                if previous_dialog is None:
+                    os.environ.pop("DISTRODECK_DIALOG", None)
+                else:
+                    os.environ["DISTRODECK_DIALOG"] = previous_dialog
                 continue
             run(["dialog", "--clear"], check=False)
             env = os.environ.copy()
+            env["DISTRODECK_DIALOG"] = "1"
             env["DISTRODECK_NO_NALA"] = "1"
+            log("Starting system update (refresh package lists, then upgrade packages).")
             run([self_cmd, "update"], check=False, env=env)
             continue
         elif choice == "upgrade":
             if not ensure_sudo():
                 continue
             run(["dialog", "--clear"], check=False)
+            log("Starting distro upgrade. Follow any prompts in the terminal.")
             run_upgrade()
             continue
         elif choice == "security":
