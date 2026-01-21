@@ -111,6 +111,7 @@ Legend:
 - Man page: `docs/man/distrodeck.1` (regenerate with `make man`)
 - CI guide: `docs/CI.md`
 - Installer TUI: `scripts/install-tools-tui.sh`
+- Docker test runner: `scripts/test-docker.sh`
 
 ## Scripts
 

@@ -140,6 +140,15 @@ Delete all previous logs.
 distrodeck clear-logs
 ```
 
+### Docker test suite (Ubuntu 24.04)
+
+Run the full automated test suite in a privileged Ubuntu 24.04 container with
+the repo mounted from the host:
+
+```
+scripts/test-docker.sh
+```
+
 ### sysinfo
 
 Show full system info (CPU/GPU/memory/disks/network/public IP/ports/USB, plus speed test if available).

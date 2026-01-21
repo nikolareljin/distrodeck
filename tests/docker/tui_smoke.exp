@@ -1,0 +1,16 @@
+#!/usr/bin/expect -f
+set timeout 30
+cd /workspace
+spawn ./distrodeck
+expect {
+  -re {Select an action:} {}
+  timeout {exit 1}
+}
+# Move to Quit (last item) by sending End key then Enter.
+send "\033[4~"
+expect {
+  -re {Exit} {}
+  timeout {# continue}
+}
+send "\r"
+expect eof

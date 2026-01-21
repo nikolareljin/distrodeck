@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  distrodeck-test:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.test
+    privileged: true
+    tty: true
+    stdin_open: true
+    working_dir: /workspace
+    environment:
+      - XDG_STATE_HOME=/workspace/.state
+    volumes:
+      - ./:/workspace
+      - ./.state:/workspace/.state
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    command: ["/sbin/init"]

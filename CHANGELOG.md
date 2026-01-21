@@ -9,6 +9,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - New `clear-logs` command and TUI action to delete all previous logs.
 - Action start/end entries added to logs for easier troubleshooting.
 - Import shows section-level progress in the TUI with an indeterminate progress bar.
+- Docker-based Ubuntu 24.04 test suite with automated CLI + TUI coverage.
 
 ### Changed
 - Export/import warnings and errors are captured in the per-run log file.
