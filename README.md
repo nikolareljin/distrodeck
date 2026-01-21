@@ -11,6 +11,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 
 - Export installed packages and package sources (including PPAs)
 - Import and reinstall from the export file
+- Import makes an automatic backup and offers a revert prompt on failures
 - Update/upgrade system packages (uses Nala)
 - Trigger distro upgrades on Ubuntu
 - Apply security updates
@@ -68,6 +69,8 @@ distrodeck doctor
 distrodeck preflight
 
 distrodeck logs
+
+distrodeck clear-logs
 
 distrodeck install-tools
 

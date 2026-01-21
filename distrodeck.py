@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import signal
+import threading
 import base64
 import socket
 import shutil
@@ -86,6 +87,40 @@ def run(
     )
 
 
+def run_logged(
+    cmd,
+    title: str,
+    check: bool = False,
+    echo: bool = False,
+    input_text: Optional[str] = None,
+    env: Optional[dict] = None,
+) -> subprocess.CompletedProcess:
+    result = run(
+        cmd,
+        check=False,
+        capture_output=True,
+        input_text=input_text,
+        env=env,
+    )
+    stderr = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    if stderr:
+        write_log("warn", f"{title} stderr:\n{stderr}")
+    if result.returncode != 0:
+        details = stderr or stdout or "no output"
+        write_log("error", f"{title} failed (exit {result.returncode}):\n{details}")
+        if check:
+            raise subprocess.CalledProcessError(
+                result.returncode, cmd, output=result.stdout, stderr=result.stderr
+            )
+    if echo:
+        if stdout:
+            print(stdout)
+        if stderr:
+            print(stderr, file=sys.stderr)
+    return result
+
+
 def run_warn(cmd, title: str) -> subprocess.CompletedProcess:
     result = run(cmd, check=False, capture_output=True)
     if result.returncode != 0:
@@ -137,6 +172,14 @@ def write_log(level: str, message: str) -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(f"{stamp} [{level}] {message}\n")
+
+
+def log_action_start(name: str) -> None:
+    write_log("info", f"action start: {name}")
+
+
+def log_action_end(name: str, status: str = "ok") -> None:
+    write_log("info", f"action end: {name} status={status}")
 
 
 def cmd_exists(name: str) -> bool:
@@ -326,6 +369,28 @@ def dialog_msgbox(title: str, message: str) -> None:
     )
 
 
+def dialog_textbox(title: str, content: str) -> None:
+    height, width = dialog_size(0.85, 0.9)
+    temp = Path(tempfile.mkstemp(prefix="distrodeck-textbox-")[1])
+    temp.write_text(content + "\n", encoding="utf-8")
+    run(
+        [
+            "dialog",
+            "--title",
+            title,
+            "--textbox",
+            str(temp),
+            str(height),
+            str(width),
+        ],
+        check=False,
+    )
+    try:
+        temp.unlink()
+    except OSError:
+        pass
+
+
 def confirm_risky_extract(archive: str) -> bool:
     message = (
         "About to extract a config snapshot to the root filesystem (/).\n"
@@ -426,6 +491,7 @@ def apt_source_files() -> List[Path]:
 
 
 def run_config_edit_tui() -> None:
+    log_action_start("config-edit")
     require_dialog()
     while True:
         section = dialog_menu(
@@ -439,6 +505,7 @@ def run_config_edit_tui() -> None:
             ],
         )
         if not section or section == "back":
+            log_action_end("config-edit")
             break
         if section == "custom":
             custom = dialog_fselect("Config Editor", "Pick a file:", "/etc/")
@@ -471,24 +538,45 @@ def run_config_edit_tui() -> None:
             for choice in choices:
                 edit_config_file(Path(choice))
 
-def dialog_gauge(title: str, message: str) -> Optional[subprocess.Popen]:
+def dialog_gauge(
+    title: str, message: str, no_percent: bool = False
+) -> Optional[subprocess.Popen]:
     if not cmd_exists("dialog"):
         return None
     height, width = dialog_size(0.5, 0.8)
-    return subprocess.Popen(
+    args = [
+        "dialog",
+        "--title",
+        title,
+    ]
+    if no_percent and dialog_supports_no_percent():
+        args.append("--no-percent")
+    args.extend(
         [
-            "dialog",
-            "--title",
-            title,
             "--gauge",
             message,
             str(height),
             str(width),
-            "0",
-        ],
-        stdin=subprocess.PIPE,
-        text=True,
+        ]
     )
+    args.append("0")
+    return subprocess.Popen(args, stdin=subprocess.PIPE, text=True)
+
+
+_DIALOG_NO_PERCENT_SUPPORTED: Optional[bool] = None
+
+
+def dialog_supports_no_percent() -> bool:
+    global _DIALOG_NO_PERCENT_SUPPORTED
+    if _DIALOG_NO_PERCENT_SUPPORTED is not None:
+        return _DIALOG_NO_PERCENT_SUPPORTED
+    if not cmd_exists("dialog"):
+        _DIALOG_NO_PERCENT_SUPPORTED = False
+        return False
+    result = run(["dialog", "--help"], check=False, capture_output=True)
+    output = (result.stdout or "") + (result.stderr or "")
+    _DIALOG_NO_PERCENT_SUPPORTED = "--no-percent" in output
+    return _DIALOG_NO_PERCENT_SUPPORTED
 
 
 def dialog_gauge_update(proc: subprocess.Popen, percent: int, message: str) -> None:
@@ -512,10 +600,119 @@ def dialog_gauge_close(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
+class DialogGaugeAnimator:
+    def __init__(self, proc: subprocess.Popen, message: str) -> None:
+        self.proc = proc
+        self.message = message
+        self.percent = 0
+        self.direction = 1
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def update_message(self, message: str) -> None:
+        with self.lock:
+            self.message = message
+        dialog_gauge_update(self.proc, self.percent, message)
+
+    def _step(self) -> None:
+        self.percent += self.direction * 5
+        if self.percent >= 100:
+            self.percent = 100
+            self.direction = -1
+        elif self.percent <= 0:
+            self.percent = 0
+            self.direction = 1
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(0.2):
+            with self.lock:
+                self._step()
+                message = self.message
+                percent = self.percent
+            dialog_gauge_update(self.proc, percent, message)
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=1)
+
+
+class DialogProgress:
+    def __init__(self, title: str, message: str) -> None:
+        self.title = title
+        self.message = message
+        self.gauge: Optional[subprocess.Popen] = None
+        self.animator: Optional[DialogGaugeAnimator] = None
+
+    def start(self) -> None:
+        if not in_dialog_mode() or not cmd_exists("dialog"):
+            return
+        self.gauge = dialog_gauge(self.title, self.message, no_percent=True)
+        if not self.gauge:
+            return
+        self.animator = DialogGaugeAnimator(self.gauge, self.message)
+        self.animator.start()
+
+    def update(self, message: str) -> None:
+        self.message = message
+        if self.animator:
+            self.animator.update_message(message)
+        elif self.gauge:
+            dialog_gauge_update(self.gauge, 0, message)
+
+    def close(self, message: Optional[str] = None) -> None:
+        if message:
+            self.update(message)
+        if self.animator:
+            self.animator.stop()
+        if self.gauge:
+            dialog_gauge_close(self.gauge)
+
+
+def dialog_run_with_progress(title: str, message: str, action):
+    progress = DialogProgress(title, message)
+    progress.start()
+    try:
+        return action(progress)
+    finally:
+        progress.close()
+
+
 def handle_sigint(signum, frame) -> None:
     if cmd_exists("dialog"):
         run(["dialog", "--clear"], check=False)
     sys.exit(130)
+
+
+def dialog_log_spinner(log_path: str, message: str, stop_event: threading.Event) -> None:
+    frames = ["|", "/", "-", "\\"]
+    index = 0
+    try:
+        last_size = Path(log_path).stat().st_size
+    except OSError:
+        last_size = 0
+    while not stop_event.wait(1.0):
+        try:
+            size = Path(log_path).stat().st_size
+        except OSError:
+            size = last_size
+        if size == last_size:
+            frame = frames[index % len(frames)]
+            index += 1
+            try:
+                with open(log_path, "a", encoding="utf-8", buffering=1) as handle:
+                    handle.write(f"{message} {frame}\n")
+            except OSError:
+                return
+            try:
+                last_size = Path(log_path).stat().st_size
+            except OSError:
+                last_size = size
+        else:
+            last_size = size
 
 
 def dialog_run_command(
@@ -542,6 +739,11 @@ def dialog_run_command(
         text=True,
         env=env,
     )
+    spinner_stop = threading.Event()
+    spinner_thread = threading.Thread(
+        target=dialog_log_spinner, args=(log_path, message, spinner_stop), daemon=True
+    )
+    spinner_thread.start()
 
     tail = run(
         [
@@ -593,6 +795,8 @@ def dialog_run_command(
             time.sleep(0.1)
     else:
         proc.wait()
+    spinner_stop.set()
+    spinner_thread.join(timeout=1)
 
     if proc.stdin:
         try:
@@ -678,6 +882,37 @@ def default_export_filename() -> str:
     return f"distrodeck-export-{hostname}-{stamp}.txt"
 
 
+def backup_export_filename() -> str:
+    hostname = socket.gethostname().split(".")[0]
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"distrodeck-backup-{hostname}-{stamp}.txt"
+
+
+EXPORT_SECTION_ORDER = [
+    "apt_manual",
+    "apt_hold",
+    "ppas",
+    "apt_sources",
+    "snap",
+    "flatpak",
+    "pacman",
+    "dnf",
+    "zypper",
+    "appimage",
+    "pipx",
+    "npm_global",
+    "composer_global",
+    "nuget_global",
+    "cargo",
+    "gem",
+    "go",
+    "config_snapshot",
+    "services_enabled",
+    "services_active",
+    "config_files",
+]
+
+
 def run_preflight() -> List[str]:
     results = []
     try:
@@ -729,10 +964,12 @@ def run_preflight() -> List[str]:
 
 
 def run_logs(args: argparse.Namespace) -> None:
+    log_action_start("logs")
     log_dir = get_log_dir()
     logs = sorted(log_dir.glob("distrodeck-*.log"))
     if not logs:
-        log("No logs found.")
+        print("No logs found.")
+        log_action_end("logs", "empty")
         return
     if args.tail and not args.latest:
         args.latest = True
@@ -740,18 +977,37 @@ def run_logs(args: argparse.Namespace) -> None:
         target = logs[-1]
         if args.tail and args.tail > 0:
             lines = target.read_text(encoding="utf-8").splitlines()
-            log("\n".join(lines[-args.tail :]))
+            print("\n".join(lines[-args.tail :]))
         else:
-            log(target.read_text(encoding="utf-8"))
+            print(target.read_text(encoding="utf-8"))
+        log_action_end("logs")
         return
     for path in logs:
-        log(str(path))
+        print(str(path))
+    log_action_end("logs")
+
+
+def run_clear_logs(_: argparse.Namespace) -> None:
+    log_action_start("clear-logs")
+    log_dir = get_log_dir()
+    removed = 0
+    for path in log_dir.glob("distrodeck-*.log"):
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as exc:
+            warn(f"Failed to remove log: {path} ({exc})")
+    init_logging()
+    print(f"Removed {removed} log(s).")
+    log_action_end("clear-logs")
 
 
 def run_preflight_cmd(_: argparse.Namespace) -> None:
+    log_action_start("preflight")
     results = run_preflight()
     for line in results:
         log(line)
+    log_action_end("preflight")
 
 
 def get_latest_log_path() -> Optional[Path]:
@@ -761,6 +1017,7 @@ def get_latest_log_path() -> Optional[Path]:
 
 
 def run_sysinfo(_: argparse.Namespace) -> None:
+    log_action_start("sysinfo")
     def section(title: str) -> None:
         log("")
         log(f"== {title} ==")
@@ -830,6 +1087,7 @@ def run_sysinfo(_: argparse.Namespace) -> None:
 
     section("USB")
     run_capture(["lsusb"], "lsusb")
+    log_action_end("sysinfo")
 
 
 def get_network_cidrs() -> List[str]:
@@ -847,6 +1105,7 @@ def get_network_cidrs() -> List[str]:
 
 
 def run_network_tools_tui() -> None:
+    log_action_start("net-tools")
     require_dialog()
     cidrs = get_network_cidrs()
     cidr_label = ", ".join(cidrs) if cidrs else "none"
@@ -861,10 +1120,13 @@ def run_network_tools_tui() -> None:
     while True:
         choice = dialog_menu("Network Tools", f"Detected networks: {cidr_label}", tools)
         if not choice or choice == "back":
+            log_action_end("net-tools")
             break
         if choice == "nmap":
+            log_action_start("net-tools nmap")
             if not cmd_exists("nmap"):
                 dialog_msgbox("Network Tools", "nmap not installed.")
+                log_action_end("net-tools nmap", "missing")
                 continue
             targets = cidrs if cidrs else []
             custom = dialog_input("nmap", "Targets (space-separated, blank = auto):", " ".join(targets))
@@ -874,41 +1136,63 @@ def run_network_tools_tui() -> None:
                 dialog_msgbox("nmap", "No targets available.")
                 continue
             run(["dialog", "--clear"], check=False)
-            run(["nmap", "-sV", *targets], check=False)
+            def _run_nmap(_progress):
+                return run(["nmap", "-sV", *targets], check=False, capture_output=True)
+
+            result = dialog_run_with_progress(
+                "nmap",
+                f"Scanning {len(targets)} target(s)...",
+                _run_nmap,
+            )
+            output = (result.stdout or result.stderr or "No output").strip()
+            if output:
+                dialog_textbox("nmap Results", output)
+            log_action_end("net-tools nmap")
             continue
         if choice == "mtr":
+            log_action_start("net-tools mtr")
             if not cmd_exists("mtr"):
                 dialog_msgbox("Network Tools", "mtr not installed.")
+                log_action_end("net-tools mtr", "missing")
                 continue
             host = dialog_input("mtr", "Host/IP:", "")
             if not host:
                 continue
             run(["dialog", "--clear"], check=False)
             run(["mtr", host], check=False)
+            log_action_end("net-tools mtr")
             continue
         if choice == "iperf3":
+            log_action_start("net-tools iperf3")
             if not cmd_exists("iperf3"):
                 dialog_msgbox("Network Tools", "iperf3 not installed.")
+                log_action_end("net-tools iperf3", "missing")
                 continue
             host = dialog_input("iperf3", "Server host/IP:", "")
             if not host:
                 continue
             run(["dialog", "--clear"], check=False)
             run(["iperf3", "-c", host], check=False)
+            log_action_end("net-tools iperf3")
             continue
         if choice == "traceroute":
+            log_action_start("net-tools traceroute")
             if not cmd_exists("traceroute"):
                 dialog_msgbox("Network Tools", "traceroute not installed.")
+                log_action_end("net-tools traceroute", "missing")
                 continue
             host = dialog_input("traceroute", "Host/IP:", "")
             if not host:
                 continue
             run(["dialog", "--clear"], check=False)
             run(["traceroute", host], check=False)
+            log_action_end("net-tools traceroute")
             continue
         if choice == "tcpdump":
+            log_action_start("net-tools tcpdump")
             if not cmd_exists("tcpdump"):
                 dialog_msgbox("Network Tools", "tcpdump not installed.")
+                log_action_end("net-tools tcpdump", "missing")
                 continue
             iface = dialog_input("tcpdump", "Interface (blank = default):", "")
             cmd = ["tcpdump"]
@@ -916,6 +1200,7 @@ def run_network_tools_tui() -> None:
                 cmd.extend(["-i", iface])
             run(["dialog", "--clear"], check=False)
             run(cmd, check=False)
+            log_action_end("net-tools tcpdump")
             continue
 
 
@@ -1289,9 +1574,26 @@ def log_diff(title: str, missing: List[str], extra: List[str]) -> None:
 def export_config_snapshot(
     dirs: List[str], excludes: List[str], archive_path: Path
 ) -> Optional[str]:
-    valid_dirs = [d for d in dirs if Path(d).exists()]
-    missing = [d for d in dirs if not Path(d).exists()]
+    suppress_if_missing = {
+        "/etc/apt": "apt-get",
+        "/etc/dnf": "dnf",
+        "/etc/pacman.d": "pacman",
+        "/etc/zypp": "zypper",
+        "/etc/yum.repos.d": "yum",
+        "/etc/yum": "yum",
+        "/etc/apk": "apk",
+    }
+    valid_dirs = []
+    missing = []
+    for path in dirs:
+        if Path(path).exists():
+            valid_dirs.append(path)
+        else:
+            missing.append(path)
     for path in missing:
+        cmd = suppress_if_missing.get(path)
+        if cmd and not cmd_exists(cmd):
+            continue
         warn(f"Config dir not found, skipping: {path}")
     if not valid_dirs:
         return None
@@ -1299,11 +1601,12 @@ def export_config_snapshot(
     for pattern in excludes:
         cmd.extend(["--exclude", pattern])
     cmd.extend(valid_dirs)
-    run(cmd)
+    run_logged(cmd, "config snapshot tar", echo=not in_dialog_mode())
     return str(archive_path)
 
 
 def export_all(args: argparse.Namespace) -> None:
+    log_action_start("export")
     os_id = get_os_id()
     codename = get_codename()
     if args.output == DEFAULT_EXPORT_FILE:
@@ -1388,18 +1691,14 @@ def export_all(args: argparse.Namespace) -> None:
             ]
         )
     section_results = []
-    gauge = None
-    if in_dialog_mode() and cmd_exists("dialog"):
-        gauge = dialog_gauge("Distrodeck Export", "Starting export...")
-    total = len(sections)
-    for idx, (name, func, message) in enumerate(sections, start=1):
-        if gauge:
-            percent = min(99, int(idx * 100 / total))
-            dialog_gauge_update(gauge, percent, message)
+    progress = DialogProgress("Distrodeck Export", "Starting export...")
+    progress.start()
+    for name, func, message in sections:
+        if progress.gauge:
+            progress.update(message)
         section_results.append((name, func()))
-    if gauge:
-        dialog_gauge_update(gauge, 100, "Finalizing export...")
-        dialog_gauge_close(gauge)
+    if progress.gauge:
+        progress.close("Finalizing export...")
     out_lines = [
         "# distrodeck export v1",
         f"exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
@@ -1419,6 +1718,7 @@ def export_all(args: argparse.Namespace) -> None:
             if line.startswith("archive="):
                 log(f"Config snapshot archive: {line.split('=', 1)[1]}")
                 break
+    log_action_end("export")
 
 
 def ensure_nala() -> bool:
@@ -1437,6 +1737,7 @@ def ensure_nala() -> bool:
 
 
 def run_update() -> bool:
+    log_action_start("update")
     had_errors = False
     if allow_nala() and ensure_nala():
         update_cmd = ["sudo", "nala", "update"]
@@ -1483,15 +1784,18 @@ def run_update() -> bool:
     if cmd_exists("flatpak"):
         if run(["flatpak", "update", "-y"], check=False).returncode != 0:
             had_errors = True
+    log_action_end("update", "errors" if had_errors else "ok")
     return not had_errors
 
 
 def run_security() -> None:
+    log_action_start("security")
     if cmd_exists("unattended-upgrade"):
         result = run(["sudo", "unattended-upgrade", "--verbose"], check=False)
         if result.returncode != 0:
             warn("unattended-upgrade failed; trying package-manager security updates.")
         else:
+            log_action_end("security")
             return
     if allow_nala() and cmd_exists("nala"):
         cmd = ["sudo", "nala", "upgrade", "-y", "--security"]
@@ -1499,30 +1803,38 @@ def run_security() -> None:
             cmd.extend(["-v", "--raw-dpkg"])
         result = run(cmd, check=False)
         if result.returncode == 0:
+            log_action_end("security")
             return
         warn("nala does not support --security; falling back to a full upgrade.")
         cmd = ["sudo", "nala", "upgrade", "-y"]
         if in_dialog_mode():
             cmd.extend(["-v", "--raw-dpkg"])
         run(cmd)
+        log_action_end("security")
         return
     if cmd_exists("apt-get"):
         run(["sudo", "apt-get", "update"])
         run(["sudo", "apt-get", "upgrade", "-y", "--with-new-pkgs"])
+        log_action_end("security")
         return
     if cmd_exists("dnf"):
         run(["sudo", "dnf", "upgrade", "-y", "--security"])
+        log_action_end("security")
         return
     if cmd_exists("zypper"):
         run(["sudo", "zypper", "patch", "--category", "security", "-y"])
+        log_action_end("security")
         return
     if cmd_exists("pacman"):
         warn("Pacman has no separate security-only mode; run update instead.")
+        log_action_end("security", "unsupported")
         return
     warn("No supported package manager for security updates.")
+    log_action_end("security", "failed")
 
 
 def run_upgrade() -> None:
+    log_action_start("upgrade")
     os_id = get_os_id()
     if os_id == "ubuntu":
         if not cmd_exists("do-release-upgrade"):
@@ -1535,8 +1847,10 @@ def run_upgrade() -> None:
         new_codename = get_codename()
         if old_codename and new_codename and old_codename != new_codename:
             reenable_commented_apt_sources(old_codename, new_codename)
+        log_action_end("upgrade")
         return
     warn(f"Distro upgrade not implemented for {os_id}")
+    log_action_end("upgrade", "unsupported")
 
 
 def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
@@ -1650,16 +1964,24 @@ def refresh_apt_keys(key_ids: List[str]) -> List[str]:
 
 
 def run_repo_repair() -> None:
+    log_action_start("repo-repair")
     if not cmd_exists("apt-get"):
         msg = "apt-get not available; repo repair is only supported for apt-based systems."
         if in_dialog_mode() and cmd_exists("dialog"):
             dialog_msgbox("Repo Repair", msg)
         else:
             warn(msg)
+        log_action_end("repo-repair", "unsupported")
         return
     if not ensure_sudo():
+        log_action_end("repo-repair", "cancelled")
         return
-    result = run(["sudo", "apt-get", "update"], check=False, capture_output=True)
+    def _run_apt_update(_progress):
+        return run(["sudo", "apt-get", "update"], check=False, capture_output=True)
+
+    result = dialog_run_with_progress(
+        "Repo Repair", "Checking apt repositories...", _run_apt_update
+    )
     output = (result.stdout or "") + "\n" + (result.stderr or "")
     urls, key_ids = parse_apt_update_issues(output)
     if not urls and not key_ids:
@@ -1668,6 +1990,7 @@ def run_repo_repair() -> None:
             dialog_msgbox("Repo Repair", msg)
         else:
             log(msg)
+        log_action_end("repo-repair", "no-issues")
         return
     summary_lines = []
     if urls:
@@ -1684,15 +2007,18 @@ def run_repo_repair() -> None:
         reply = input(f"{summary}\n\nApply these changes? [y/N]: ").strip().lower()
         confirm = reply in {"y", "yes"}
     if not confirm:
+        log_action_end("repo-repair", "cancelled")
         return
     changed_files = comment_out_apt_repos(urls)
     refreshed_keys = refresh_apt_keys(key_ids)
     if in_dialog_mode() and cmd_exists("dialog"):
         run(["dialog", "--clear"], check=False)
-        dialog_run_command(
+        dialog_run_with_progress(
             "Repo Repair",
             "Re-running apt-get update...",
-            ["sudo", "apt-get", "update"],
+            lambda _progress: run(
+                ["sudo", "apt-get", "update"], check=False, capture_output=True
+            ),
         )
     else:
         run(["sudo", "apt-get", "update"], check=False)
@@ -1710,6 +2036,7 @@ def run_repo_repair() -> None:
         dialog_msgbox("Repo Repair", message)
     else:
         log(message)
+    log_action_end("repo-repair")
 
 
 def reenable_commented_apt_sources(old_codename: str, new_codename: str) -> None:
@@ -1787,11 +2114,54 @@ def parse_export_file(path: Path) -> dict:
     return data
 
 
+def export_section_paths(entries: List[str]) -> List[str]:
+    paths = []
+    for entry in entries:
+        if entry.startswith("path="):
+            path_part = entry.split(" content_b64=", 1)[0]
+            path = path_part.split("=", 1)[1]
+            if path:
+                paths.append(path)
+    return paths
+
+
+def parse_config_snapshot_entries(entries: List[str]) -> Tuple[List[str], List[str]]:
+    dirs = []
+    excludes = []
+    for entry in entries:
+        if entry.startswith("dirs="):
+            raw = entry.split("=", 1)[1]
+            dirs = [part for part in raw.split(":") if part]
+        elif entry.startswith("exclude="):
+            excludes.append(entry.split("=", 1)[1])
+    return dirs, excludes
+
+
+def write_export_subset(path: Path, data: dict, allowed_sections: set) -> None:
+    out_lines = [
+        "# distrodeck export v1",
+        f"exported_at={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+        f"distro_id={get_os_id()}",
+        f"codename={data.get('codename', '')}",
+        "",
+    ]
+    for name in EXPORT_SECTION_ORDER:
+        if name not in allowed_sections:
+            continue
+        items = data.get(name, [])
+        out_lines.extend([f"[{name}]", *items, ""])
+    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+
+
 def import_from_file(args: argparse.Namespace) -> None:
+    log_action_start("import")
     path = Path(args.input)
     if not path.exists():
         fail(f"Input file not found: {args.input}")
     data = parse_export_file(path)
+    progress = DialogProgress("Import", "Preparing import...")
+    progress.start()
+    backup_path = None
     sections = {
         "apt_manual",
         "apt_hold",
@@ -1816,225 +2186,405 @@ def import_from_file(args: argparse.Namespace) -> None:
         selected_sections = sections
     def wants(section: str) -> bool:
         return section in selected_sections
-    log(
-        "Plan: "
-        f"{len(data['apt_manual'])} apt packages, "
-        f"{len(data['ppas'])} PPAs, "
-        f"{len(data['snap'])} snaps, "
-        f"{len(data['flatpak'])} flatpaks, "
-        f"{len(data['pacman'])} pacman packages, "
-        f"{len(data['dnf'])} dnf packages, "
-        f"{len(data['zypper'])} zypper packages, "
-        f"{len(data['appimage'])} appimages"
-    )
-    if not args.apply:
-        log("Dry-run diff (desired vs current):")
-        current = {
-            "apt_manual": export_apt_manual(),
-            "apt_hold": export_apt_hold(),
-            "ppas": export_ppas(),
-            "apt_sources": export_apt_sources(),
-            "snap": [normalize_snap_entry(item) for item in export_snaps()],
-            "flatpak": [normalize_flatpak_entry(item) for item in export_flatpaks()],
-            "pacman": export_pacman(),
-            "dnf": export_dnf(),
-            "zypper": export_zypper(),
-            "appimage": export_appimages(get_appimage_dirs(args.appimage_dirs)),
-        }
-        if wants("apt_manual"):
-            log_diff("apt_manual", *diff_items(data["apt_manual"], current["apt_manual"]))
-        if wants("apt_hold"):
-            log_diff("apt_hold", *diff_items(data["apt_hold"], current["apt_hold"]))
-        if wants("ppas"):
-            log_diff("ppas", *diff_items(data["ppas"], current["ppas"]))
-        if wants("apt_sources"):
-            log_diff("apt_sources", *diff_items(data["apt_sources"], current["apt_sources"]))
-        if wants("snap"):
-            desired = [normalize_snap_entry(item) for item in data["snap"]]
-            log_diff("snap", *diff_items(desired, current["snap"]))
-        if wants("flatpak"):
-            desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
-            log_diff("flatpak", *diff_items(desired, current["flatpak"]))
-        if wants("appimage"):
-            log_diff("appimage", *diff_items(data["appimage"], current["appimage"]))
-            missing = [item for item in data["appimage"] if not Path(item).exists()]
-            if missing:
-                log("appimage missing on disk: " + ", ".join(missing))
-        if wants("config_files"):
-            log(f"config_files: {len(data['config_files'])} entries in export.")
-        if not args.apply_config and not args.apply_services and not args.cleanup_extras and not args.apply_config_files:
-            log("Dry-run only. Re-run with --apply to install.")
-            return
+    try:
+        echo_output = not in_dialog_mode()
+        errors: List[str] = []
 
-    if args.apply:
-        if wants("ppas") and data["ppas"] and cmd_exists("add-apt-repository"):
-            run(["sudo", "apt-get", "update"])
-            for ppa in data["ppas"]:
-                run(["sudo", "add-apt-repository", "-y", ppa])
-
-        if wants("apt_sources") and data["apt_sources"] and cmd_exists("apt-get"):
-            new_codename = get_codename()
-            sources_lines = []
-            for src in data["apt_sources"]:
-                if args.update_sources:
-                    src = rewrite_codename(src, data["codename"], new_codename)
-                sources_lines.append(src)
-            content = "\n".join(sources_lines) + "\n"
-            run(
-                ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
-                input_text=content,
+        def import_run(cmd, title: str, input_text: Optional[str] = None):
+            result = run_logged(
+                cmd,
+                title,
+                echo=echo_output,
+                input_text=input_text,
             )
-            if args.update_sources:
-                reenable_commented_apt_sources(data["codename"], new_codename)
+            if result.returncode != 0:
+                details = (result.stderr or result.stdout or "").strip()
+                message = f"{title} failed (exit {result.returncode})"
+                if details:
+                    snippet = details if len(details) <= 800 else details[:800] + "..."
+                    message = f"{message}:\n{snippet}"
+                errors.append(message)
+            return result
 
-        if wants("apt_manual") and data["apt_manual"] and cmd_exists("apt-get"):
-            run(["sudo", "apt-get", "update"])
-            run(["sudo", "apt-get", "install", "-y", *data["apt_manual"]])
-        elif wants("apt_manual") and data["apt_manual"]:
-            warn("apt-get not available; skipping apt package install")
-
-        if wants("apt_hold") and data["apt_hold"] and cmd_exists("apt-mark"):
-            for pkg in data["apt_hold"]:
-                run(["sudo", "apt-mark", "hold", pkg])
-
-        if wants("snap") and data["snap"] and cmd_exists("snap"):
-            for entry in data["snap"]:
-                parts = entry.split()
-                name = parts[0] if parts else ""
-                channel = ""
-                classic = False
-                for part in parts[1:]:
-                    if part.startswith("channel="):
-                        channel = part.split("=", 1)[1]
-                    if part.startswith("classic="):
-                        classic = part.split("=", 1)[1] == "true"
-                if not name:
-                    continue
-                cmd = ["sudo", "snap", "install", name]
-                if channel:
-                    cmd.append(f"--channel={channel}")
-                if classic:
-                    cmd.append("--classic")
-                run(cmd)
-
-        if wants("flatpak") and data["flatpak"] and cmd_exists("flatpak"):
-            for entry in data["flatpak"]:
-                app = ""
-                remote = ""
-                for part in entry.split():
-                    if part.startswith("app="):
-                        app = part.split("=", 1)[1]
-                    if part.startswith("remote="):
-                        remote = part.split("=", 1)[1]
-                if not app:
-                    continue
-                if remote:
-                    run(["flatpak", "install", "-y", remote, app])
+        if not getattr(args, "skip_backup", False):
+            progress.update("Creating backup before import...")
+            backup_dir = path.parent
+            backup_path = backup_dir / backup_export_filename()
+            config_dirs, config_excludes = parse_config_snapshot_entries(data["config_snapshot"])
+            config_files = export_section_paths(data["config_files"])
+            backup_args = argparse.Namespace(
+                output=str(backup_path),
+                appimage_dirs=args.appimage_dirs,
+                include_config="config_snapshot" in selected_sections,
+                config_dirs=":".join(config_dirs) if config_dirs else None,
+                config_exclude=config_excludes,
+                config_archive=None,
+                include_config_files="config_files" in selected_sections,
+                config_files=":".join(config_files) if config_files else None,
+                include_user_tools=False,
+                include_services="services_enabled" in selected_sections,
+            )
+            previous_dialog = os.environ.get("DISTRODECK_DIALOG")
+            os.environ["DISTRODECK_DIALOG"] = "0"
+            try:
+                export_all(backup_args)
+            finally:
+                if previous_dialog is None:
+                    os.environ.pop("DISTRODECK_DIALOG", None)
                 else:
-                    run(["flatpak", "install", "-y", app])
+                    os.environ["DISTRODECK_DIALOG"] = previous_dialog
+            if selected_sections:
+                backup_data = parse_export_file(backup_path)
+                write_export_subset(backup_path, backup_data, selected_sections)
+            log(f"Backup saved to {backup_path}")
+        log(
+            "Plan: "
+            f"{len(data['apt_manual'])} apt packages, "
+            f"{len(data['ppas'])} PPAs, "
+            f"{len(data['snap'])} snaps, "
+            f"{len(data['flatpak'])} flatpaks, "
+            f"{len(data['pacman'])} pacman packages, "
+            f"{len(data['dnf'])} dnf packages, "
+            f"{len(data['zypper'])} zypper packages, "
+            f"{len(data['appimage'])} appimages"
+        )
+        if not args.apply:
+            progress.update("Diffing current system state...")
+            log("Dry-run diff (desired vs current):")
+            current = {
+                "apt_manual": export_apt_manual(),
+                "apt_hold": export_apt_hold(),
+                "ppas": export_ppas(),
+                "apt_sources": export_apt_sources(),
+                "snap": [normalize_snap_entry(item) for item in export_snaps()],
+                "flatpak": [normalize_flatpak_entry(item) for item in export_flatpaks()],
+                "pacman": export_pacman(),
+                "dnf": export_dnf(),
+                "zypper": export_zypper(),
+                "appimage": export_appimages(get_appimage_dirs(args.appimage_dirs)),
+            }
+            if wants("apt_manual"):
+                progress.update("Diffing apt packages...")
+                log_diff("apt_manual", *diff_items(data["apt_manual"], current["apt_manual"]))
+            if wants("apt_hold"):
+                progress.update("Diffing apt holds...")
+                log_diff("apt_hold", *diff_items(data["apt_hold"], current["apt_hold"]))
+            if wants("ppas"):
+                progress.update("Diffing PPAs...")
+                log_diff("ppas", *diff_items(data["ppas"], current["ppas"]))
+            if wants("apt_sources"):
+                progress.update("Diffing apt sources...")
+                log_diff("apt_sources", *diff_items(data["apt_sources"], current["apt_sources"]))
+            if wants("snap"):
+                progress.update("Diffing snaps...")
+                desired = [normalize_snap_entry(item) for item in data["snap"]]
+                log_diff("snap", *diff_items(desired, current["snap"]))
+            if wants("flatpak"):
+                progress.update("Diffing flatpaks...")
+                desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
+                log_diff("flatpak", *diff_items(desired, current["flatpak"]))
+            if wants("appimage"):
+                progress.update("Diffing AppImages...")
+                log_diff("appimage", *diff_items(data["appimage"], current["appimage"]))
+                missing = [item for item in data["appimage"] if not Path(item).exists()]
+                if missing:
+                    log("appimage missing on disk: " + ", ".join(missing))
+            if wants("config_files"):
+                progress.update("Checking config files...")
+                log(f"config_files: {len(data['config_files'])} entries in export.")
+            if not args.apply_config and not args.apply_services and not args.cleanup_extras and not args.apply_config_files:
+                log("Dry-run only. Re-run with --apply to install.")
+                return
 
-        if wants("appimage") and data["appimage"]:
-            for path_str in data["appimage"]:
-                path = Path(path_str)
-                if path.exists():
-                    path.chmod(path.stat().st_mode | 0o111)
-                else:
-                    warn(f"AppImage not found: {path_str}")
+        if args.apply:
+            if wants("ppas") and data["ppas"] and cmd_exists("add-apt-repository"):
+                progress.update("Adding PPAs...")
+                import_run(
+                    ["sudo", "apt-get", "update"],
+                    "apt-get update",
+                )
+                for ppa in data["ppas"]:
+                    import_run(
+                        ["sudo", "add-apt-repository", "-y", ppa],
+                        f"add-apt-repository {ppa}",
+                    )
 
-        if wants("pacman") and data["pacman"] and cmd_exists("pacman"):
-            run(["sudo", "pacman", "-S", "--needed", "--noconfirm", *data["pacman"]])
-        elif wants("pacman") and data["pacman"]:
-            warn("pacman not available; skipping pacman package install")
+            if wants("apt_sources") and data["apt_sources"] and cmd_exists("apt-get"):
+                progress.update("Restoring apt sources...")
+                new_codename = get_codename()
+                sources_lines = []
+                for src in data["apt_sources"]:
+                    if args.update_sources:
+                        src = rewrite_codename(src, data["codename"], new_codename)
+                    sources_lines.append(src)
+                content = "\n".join(sources_lines) + "\n"
+                import_run(
+                    ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
+                    "write apt sources",
+                    input_text=content,
+                )
+                if args.update_sources:
+                    reenable_commented_apt_sources(data["codename"], new_codename)
 
-        if wants("dnf") and data["dnf"] and cmd_exists("dnf"):
-            run(["sudo", "dnf", "install", "-y", *data["dnf"]])
-        elif wants("dnf") and data["dnf"]:
-            warn("dnf not available; skipping dnf package install")
+            if wants("apt_manual") and data["apt_manual"] and cmd_exists("apt-get"):
+                progress.update("Installing apt packages...")
+                import_run(
+                    ["sudo", "apt-get", "update"],
+                    "apt-get update",
+                )
+                import_run(
+                    ["sudo", "apt-get", "install", "-y", *data["apt_manual"]],
+                    "apt-get install apt packages",
+                )
+            elif wants("apt_manual") and data["apt_manual"]:
+                warn("apt-get not available; skipping apt package install")
 
-        if wants("zypper") and data["zypper"] and cmd_exists("zypper"):
-            run(["sudo", "zypper", "install", "-y", *data["zypper"]])
-        elif wants("zypper") and data["zypper"]:
-            warn("zypper not available; skipping zypper package install")
+            if wants("apt_hold") and data["apt_hold"] and cmd_exists("apt-mark"):
+                progress.update("Applying apt holds...")
+                for pkg in data["apt_hold"]:
+                    import_run(
+                        ["sudo", "apt-mark", "hold", pkg],
+                        f"apt-mark hold {pkg}",
+                    )
 
-    if args.apply_config and wants("config_snapshot"):
-        archive = args.config_archive
-        if not archive and data["config_snapshot"]:
-            for entry in data["config_snapshot"]:
-                if entry.startswith("archive="):
-                    archive = entry.split("=", 1)[1]
-                    break
-        if not archive:
-            warn("Config snapshot not found in export file.")
-        else:
-            if not Path(archive).exists():
-                warn(f"Config snapshot not found on disk: {archive}")
+            if wants("snap") and data["snap"] and cmd_exists("snap"):
+                progress.update("Installing snaps...")
+                for entry in data["snap"]:
+                    parts = entry.split()
+                    name = parts[0] if parts else ""
+                    channel = ""
+                    classic = False
+                    for part in parts[1:]:
+                        if part.startswith("channel="):
+                            channel = part.split("=", 1)[1]
+                        if part.startswith("classic="):
+                            classic = part.split("=", 1)[1] == "true"
+                    if not name:
+                        continue
+                    cmd = ["sudo", "snap", "install", name]
+                    if channel:
+                        cmd.append(f"--channel={channel}")
+                    if classic:
+                        cmd.append("--classic")
+                    import_run(
+                        cmd,
+                        f"snap install {name}",
+                    )
+
+            if wants("flatpak") and data["flatpak"] and cmd_exists("flatpak"):
+                progress.update("Installing flatpaks...")
+                for entry in data["flatpak"]:
+                    app = ""
+                    remote = ""
+                    for part in entry.split():
+                        if part.startswith("app="):
+                            app = part.split("=", 1)[1]
+                        if part.startswith("remote="):
+                            remote = part.split("=", 1)[1]
+                    if not app:
+                        continue
+                    if remote:
+                        import_run(
+                            ["flatpak", "install", "-y", remote, app],
+                            f"flatpak install {app}",
+                        )
+                    else:
+                        import_run(
+                            ["flatpak", "install", "-y", app],
+                            f"flatpak install {app}",
+                        )
+
+            if wants("appimage") and data["appimage"]:
+                progress.update("Restoring AppImages...")
+                for path_str in data["appimage"]:
+                    path = Path(path_str)
+                    if path.exists():
+                        path.chmod(path.stat().st_mode | 0o111)
+                    else:
+                        warn(f"AppImage not found: {path_str}")
+
+            if wants("pacman") and data["pacman"] and cmd_exists("pacman"):
+                progress.update("Installing pacman packages...")
+                import_run(
+                    ["sudo", "pacman", "-S", "--needed", "--noconfirm", *data["pacman"]],
+                    "pacman install packages",
+                )
+            elif wants("pacman") and data["pacman"]:
+                warn("pacman not available; skipping pacman package install")
+
+            if wants("dnf") and data["dnf"] and cmd_exists("dnf"):
+                progress.update("Installing dnf packages...")
+                import_run(
+                    ["sudo", "dnf", "install", "-y", *data["dnf"]],
+                    "dnf install packages",
+                )
+            elif wants("dnf") and data["dnf"]:
+                warn("dnf not available; skipping dnf package install")
+
+            if wants("zypper") and data["zypper"] and cmd_exists("zypper"):
+                progress.update("Installing zypper packages...")
+                import_run(
+                    ["sudo", "zypper", "install", "-y", *data["zypper"]],
+                    "zypper install packages",
+                )
+            elif wants("zypper") and data["zypper"]:
+                warn("zypper not available; skipping zypper package install")
+
+        if args.apply_config and wants("config_snapshot"):
+            progress.update("Restoring config snapshot...")
+            archive = args.config_archive
+            if not archive and data["config_snapshot"]:
+                for entry in data["config_snapshot"]:
+                    if entry.startswith("archive="):
+                        archive = entry.split("=", 1)[1]
+                        break
+            if not archive:
+                warn("Config snapshot not found in export file.")
             else:
-                if confirm_risky_extract(archive):
-                    run(["sudo", "tar", "-xzf", archive, "-C", "/"])
+                if not Path(archive).exists():
+                    warn(f"Config snapshot not found on disk: {archive}")
                 else:
-                    warn("Skipped config snapshot extraction.")
+                    if confirm_risky_extract(archive):
+                        import_run(
+                            ["sudo", "tar", "-xzf", archive, "-C", "/"],
+                            "extract config snapshot",
+                        )
+                    else:
+                        warn("Skipped config snapshot extraction.")
 
-    if args.apply_services and wants("services_enabled"):
-        if not cmd_exists("systemctl"):
-            warn("systemctl not available; skipping service enablement.")
-        else:
-            for service in data["services_enabled"]:
-                run(["sudo", "systemctl", "enable", service], check=False)
+        if args.apply_services and wants("services_enabled"):
+            progress.update("Enabling services...")
+            if not cmd_exists("systemctl"):
+                warn("systemctl not available; skipping service enablement.")
+            else:
+                for service in data["services_enabled"]:
+                    import_run(
+                        ["sudo", "systemctl", "enable", service],
+                        f"systemctl enable {service}",
+                    )
 
-    if args.cleanup_extras:
-        if wants("snap") and cmd_exists("snap"):
-            desired = [normalize_snap_entry(item) for item in data["snap"]]
-            _, extra = diff_items(desired, [normalize_snap_entry(item) for item in export_snaps()])
-            for name in extra:
-                run(["sudo", "snap", "remove", name], check=False)
-        if wants("flatpak") and cmd_exists("flatpak"):
-            desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
-            _, extra = diff_items(desired, [normalize_flatpak_entry(item) for item in export_flatpaks()])
-            for app in extra:
-                if app:
-                    run(["flatpak", "uninstall", "-y", app], check=False)
+        if args.cleanup_extras:
+            progress.update("Removing extra packages...")
+            if wants("snap") and cmd_exists("snap"):
+                desired = [normalize_snap_entry(item) for item in data["snap"]]
+                _, extra = diff_items(desired, [normalize_snap_entry(item) for item in export_snaps()])
+                for name in extra:
+                    import_run(
+                        ["sudo", "snap", "remove", name],
+                        f"snap remove {name}",
+                    )
+            if wants("flatpak") and cmd_exists("flatpak"):
+                desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
+                _, extra = diff_items(desired, [normalize_flatpak_entry(item) for item in export_flatpaks()])
+                for app in extra:
+                    if app:
+                        import_run(
+                            ["flatpak", "uninstall", "-y", app],
+                            f"flatpak uninstall {app}",
+                        )
 
-    if args.apply_config_files and wants("config_files"):
-        home = Path.home().resolve()
-        for entry in data["config_files"]:
-            path = ""
-            content_b64 = ""
-            if " content_b64=" in entry and entry.startswith("path="):
-                path_part, content_part = entry.split(" content_b64=", 1)
-                path = path_part.split("=", 1)[1]
-                content_b64 = content_part
-            if not path or not content_b64:
-                continue
-            try:
-                content = base64.b64decode(content_b64.encode("ascii"))
-            except ValueError:
-                warn(f"Invalid base64 content for: {path}")
-                continue
-            target = Path(path).expanduser()
-            try:
-                needs_sudo = not str(target.resolve()).startswith(str(home))
-            except OSError:
-                needs_sudo = True
-            if needs_sudo and not cmd_exists("sudo"):
-                warn(f"sudo not available; skipping config file: {path}")
-                continue
-            if needs_sudo:
-                parent = target.parent
-                run(["sudo", "mkdir", "-p", str(parent)], check=False)
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
-                run(["sudo", "install", "-m", "0644", tmp_path, str(target)], check=False)
+        if args.apply_config_files and wants("config_files"):
+            progress.update("Restoring config files...")
+            home = Path.home().resolve()
+            for entry in data["config_files"]:
+                path = ""
+                content_b64 = ""
+                if " content_b64=" in entry and entry.startswith("path="):
+                    path_part, content_part = entry.split(" content_b64=", 1)
+                    path = path_part.split("=", 1)[1]
+                    content_b64 = content_part
+                if not path or not content_b64:
+                    continue
                 try:
-                    os.unlink(tmp_path)
+                    content = base64.b64decode(content_b64.encode("ascii"))
+                except ValueError:
+                    warn(f"Invalid base64 content for: {path}")
+                    continue
+                target = Path(path).expanduser()
+                try:
+                    needs_sudo = not str(target.resolve()).startswith(str(home))
                 except OSError:
-                    pass
+                    needs_sudo = True
+                if needs_sudo and not cmd_exists("sudo"):
+                    warn(f"sudo not available; skipping config file: {path}")
+                    continue
+                if needs_sudo:
+                    parent = target.parent
+                    import_run(
+                        ["sudo", "mkdir", "-p", str(parent)],
+                        f"mkdir {parent}",
+                    )
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                        tmp.write(content)
+                        tmp_path = tmp.name
+                    import_run(
+                        ["sudo", "install", "-m", "0644", tmp_path, str(target)],
+                        f"install config file {target}",
+                    )
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(content)
+        if errors:
+            raise RuntimeError("\n\n".join(errors))
+    except Exception as exc:
+        error_message = str(exc)
+        if isinstance(exc, subprocess.CalledProcessError):
+            details = (exc.stderr or exc.stdout or "").strip()
+            if details:
+                error_message = f"{error_message}\n{details}"
+        backup_ready = backup_path is not None and backup_path.exists()
+        if in_dialog_mode() and cmd_exists("dialog"):
+            message = f"Import failed:\n{error_message}"
+            if backup_ready:
+                message += f"\n\nBackup: {backup_path}\nRevert using this backup?"
+                if dialog_yesno("Import Failed", message):
+                    revert_args = argparse.Namespace(
+                        input=str(backup_path),
+                        apply=True,
+                        update_sources=False,
+                        apply_config=args.apply_config,
+                        config_archive=None,
+                        apply_services=args.apply_services,
+                        apply_config_files=args.apply_config_files,
+                        sections=",".join(selected_sections),
+                        cleanup_extras=args.cleanup_extras,
+                        appimage_dirs=args.appimage_dirs,
+                        skip_backup=True,
+                    )
+                    import_from_file(revert_args)
             else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(content)
+                dialog_msgbox("Import Failed", message)
+        else:
+            warn(f"Import failed: {error_message}")
+            if backup_ready and sys.stdin.isatty():
+                reply = input(f"Revert using backup {backup_path}? [y/N]: ").strip().lower()
+                if reply in {"y", "yes"}:
+                    revert_args = argparse.Namespace(
+                        input=str(backup_path),
+                        apply=True,
+                        update_sources=False,
+                        apply_config=args.apply_config,
+                        config_archive=None,
+                        apply_services=args.apply_services,
+                        apply_config_files=args.apply_config_files,
+                        sections=",".join(selected_sections),
+                        cleanup_extras=args.cleanup_extras,
+                        appimage_dirs=args.appimage_dirs,
+                        skip_backup=True,
+                    )
+                    import_from_file(revert_args)
+        return
+    finally:
+        progress.close("Finalizing import...")
+        log_action_end("import")
 
 
 def run_doctor() -> None:
+    log_action_start("doctor")
     os_id = get_os_id()
     codename = get_codename()
     log(f"os_id={os_id}")
@@ -2078,9 +2628,11 @@ def run_doctor() -> None:
             log(f"{name}: {status} - {desc}{detail_str}")
         else:
             log(f"{name}: {status}")
+    log_action_end("doctor")
 
 
 def run_install_tools(args: argparse.Namespace) -> None:
+    log_action_start("install-tools")
     script = Path(__file__).resolve().parent / "scripts" / "install-tools-tui.sh"
     if not script.exists():
         fail(f"Installer script not found: {script}")
@@ -2088,6 +2640,7 @@ def run_install_tools(args: argparse.Namespace) -> None:
     if args.all:
         cmd.append("--all")
     run(cmd)
+    log_action_end("install-tools")
 
 
 GIT_STATUS_MARKER_START = "# >>> distrodeck git-status >>>"
@@ -2391,6 +2944,7 @@ def remove_shell_block(path: Path) -> bool:
 
 
 def run_git_status_set(_: argparse.Namespace) -> None:
+    log_action_start("git-status set")
     shell_name = detect_shell_name()
     if shell_name not in {"bash", "zsh", "fish"}:
         warn(f"Shell '{shell_name}' not supported; falling back to bash config.")
@@ -2415,9 +2969,11 @@ def run_git_status_set(_: argparse.Namespace) -> None:
     write_shell_block(shell_config, block)
     log(f"git-status enabled for {shell_name} in {shell_config}")
     log(f"Reload your shell config: source {shell_config}")
+    log_action_end("git-status set")
 
 
 def run_git_status_unset(_: argparse.Namespace) -> None:
+    log_action_start("git-status unset")
     shell_name = detect_shell_name()
     if shell_name not in {"bash", "zsh", "fish"}:
         warn(f"Shell '{shell_name}' not supported; falling back to bash config.")
@@ -2434,6 +2990,7 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
         log(f"git-status disabled for {shell_name} in {shell_config}")
     else:
         log(f"git-status block not found in {shell_config}")
+    log_action_end("git-status unset")
 
 
 def shell_config_path(shell_name: str) -> Path:
@@ -2513,11 +3070,13 @@ def build_git_askpass_script() -> Path:
 
 
 def run_automate_tui() -> None:
+    log_action_start("automate")
     if not cmd_exists("ansible-pull"):
         dialog_msgbox(
             "Automate",
             "ansible-pull is not installed.\nRun install-tools and install ansible, then retry.",
         )
+        log_action_end("automate", "missing")
         return
     if not cmd_exists("git"):
         dialog_msgbox(
@@ -2592,6 +3151,7 @@ def run_automate_tui() -> None:
         )
     use_sudo = dialog_yesno("Automate", "Run ansible-pull with sudo?")
     if use_sudo and not ensure_sudo():
+        log_action_end("automate", "cancelled")
         return
     base_cmd = ["ansible-pull", "-U", url]
     if inventory:
@@ -2630,12 +3190,15 @@ def run_automate_tui() -> None:
             "Automate",
             f"Automation failed (exit {exit_code}). Check logs for details.",
         )
+        log_action_end("automate", "failed")
     else:
         dialog_msgbox("Automate", "Automation completed.")
+        log_action_end("automate")
 
 
 def run_tui() -> None:
     require_dialog()
+    os.environ["DISTRODECK_DIALOG"] = "1"
     self_cmd = str(Path(__file__).resolve())
     actions = [
         ("preflight", "Diagnostics: Preflight checks"),
@@ -2653,9 +3216,13 @@ def run_tui() -> None:
         ("doctor", "Diagnostics: Check system prerequisites"),
         ("sysinfo", "Diagnostics: Full system info"),
         ("logs", "Diagnostics: View logs"),
+        ("clear-logs", "Diagnostics: Clear all logs"),
         ("quit", "Exit"),
     ]
     while True:
+        progress_title = None
+        progress_message = None
+        clear_dialog_before_run = False
         choice = dialog_menu("Distrodeck", "Select an action:", actions)
         if not choice or choice == "quit":
             if cmd_exists("dialog"):
@@ -2740,10 +3307,11 @@ def run_tui() -> None:
                 extra_files = []
                 if extra_input:
                     extra_files = [p for p in extra_input.split(":") if p.strip()]
-                combined = selected_files + extra_files
+                combined = [p.replace("\\~", "~") for p in (selected_files + extra_files)]
                 if combined:
                     cmd.append("--include-config-files")
                     cmd.extend(["--config-files", ":".join(combined)])
+            clear_dialog_before_run = True
         elif choice == "import":
             default_path = str(Path.cwd() / DEFAULT_EXPORT_FILE)
             input_file = dialog_fselect("Import", "Input file:", default_path)
@@ -2824,6 +3392,7 @@ def run_tui() -> None:
                 cmd.extend(["--sections", ",".join(selected_sections)])
             if appimage_dirs:
                 cmd.extend(["--appimage-dirs", appimage_dirs])
+            clear_dialog_before_run = True
         elif choice == "install-tools":
             if not ensure_sudo():
                 continue
@@ -2848,19 +3417,14 @@ def run_tui() -> None:
             if not latest:
                 dialog_msgbox("Logs", "No logs found.")
                 continue
-            height, width = dialog_size(0.8, 0.9)
-            run(
-                [
-                    "dialog",
-                    "--title",
-                    "Distrodeck Logs",
-                    "--textbox",
-                    str(latest),
-                    str(height),
-                    str(width),
-                ],
-                check=False,
-            )
+            try:
+                content = latest.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                dialog_msgbox("Logs", f"Failed to read log: {exc}")
+                continue
+            if not content:
+                content = "Log file is empty."
+            dialog_textbox("Distrodeck Logs", content)
             continue
         elif choice == "sysinfo":
             if cmd_exists("dmidecode") and cmd_exists("sudo"):
@@ -2974,6 +3538,9 @@ def run_tui() -> None:
             except OSError:
                 pass
             continue
+        elif choice == "clear-logs":
+            run_clear_logs(argparse.Namespace())
+            continue
         else:
             cmd = [self_cmd, choice]
         if choice == "git-status":
@@ -2984,7 +3551,23 @@ def run_tui() -> None:
         if choice == "export":
             env = os.environ.copy()
             env["DISTRODECK_DIALOG"] = "1"
-        result = run(cmd, check=False, capture_output=True, env=env)
+        if clear_dialog_before_run and cmd_exists("dialog"):
+            run(["dialog", "--clear"], check=False)
+        if progress_title and progress_message:
+            def _run_with_progress(_progress):
+                return run(cmd, check=False, capture_output=True, env=env)
+
+            result = dialog_run_with_progress(
+                progress_title,
+                progress_message,
+                _run_with_progress,
+            )
+        elif choice == "export":
+            result = run(cmd, check=False, env=env)
+        elif choice == "import":
+            result = run(cmd, check=False, env=env)
+        else:
+            result = run(cmd, check=False, capture_output=True, env=env)
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "Command failed").strip()
             dialog_msgbox("Distrodeck Error", message)
@@ -3137,6 +3720,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show last N lines (implies --latest)",
     )
     logs_cmd.set_defaults(func=run_logs)
+
+    clear_logs_cmd = sub.add_parser("clear-logs", help="Delete all logs")
+    clear_logs_cmd.set_defaults(func=run_clear_logs)
 
     sysinfo_cmd = sub.add_parser("sysinfo", help="Show full system info")
     sysinfo_cmd.set_defaults(func=run_sysinfo)

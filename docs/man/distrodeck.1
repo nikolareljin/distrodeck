@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-01-18" "distrodeck 0.4.0" "User Commands"
+.TH DISTRODECK 1 "2026-01-21" "distrodeck 0.4.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -40,6 +40,9 @@ Run preflight checks
 .TP
 .B logs
 View logs
+.TP
+.B clear-logs
+Delete all logs
 .TP
 .B sysinfo
 Show full system info
@@ -150,31 +153,15 @@ options:
 .fi
 .SS git-status
 .nf
-usage: distrodeck git-status [-h] {set,unset}
+usage: distrodeck git-status [-h] {set,unset} ...
+
+positional arguments:
+  {set,unset}
+    set        Enable git status prompt
+    unset      Disable git status prompt
 
 options:
-  -h, --help  show this help message and exit
-.fi
-.PP
-Status symbols:
-.IP \[bu] 2
-\[u2261] (green) up to date with remote
-.IP \[bu] 2
-N\[u2191] (yellow) ahead by N commits
-.IP \[bu] 2
-N\[u2193] (red) behind by N commits
-.IP \[bu] 2
-A\[u2191]B\[u2193] (red) diverged (ahead by A, behind by B)
-.IP \[bu] 2
-* (yellow) local uncommitted changes
-.PP
-Example prompt segment:
-.nf
-user@host ~/repo(main 2↑)$
-user@host ~/repo(main 3↓)$
-user@host ~/repo(main ≡)$
-user@host ~/repo(main 2↑1↓)$
-user@host ~/repo(main * 2↑)$
+  -h, --help   show this help message and exit
 .fi
 .SS preflight
 .nf
@@ -191,6 +178,13 @@ options:
   -h, --help   show this help message and exit
   --latest     Show latest log
   --tail TAIL  Show last N lines (implies --latest)
+.fi
+.SS clear-logs
+.nf
+usage: distrodeck clear-logs [-h]
+
+options:
+  -h, --help  show this help message and exit
 .fi
 .SS sysinfo
 .nf

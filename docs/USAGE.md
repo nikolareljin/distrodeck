@@ -55,6 +55,10 @@ Import packages and sources from a file. Dry-run by default.
 distrodeck import --input backup.txt --apply --update-sources
 ```
 
+Import automatically creates a backup of the sections being restored (saved as
+`distrodeck-backup-<hostname>-<timestamp>.txt` next to the input file). If the
+import fails, it prompts to revert using the backup.
+
 Dry-run shows a diff (desired vs current) and highlights missing/extra entries.
 
 Options:
@@ -126,6 +130,14 @@ View run logs.
 distrodeck logs
 distrodeck logs --latest
 distrodeck logs --tail 50
+```
+
+### clear-logs
+
+Delete all previous logs.
+
+```
+distrodeck clear-logs
 ```
 
 ### sysinfo
