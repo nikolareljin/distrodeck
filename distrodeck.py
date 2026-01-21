@@ -2552,6 +2552,9 @@ def import_from_file(args: argparse.Namespace) -> None:
             if details:
                 error_message = f"{error_message}\n{details}"
         backup_ready = backup_path is not None and backup_path.exists()
+        if getattr(args, "skip_revert_prompt", False):
+            warn(f"Import failed: {error_message}")
+            return
         if in_dialog_mode() and cmd_exists("dialog"):
             message = f"Import failed:\n{error_message}"
             if backup_ready:
@@ -2569,6 +2572,7 @@ def import_from_file(args: argparse.Namespace) -> None:
                         cleanup_extras=args.cleanup_extras,
                         appimage_dirs=args.appimage_dirs,
                         skip_backup=True,
+                        skip_revert_prompt=True,
                     )
                     import_from_file(revert_args)
             else:
@@ -2590,6 +2594,7 @@ def import_from_file(args: argparse.Namespace) -> None:
                         cleanup_extras=args.cleanup_extras,
                         appimage_dirs=args.appimage_dirs,
                         skip_backup=True,
+                        skip_revert_prompt=True,
                     )
                     import_from_file(revert_args)
         return
@@ -2710,7 +2715,6 @@ def git_status_shell_script() -> str:
             "      behind=${b:-0}",
             "    fi",
             "  fi",
-            "  status_text=\"\"",
             "  status_text=\"\"",
             "  if [[ \"$dirty\" != \"0\" ]]; then",
             "    status_text=\" *\"",
@@ -3237,8 +3241,6 @@ def run_tui() -> None:
         ("quit", "Exit"),
     ]
     while True:
-        progress_title = None
-        progress_message = None
         clear_dialog_before_run = False
         choice = dialog_menu("Distrodeck", "Select an action:", actions)
         if not choice or choice == "quit":
@@ -3324,6 +3326,7 @@ def run_tui() -> None:
                 extra_files = []
                 if extra_input:
                     extra_files = [p for p in extra_input.split(":") if p.strip()]
+                # dialog checklist can escape "~" as "\~" in some terminals; normalize it.
                 combined = [p.replace("\\~", "~") for p in (selected_files + extra_files)]
                 if combined:
                     cmd.append("--include-config-files")
@@ -3570,16 +3573,7 @@ def run_tui() -> None:
             env["DISTRODECK_DIALOG"] = "1"
         if clear_dialog_before_run and cmd_exists("dialog"):
             run(["dialog", "--clear"], check=False)
-        if progress_title and progress_message:
-            def _run_with_progress(_progress):
-                return run(cmd, check=False, capture_output=True, env=env)
-
-            result = dialog_run_with_progress(
-                progress_title,
-                progress_message,
-                _run_with_progress,
-            )
-        elif choice == "export":
+        if choice == "export":
             result = run(cmd, check=False, env=env)
         elif choice == "import":
             result = run(cmd, check=False, env=env)
