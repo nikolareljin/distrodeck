@@ -151,6 +151,22 @@ def get_log_dir() -> Path:
     except OSError:
         fallback = Path("/tmp") / "distrodeck-logs"
         fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+def get_export_dir() -> Path:
+    state_home = os.getenv("XDG_STATE_HOME")
+    if state_home:
+        base = Path(state_home)
+    else:
+        base = Path.home() / ".local" / "state"
+    export_dir = base / "distrodeck" / "exports"
+    try:
+        export_dir.mkdir(parents=True, exist_ok=True)
+        return export_dir
+    except OSError:
+        fallback = Path("/tmp") / "distrodeck-exports"
+        fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
 
@@ -879,13 +895,13 @@ def get_config_files(arg_files: Optional[str]) -> List[str]:
 def default_export_filename() -> str:
     hostname = socket.gethostname().split(".")[0]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"distrodeck-export-{hostname}-{stamp}.txt"
+    return str(get_export_dir() / f"distrodeck-export-{hostname}-{stamp}.txt")
 
 
 def backup_export_filename() -> str:
     hostname = socket.gethostname().split(".")[0]
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"distrodeck-backup-{hostname}-{stamp}.txt"
+    return str(get_export_dir() / f"distrodeck-backup-{hostname}-{stamp}.txt")
 
 
 EXPORT_SECTION_ORDER = [
@@ -2208,8 +2224,7 @@ def import_from_file(args: argparse.Namespace) -> None:
 
         if not getattr(args, "skip_backup", False):
             progress.update("Creating backup before import...")
-            backup_dir = path.parent
-            backup_path = backup_dir / backup_export_filename()
+            backup_path = Path(backup_export_filename())
             config_dirs, config_excludes = parse_config_snapshot_entries(data["config_snapshot"])
             config_files = export_section_paths(data["config_files"])
             backup_args = argparse.Namespace(
@@ -3315,7 +3330,7 @@ def run_tui() -> None:
                     cmd.extend(["--config-files", ":".join(combined)])
             clear_dialog_before_run = True
         elif choice == "import":
-            default_path = str(Path.cwd() / DEFAULT_EXPORT_FILE)
+            default_path = str(get_export_dir() / DEFAULT_EXPORT_FILE)
             input_file = dialog_fselect("Import", "Input file:", default_path)
             if not input_file:
                 continue

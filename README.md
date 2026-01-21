@@ -50,6 +50,9 @@ distrodeck export --output backup.txt --include-services
 
 distrodeck export --output backup.txt --include-config-files
 
+Default exports are saved under `~/.local/state/distrodeck/exports` (or
+`$XDG_STATE_HOME/distrodeck/exports` when set).
+
 distrodeck import --input backup.txt --apply --update-sources
 
 distrodeck import --input backup.txt --apply-config

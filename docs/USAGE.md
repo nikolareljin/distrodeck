@@ -21,7 +21,7 @@ distrodeck export --output backup.txt
 ```
 
 Options:
-- `--output FILE`: export destination (default: `distrodeck-export.txt`)
+- `--output FILE`: export destination (default: `~/.local/state/distrodeck/exports/distrodeck-export-<host>-<timestamp>.txt`)
 - `--appimage-dirs DIRS`: colon-separated AppImage search dirs
 - `--include-config`: include a config snapshot of selected system directories
 - `--config-dirs DIRS`: colon-separated config dirs (default: `/etc:/etc/apt:/etc/dnf:/etc/pacman.d`)

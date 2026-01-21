@@ -2,25 +2,6 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
-## [Unreleased]
-
-### Added
-- Import now creates an automatic backup of the sections being restored and offers a revert prompt on failure.
-- New `clear-logs` command and TUI action to delete all previous logs.
-- Action start/end entries added to logs for easier troubleshooting.
-- Import shows section-level progress in the TUI with an indeterminate progress bar.
-- Docker-based Ubuntu 24.04 test suite with automated CLI + TUI coverage.
-
-### Changed
-- Export/import warnings and errors are captured in the per-run log file.
-- TUI export uses an indeterminate progress bar with per-section status text.
-- TUI logs view shows log contents instead of the log filename.
-- `distrodeck logs` now prints to stdout instead of writing into the log file.
-
-### Fixed
-- Export progress dialog now renders reliably in TUI flows (no dialog flag errors).
-- Suppressed missing config-dir warnings when the corresponding package manager is not installed.
-
 ## [0.4.0]
 
 ### Added
@@ -30,9 +11,23 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Auto-detection of bash/zsh/fish and safe prompt injection with automatic removal.
 - Prompt color rules: branch name stays green; status color reflects state (green/yellow/red).
 - Examples and legend added to README, USAGE, and man page.
+- Import now creates an automatic backup of the sections being restored and offers a revert prompt on failure.
+- New `clear-logs` command and TUI action to delete all previous logs.
+- Action start/end entries added to logs for easier troubleshooting.
+- Import shows section-level progress in the TUI with an indeterminate progress bar.
+- Docker-based Ubuntu 24.04 test suite with automated CLI + TUI coverage.
 
 ### Changed
 - git-status install now overwrites the generated script on each set, ensures executable permissions, and instructs users to reload the shell config.
+- Export/import warnings and errors are captured in the per-run log file.
+- TUI export uses an indeterminate progress bar with per-section status text.
+- TUI logs view shows log contents instead of the log filename.
+- `distrodeck logs` now prints to stdout instead of writing into the log file.
+- Default exports/backups now go to the state exports directory instead of the repo root.
+
+### Fixed
+- Export progress dialog now renders reliably in TUI flows (no dialog flag errors).
+- Suppressed missing config-dir warnings when the corresponding package manager is not installed.
 
 
 ## [0.3.0]
