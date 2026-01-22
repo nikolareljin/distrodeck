@@ -4,7 +4,8 @@
 # USAGE: ./install-tools-tui.sh [--all]
 # EXAMPLE: ./install-tools-tui.sh --all
 # ----------------------------------------------------
-set -euo pipefail
+set -uo pipefail
+# Note: -e removed to allow continuing after individual tool install failures
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_HELPERS_DIR="${SCRIPT_HELPERS_DIR:-${SCRIPT_DIR}/script-helpers}"
@@ -575,7 +576,7 @@ install_k9s() {
         version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
       fi
       if [[ -z "$version" ]]; then
-        version="v0.32.4"  # Fallback
+        version="v0.50.18"  # Fallback
       fi
       url="https://github.com/derailed/k9s/releases/download/${version}/k9s_${os}_${arch}.tar.gz"
       if download_file "$url" "$tmp_dir/k9s.tar.gz"; then
@@ -641,22 +642,31 @@ install_glow() {
       tmp_dir="$(mktemp -d)"
       arch="$(uname -m)"
       case "$arch" in
-        x86_64|amd64) arch="amd64";;
+        x86_64|amd64) arch="x86_64";;
         aarch64|arm64) arch="arm64";;
-        i386|i686) arch="386";;
+        i386|i686) arch="i386";;
         *) log_warn "glow install not supported for arch: $arch"; return 1;;
       esac
       if download_file "https://api.github.com/repos/charmbracelet/glow/releases/latest" "$tmp_dir/release.json"; then
         version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
       fi
       if [[ -z "$version" ]]; then
-        version="1.5.1"  # Fallback
+        version="2.1.1"  # Fallback
       fi
       url="https://github.com/charmbracelet/glow/releases/download/v${version}/glow_${version}_Linux_${arch}.tar.gz"
       if download_file "$url" "$tmp_dir/glow.tar.gz"; then
         tar -xzf "$tmp_dir/glow.tar.gz" -C "$tmp_dir"
-        sudo install -m 0755 "$tmp_dir/glow" /usr/local/bin/glow
-        log_info "Installed glow to /usr/local/bin/glow"
+        local glow_bin
+        glow_bin=$(find "$tmp_dir" -name "glow" -type f -executable 2>/dev/null | head -n1)
+        if [[ -z "$glow_bin" ]]; then
+          glow_bin=$(find "$tmp_dir" -name "glow" -type f 2>/dev/null | head -n1)
+        fi
+        if [[ -n "$glow_bin" ]]; then
+          sudo install -m 0755 "$glow_bin" /usr/local/bin/glow
+          log_info "Installed glow to /usr/local/bin/glow"
+        else
+          log_warn "glow binary not found in archive."
+        fi
       else
         log_warn "Failed to download glow."
       fi
@@ -680,20 +690,18 @@ install_delta() {
         tmp_dir="$(mktemp -d)"
         arch="$(uname -m)"
         case "$arch" in
-          x86_64|amd64) arch="amd64";;
-          aarch64|arm64) arch="arm64";;
+          x86_64|amd64) arch="x86_64-unknown-linux-gnu";;
+          aarch64|arm64) arch="aarch64-unknown-linux-gnu";;
+          i386|i686) arch="i686-unknown-linux-gnu";;
           *) log_warn "delta install not supported for arch: $arch"; return 1;;
         esac
         if download_file "https://api.github.com/repos/dandavison/delta/releases/latest" "$tmp_dir/release.json"; then
           version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
         fi
         if [[ -z "$version" ]]; then
-          version="0.16.5"  # Fallback
+          version="0.18.2"  # Fallback
         fi
-        url="https://github.com/dandavison/delta/releases/download/${version}/delta-${version}-x86_64-unknown-linux-gnu.tar.gz"
-        if [[ "$arch" == "arm64" ]]; then
-          url="https://github.com/dandavison/delta/releases/download/${version}/delta-${version}-aarch64-unknown-linux-gnu.tar.gz"
-        fi
+        url="https://github.com/dandavison/delta/releases/download/${version}/delta-${version}-${arch}.tar.gz"
         if download_file "$url" "$tmp_dir/delta.tar.gz"; then
           tar -xzf "$tmp_dir/delta.tar.gz" -C "$tmp_dir"
           local delta_bin
@@ -800,7 +808,7 @@ install_bfg() {
     version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
   fi
   if [[ -z "$version" ]]; then
-    version="1.14.0"  # Fallback version
+    version="1.15.0"  # Fallback version
   fi
 
   url="https://repo1.maven.org/maven2/com/madgag/bfg/${version}/bfg-${version}.jar"
@@ -1313,9 +1321,9 @@ main() {
   # Find tools to uninstall: tracked + currently installed + NOT selected
   local to_uninstall=()
   for tool in "${tools[@]}"; do
-    if [[ "${tracked[$tool]}" == "true" ]] && \
-       [[ "${installed[$tool]}" == "true" ]] && \
-       [[ "${selected_set[$tool]}" != "true" ]]; then
+    if [[ "${tracked[$tool]:-}" == "true" ]] && \
+       [[ "${installed[$tool]:-}" == "true" ]] && \
+       [[ "${selected_set[$tool]:-}" != "true" ]]; then
       to_uninstall+=("$tool")
     fi
   done
@@ -1340,15 +1348,21 @@ main() {
     exit 0
   fi
 
+  # Track failed installations
+  local failed_installs=()
+  local failed_uninstalls=()
+
   # Install selected tools
   for choice in "${!selected_set[@]}"; do
-    if [[ "${installed[$choice]}" == "true" ]]; then
+    if [[ "${installed[$choice]:-}" == "true" ]]; then
       log_info "Already installed: $choice"
       # Track it if not already tracked
       add_tracked_tool "$choice"
       continue
     fi
     log_info "Installing: $choice"
+    # Run installation in subshell to catch errors without exiting
+    if ! (
     case "$choice" in
       ripgrep) install_ripgrep "$mgr";;
       fd) install_fd "$mgr";;
@@ -1433,9 +1447,17 @@ main() {
         ;;
       ufw) install_pkg_simple "$mgr" ufw;;
     esac
-    # Track successfully installed tools
-    if is_installed_tool "$choice"; then
-      add_tracked_tool "$choice"
+    ); then
+      # Installation succeeded, track it if now installed
+      if is_installed_tool "$choice"; then
+        add_tracked_tool "$choice"
+      else
+        log_warn "Installation command completed but $choice not detected as installed."
+        failed_installs+=("$choice")
+      fi
+    else
+      log_error "Failed to install: $choice"
+      failed_installs+=("$choice")
     fi
   done
 
@@ -1443,6 +1465,8 @@ main() {
   if [[ "$do_uninstall" == "true" ]]; then
     for tool in "${to_uninstall[@]}"; do
       log_info "Uninstalling: $tool"
+      # Run uninstallation in subshell to catch errors without exiting
+      if ! (
       case "$tool" in
         ripgrep) uninstall_pkg_simple "$mgr" ripgrep;;
         fd) uninstall_fd "$mgr";;
@@ -1513,12 +1537,37 @@ main() {
         cron) uninstall_cron "$mgr";;
         ufw) uninstall_pkg_simple "$mgr" ufw;;
       esac
-      # Remove from tracked list
-      remove_tracked_tool "$tool"
+      ); then
+        # Uninstallation succeeded
+        remove_tracked_tool "$tool"
+      else
+        log_error "Failed to uninstall: $tool"
+        failed_uninstalls+=("$tool")
+      fi
     done
   fi
 
+  # Report summary
   log_info "Tool installation/removal complete."
+
+  if [[ ${#failed_installs[@]} -gt 0 ]]; then
+    log_warn "The following tools failed to install:"
+    for tool in "${failed_installs[@]}"; do
+      log_warn "  - $(tool_desc "$tool")"
+    done
+  fi
+
+  if [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
+    log_warn "The following tools failed to uninstall:"
+    for tool in "${failed_uninstalls[@]}"; do
+      log_warn "  - $(tool_desc "$tool")"
+    done
+  fi
+
+  # Return non-zero if there were failures (but don't exit early)
+  if [[ ${#failed_installs[@]} -gt 0 ]] || [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
+    return 1
+  fi
 }
 
 main "$@"
