@@ -18,11 +18,13 @@ This project follows Keep a Changelog and Semantic Versioning.
 - Docker-based Ubuntu 24.04 test suite with automated CLI + TUI coverage.
 - **Uninstall support for install-tools**: Unchecking a previously installed tool now prompts to uninstall it.
 - **State tracking**: Tools installed via distrodeck are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
-- **10 new tools** in install-tools: bfg (git repo cleaner), gh (GitHub CLI), tldr (simplified man pages), bandwhich (bandwidth monitor), k9s (Kubernetes TUI), podman (container engine), tokei (code statistics), glow (markdown viewer), delta (git diff viewer), meld (visual diff/merge).
+- **18 new tools** in install-tools: bfg (git repo cleaner), gh (GitHub CLI), tldr (simplified man pages), bandwhich (bandwidth monitor), k9s (Kubernetes TUI), podman (container engine), tokei (code statistics), glow (markdown viewer), delta (git diff viewer), meld (visual diff/merge), ruby, flatpak, wine (Windows compatibility), tor (anonymous browsing), ntfs-3g (NTFS filesystem), streamcontroller (Stream Deck via Flatpak), gimp (image editor with plugins).
 - **Reorganized tool categories** in the TUI with clear category prefixes (`[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Dev]`, `[Lang]`, `[DevOps]`, etc.) for easier navigation.
 
 ### Changed
-- Install-tools TUI now offers 56 tools (up from 47), grouped by category.
+- Install-tools TUI now offers 64 tools (up from 47), grouped by category.
+- Node.js installation now uses NodeSource to install Node.js 20 LTS instead of distro default version.
+- Tool installation errors no longer stop the entire process; failures are collected and reported at the end.
 - git-status install now overwrites the generated script on each set, ensures executable permissions, and instructs users to reload the shell config.
 - Export/import warnings and errors are captured in the per-run log file.
 - TUI export uses an indeterminate progress bar with per-section status text.

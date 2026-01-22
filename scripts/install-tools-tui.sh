@@ -90,7 +90,11 @@ detect_pkg_mgr() {
 install_pkg() {
   local mgr="$1"; shift
   case "$mgr" in
-    apt) sudo apt-get update && sudo apt-get install -y "$@";;
+    apt)
+      # Allow apt-get update to have some errors (e.g., broken PPAs) but still try to install
+      sudo apt-get update || log_warn "apt-get update had errors, attempting install anyway..."
+      sudo apt-get install -y "$@"
+      ;;
     dnf) sudo dnf install -y "$@";;
     pacman) sudo pacman -S --needed --noconfirm "$@";;
     zypper) sudo zypper install -y "$@";;
@@ -264,26 +268,30 @@ install_micro() {
 install_node() {
   local mgr="$1"
   case "$mgr" in
-    apt) install_pkg "$mgr" nodejs npm;;
-    dnf|pacman|zypper) install_pkg "$mgr" nodejs npm;;
+    apt)
+      # Use NodeSource for Node.js 20.x LTS
+      if ! command -v curl >/dev/null 2>&1; then
+        install_pkg "$mgr" curl || true
+      fi
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - || true
+      install_pkg "$mgr" nodejs
+      ;;
+    dnf)
+      # Use NodeSource for Fedora/RHEL
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - || true
+      install_pkg "$mgr" nodejs
+      ;;
+    pacman) install_pkg "$mgr" nodejs npm;;
+    zypper) install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm;;
     *) log_warn "Node install not supported for this distro.";;
   esac
 }
 
 install_lazygit() {
   local mgr="$1"
-  if [[ "$mgr" == "apt" ]]; then
-    if ! command -v add-apt-repository >/dev/null 2>&1; then
-      install_pkg "$mgr" software-properties-common || true
-    fi
-    if command -v add-apt-repository >/dev/null 2>&1; then
-      sudo add-apt-repository -y ppa:lazygit-team/release || true
-      sudo apt update || true
-      if sudo apt install -y lazygit; then
-        return
-      fi
-    fi
-  else
+
+  # For non-apt package managers, try native package first
+  if [[ "$mgr" != "apt" ]]; then
     if install_pkg "$mgr" lazygit; then
       return
     fi
@@ -291,6 +299,60 @@ install_lazygit() {
       return
     fi
   fi
+
+  # Primary method: Download from GitHub releases (most reliable)
+  if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+    local os arch url tmp_dir bin_path version api_url
+    os="$(uname -s)"
+    case "$os" in
+      Linux) os="Linux";;
+      Darwin) os="Darwin";;
+      *) log_warn "GitHub release lazygit install not supported for OS: $os";;
+    esac
+
+    if [[ "$os" == "Linux" || "$os" == "Darwin" ]]; then
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64|amd64) arch="x86_64";;
+        aarch64|arm64) arch="arm64";;
+        armv7l|armv7) arch="armv7";;
+        i386|i686) arch="386";;
+        *) log_warn "GitHub release lazygit install not supported for arch: $arch"; arch="";;
+      esac
+
+      if [[ -n "$arch" ]]; then
+        tmp_dir="$(mktemp -d)"
+        bin_path="$tmp_dir/lazygit"
+
+        # Get latest version from GitHub API
+        api_url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
+        if download_file "$api_url" "$tmp_dir/lazygit-release.json"; then
+          version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
+        fi
+        if [[ -z "$version" ]]; then
+          version="0.44.1"  # Fallback version
+        fi
+
+        url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
+        log_info "Downloading lazygit v${version} from GitHub releases..."
+
+        if download_file "$url" "$tmp_dir/lazygit.tar.gz"; then
+          if tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir"; then
+            if [[ -f "$bin_path" ]]; then
+              sudo install -m 0755 "$bin_path" /usr/local/bin/lazygit
+              log_info "Installed lazygit to /usr/local/bin/lazygit"
+              rm -rf "$tmp_dir"
+              return
+            fi
+          fi
+        fi
+        rm -rf "$tmp_dir"
+        log_warn "GitHub release download failed; trying alternative methods..."
+      fi
+    fi
+  fi
+
+  # Fallback: go install
   if ! command -v go >/dev/null 2>&1; then
     log_warn "Go is required for lazygit go-install fallback; installing Go..."
     install_go "$mgr" || true
@@ -302,61 +364,10 @@ install_lazygit() {
     if GOBIN="$GOBIN" go install github.com/jesseduffield/lazygit@latest; then
       return
     fi
-    log_warn "go install failed; falling back to release tarball."
+    log_warn "go install failed; trying snap..."
   fi
 
-  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    log_warn "curl or wget is required for lazygit fallback download."
-    return
-  fi
-  local os arch url tmp_dir bin_path
-  os="$(uname -s)"
-  case "$os" in
-    Linux) os="Linux";;
-    Darwin) os="Darwin";;
-    *) log_warn "Fallback lazygit install not supported for OS: $os"; return;;
-  esac
-
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) arch="x86_64";;
-    aarch64|arm64) arch="arm64";;
-    armv7l|armv7) arch="armv7";;
-    i386|i686) arch="386";;
-    *) log_warn "Fallback lazygit install not supported for arch: $arch"; return;;
-  esac
-
-  url="https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${os}_${arch}.tar.gz"
-  tmp_dir="$(mktemp -d)"
-  bin_path="$tmp_dir/lazygit"
-  if ! download_file "$url" "$tmp_dir/lazygit.tar.gz"; then
-    local version api_url
-    api_url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
-    if download_file "$api_url" "$tmp_dir/lazygit-release.json"; then
-      version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
-    fi
-    if [[ -n "$version" ]]; then
-      version="${version#v}"
-      url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
-      download_file "$url" "$tmp_dir/lazygit.tar.gz"
-    fi
-  fi
-  if [[ -f "$tmp_dir/lazygit.tar.gz" ]]; then
-    if tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir"; then
-      if [[ -f "$bin_path" ]]; then
-        sudo install -m 0755 "$bin_path" /usr/local/bin/lazygit
-        log_info "Installed lazygit to /usr/local/bin/lazygit"
-      else
-        log_warn "Fallback lazygit install failed: binary not found in archive."
-      fi
-    else
-      log_warn "Fallback lazygit install failed: unable to extract archive."
-    fi
-  else
-    log_warn "Fallback lazygit install failed: download error."
-  fi
-  rm -rf "$tmp_dir"
-
+  # Last resort: snap
   if command -v snap >/dev/null 2>&1; then
     log_info "Installing lazygit via snap..."
     if sudo snap install lazygit; then
@@ -367,6 +378,8 @@ install_lazygit() {
     fi
     log_warn "Snap install failed for lazygit."
   fi
+
+  log_warn "All lazygit installation methods failed."
 }
 
 install_lazydocker() {
@@ -520,13 +533,47 @@ install_composer() {
 
 install_tldr() {
   local mgr="$1"
+
+  # Try tealdeer (Rust-based, fast tldr client) first
   case "$mgr" in
-    apt) install_pkg "$mgr" tldr;;
-    dnf) install_pkg "$mgr" tldr;;
-    pacman) install_pkg "$mgr" tldr;;
-    zypper) install_pkg "$mgr" tldr;;
-    *) log_warn "tldr install not supported for this distro.";;
+    apt)
+      # tealdeer is available as 'tldr' in some Ubuntu versions
+      if install_pkg "$mgr" tldr 2>/dev/null; then
+        return
+      fi
+      ;;
+    dnf|pacman|zypper)
+      if install_pkg "$mgr" tealdeer 2>/dev/null || install_pkg "$mgr" tldr 2>/dev/null; then
+        return
+      fi
+      ;;
   esac
+
+  # Fallback: install via cargo (tealdeer)
+  if command -v cargo >/dev/null 2>&1; then
+    log_info "Installing tealdeer (tldr) via cargo..."
+    if cargo install tealdeer; then
+      return
+    fi
+  fi
+
+  # Fallback: install via npm
+  if command -v npm >/dev/null 2>&1; then
+    log_info "Installing tldr via npm..."
+    if sudo npm install -g tldr; then
+      return
+    fi
+  fi
+
+  # Fallback: install via pip
+  if command -v pip3 >/dev/null 2>&1; then
+    log_info "Installing tldr via pip3..."
+    if pip3 install --user tldr; then
+      return
+    fi
+  fi
+
+  log_warn "Failed to install tldr. Install Node.js, Python pip, or Rust cargo for fallback methods."
 }
 
 install_bandwhich() {
@@ -731,6 +778,100 @@ install_meld() {
     pacman) install_pkg "$mgr" meld;;
     zypper) install_pkg "$mgr" meld;;
     *) log_warn "meld install not supported for this distro.";;
+  esac
+}
+
+install_ruby() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" ruby ruby-dev;;
+    dnf) install_pkg "$mgr" ruby ruby-devel;;
+    pacman) install_pkg "$mgr" ruby;;
+    zypper) install_pkg "$mgr" ruby ruby-devel;;
+    *) log_warn "ruby install not supported for this distro.";;
+  esac
+}
+
+install_flatpak() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" flatpak;;
+    dnf) install_pkg "$mgr" flatpak;;
+    pacman) install_pkg "$mgr" flatpak;;
+    zypper) install_pkg "$mgr" flatpak;;
+    *) log_warn "flatpak install not supported for this distro.";;
+  esac
+  # Add Flathub repository if flatpak is installed
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
+  fi
+}
+
+install_wine() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Enable 32-bit architecture for wine32
+      sudo dpkg --add-architecture i386 || true
+      sudo apt-get update || true
+      install_pkg "$mgr" wine wine64 wine32 || install_pkg "$mgr" wine
+      ;;
+    dnf) install_pkg "$mgr" wine;;
+    pacman) install_pkg "$mgr" wine wine-mono wine-gecko;;
+    zypper) install_pkg "$mgr" wine;;
+    *) log_warn "wine install not supported for this distro.";;
+  esac
+}
+
+install_tor() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Install tor and torbrowser-launcher
+      install_pkg "$mgr" tor torbrowser-launcher || install_pkg "$mgr" tor
+      ;;
+    dnf) install_pkg "$mgr" tor;;
+    pacman) install_pkg "$mgr" tor torbrowser-launcher || install_pkg "$mgr" tor;;
+    zypper) install_pkg "$mgr" tor;;
+    *) log_warn "tor install not supported for this distro.";;
+  esac
+}
+
+install_ntfs() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" ntfs-3g;;
+    dnf) install_pkg "$mgr" ntfs-3g;;
+    pacman) install_pkg "$mgr" ntfs-3g;;
+    zypper) install_pkg "$mgr" ntfs-3g;;
+    *) log_warn "ntfs-3g install not supported for this distro.";;
+  esac
+}
+
+install_streamcontroller() {
+  # StreamController is installed via Flatpak
+  if ! command -v flatpak >/dev/null 2>&1; then
+    log_warn "Flatpak is required for StreamController; installing flatpak..."
+    install_flatpak "$1" || true
+  fi
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak install -y flathub com.core447.StreamController || log_warn "Failed to install StreamController via Flatpak."
+  else
+    log_warn "Flatpak still missing; cannot install StreamController."
+  fi
+}
+
+install_gimp() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Install GIMP with plugins including export-to-web
+      install_pkg "$mgr" gimp gimp-plugin-registry gimp-data-extras || install_pkg "$mgr" gimp
+      ;;
+    dnf) install_pkg "$mgr" gimp gimp-data-extras || install_pkg "$mgr" gimp;;
+    pacman) install_pkg "$mgr" gimp;;
+    zypper) install_pkg "$mgr" gimp;;
+    *) log_warn "gimp install not supported for this distro.";;
   esac
 }
 
@@ -1008,7 +1149,20 @@ uninstall_gh() {
 }
 
 uninstall_tldr() {
-  uninstall_pkg "$1" tldr || log_warn "Failed to uninstall tldr."
+  local mgr="$1"
+  # Try package manager
+  uninstall_pkg "$mgr" tldr 2>/dev/null || true
+  uninstall_pkg "$mgr" tealdeer 2>/dev/null || true
+  # Remove cargo install version
+  rm -f "$HOME/.cargo/bin/tldr" 2>/dev/null || true
+  # Remove npm global install
+  if command -v npm >/dev/null 2>&1; then
+    sudo npm uninstall -g tldr 2>/dev/null || true
+  fi
+  # Remove pip install version
+  if command -v pip3 >/dev/null 2>&1; then
+    pip3 uninstall -y tldr 2>/dev/null || true
+  fi
 }
 
 uninstall_bandwhich() {
@@ -1052,6 +1206,56 @@ uninstall_delta() {
 
 uninstall_meld() {
   uninstall_pkg "$1" meld || log_warn "Failed to uninstall meld."
+}
+
+uninstall_ruby() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" ruby ruby-dev || true;;
+    dnf) uninstall_pkg "$mgr" ruby ruby-devel || true;;
+    pacman) uninstall_pkg "$mgr" ruby || true;;
+    zypper) uninstall_pkg "$mgr" ruby ruby-devel || true;;
+  esac
+}
+
+uninstall_flatpak() {
+  uninstall_pkg "$1" flatpak || log_warn "Failed to uninstall flatpak."
+}
+
+uninstall_wine() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" wine wine64 wine32 || uninstall_pkg "$mgr" wine || true;;
+    dnf|pacman|zypper) uninstall_pkg "$mgr" wine || true;;
+  esac
+}
+
+uninstall_tor() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" tor torbrowser-launcher || uninstall_pkg "$mgr" tor || true;;
+    dnf|zypper) uninstall_pkg "$mgr" tor || true;;
+    pacman) uninstall_pkg "$mgr" tor torbrowser-launcher || uninstall_pkg "$mgr" tor || true;;
+  esac
+}
+
+uninstall_ntfs() {
+  uninstall_pkg "$1" ntfs-3g || log_warn "Failed to uninstall ntfs-3g."
+}
+
+uninstall_streamcontroller() {
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak uninstall -y com.core447.StreamController || log_warn "Failed to uninstall StreamController via Flatpak."
+  fi
+}
+
+uninstall_gimp() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" gimp gimp-plugin-registry gimp-data-extras || uninstall_pkg "$mgr" gimp || true;;
+    dnf) uninstall_pkg "$mgr" gimp gimp-data-extras || uninstall_pkg "$mgr" gimp || true;;
+    pacman|zypper) uninstall_pkg "$mgr" gimp || true;;
+  esac
 }
 
 uninstall_bind_tools() {
@@ -1136,8 +1340,9 @@ tool_desc() {
     # ── Languages & Runtimes ──
     go) echo "[Lang] Go";;
     java) echo "[Lang] Java (JDK)";;
-    node) echo "[Lang] Node.js + npm";;
+    node) echo "[Lang] Node.js 20 LTS";;
     php) echo "[Lang] PHP";;
+    ruby) echo "[Lang] Ruby";;
     rust) echo "[Lang] Rust (rustc/cargo)";;
     # ── DevOps & Containers ──
     ansible) echo "[DevOps] Ansible";;
@@ -1148,10 +1353,17 @@ tool_desc() {
     # ── Utilities ──
     adb) echo "[Util] adb - Android Debug Bridge";;
     dialog) echo "[Util] dialog - TUI dialogs";;
+    flatpak) echo "[Util] Flatpak - app packaging";;
     nala) echo "[Util] Nala - prettier apt";;
+    ntfs) echo "[Util] ntfs-3g - NTFS filesystem";;
+    wine) echo "[Util] Wine - Windows compatibility";;
+    # ── Networking ── (additional)
+    tor) echo "[Net] Tor - anonymous browsing";;
     # ── Apps ──
+    gimp) echo "[App] GIMP - image editor";;
     image-view) echo "[App] image-view - terminal image viewer";;
     isoforge) echo "[App] Isoforge - ISO burner";;
+    streamcontroller) echo "[App] StreamController - Stream Deck";;
     *) echo "$1";;
   esac
 }
@@ -1226,6 +1438,13 @@ is_installed_tool() {
     glow) command -v glow >/dev/null 2>&1;;
     delta) command -v delta >/dev/null 2>&1;;
     meld) command -v meld >/dev/null 2>&1;;
+    ruby) command -v ruby >/dev/null 2>&1;;
+    flatpak) command -v flatpak >/dev/null 2>&1;;
+    wine) command -v wine >/dev/null 2>&1;;
+    tor) command -v tor >/dev/null 2>&1;;
+    ntfs) command -v ntfs-3g >/dev/null 2>&1 || command -v mount.ntfs-3g >/dev/null 2>&1;;
+    streamcontroller) command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.core447.StreamController";;
+    gimp) command -v gimp >/dev/null 2>&1;;
     *) return 1;;
   esac
 }
@@ -1258,19 +1477,19 @@ main() {
     # ── System & Monitoring ──
     bandwhich cron duf htop lm-sensors ncdu pciutils usbutils
     # ── Networking ──
-    bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute ufw wget
+    bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget
     # ── Backup & Storage ──
     borgbackup duplicity fdupes lz4 tar unzip
     # ── Development ──
     bfg build-tools composer delta gh git git-lfs lazygit tokei
     # ── Languages & Runtimes ──
-    go java node php rust
+    go java node php ruby rust
     # ── DevOps & Containers ──
     ansible docker k9s lazydocker podman
     # ── Utilities ──
-    adb dialog nala
+    adb dialog flatpak nala ntfs wine
     # ── Apps ──
-    image-view isoforge
+    gimp image-view isoforge streamcontroller
   )
 
   for tool in "${tools[@]}"; do
@@ -1304,8 +1523,10 @@ main() {
       --scrollbar \
       --checklist "Select tools to install/keep:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
       "${items[@]}")
+    # Clear the screen after dialog closes before showing installation output
+    clear
   else
-    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php rust ansible docker k9s lazydocker podman adb dialog nala image-view isoforge"
+    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge streamcontroller"
   fi
 
   # Build set of selected tools
@@ -1340,6 +1561,8 @@ main() {
         "$DIALOG_HEIGHT" "$DIALOG_WIDTH"; then
       do_uninstall=true
     fi
+    # Clear after uninstall dialog closes
+    clear
   fi
 
   # If no selections and no uninstalls, exit
@@ -1348,9 +1571,12 @@ main() {
     exit 0
   fi
 
-  # Track failed installations
+  # Track installation/uninstallation results
   local failed_installs=()
   local failed_uninstalls=()
+  local successful_installs=()
+  local successful_uninstalls=()
+  local already_installed=()
 
   # Install selected tools
   for choice in "${!selected_set[@]}"; do
@@ -1358,11 +1584,12 @@ main() {
       log_info "Already installed: $choice"
       # Track it if not already tracked
       add_tracked_tool "$choice"
+      already_installed+=("$choice")
       continue
     fi
     log_info "Installing: $choice"
     # Run installation in subshell to catch errors without exiting
-    if ! (
+    if (
     case "$choice" in
       ripgrep) install_ripgrep "$mgr";;
       fd) install_fd "$mgr";;
@@ -1446,11 +1673,20 @@ main() {
         esac
         ;;
       ufw) install_pkg_simple "$mgr" ufw;;
+      ruby) install_ruby "$mgr";;
+      flatpak) install_flatpak "$mgr";;
+      wine) install_wine "$mgr";;
+      tor) install_tor "$mgr";;
+      ntfs) install_ntfs "$mgr";;
+      streamcontroller) install_streamcontroller "$mgr";;
+      gimp) install_gimp "$mgr";;
     esac
     ); then
-      # Installation succeeded, track it if now installed
+      # Installation command succeeded, verify tool is now installed
       if is_installed_tool "$choice"; then
         add_tracked_tool "$choice"
+        successful_installs+=("$choice")
+        log_info "Successfully installed: $choice"
       else
         log_warn "Installation command completed but $choice not detected as installed."
         failed_installs+=("$choice")
@@ -1466,7 +1702,7 @@ main() {
     for tool in "${to_uninstall[@]}"; do
       log_info "Uninstalling: $tool"
       # Run uninstallation in subshell to catch errors without exiting
-      if ! (
+      if (
       case "$tool" in
         ripgrep) uninstall_pkg_simple "$mgr" ripgrep;;
         fd) uninstall_fd "$mgr";;
@@ -1536,10 +1772,19 @@ main() {
         screen) uninstall_pkg_simple "$mgr" screen;;
         cron) uninstall_cron "$mgr";;
         ufw) uninstall_pkg_simple "$mgr" ufw;;
+        ruby) uninstall_ruby "$mgr";;
+        flatpak) uninstall_flatpak "$mgr";;
+        wine) uninstall_wine "$mgr";;
+        tor) uninstall_tor "$mgr";;
+        ntfs) uninstall_ntfs "$mgr";;
+        streamcontroller) uninstall_streamcontroller "$mgr";;
+        gimp) uninstall_gimp "$mgr";;
       esac
       ); then
         # Uninstallation succeeded
         remove_tracked_tool "$tool"
+        successful_uninstalls+=("$tool")
+        log_info "Successfully uninstalled: $tool"
       else
         log_error "Failed to uninstall: $tool"
         failed_uninstalls+=("$tool")
@@ -1547,21 +1792,78 @@ main() {
     done
   fi
 
-  # Report summary
-  log_info "Tool installation/removal complete."
+  # Build summary message for dialog
+  local summary=""
+  local title="Installation Complete"
+  local has_failures=false
 
-  if [[ ${#failed_installs[@]} -gt 0 ]]; then
-    log_warn "The following tools failed to install:"
-    for tool in "${failed_installs[@]}"; do
-      log_warn "  - $(tool_desc "$tool")"
+  # Successfully installed
+  if [[ ${#successful_installs[@]} -gt 0 ]]; then
+    summary+="INSTALLED SUCCESSFULLY:\n"
+    for tool in "${successful_installs[@]}"; do
+      summary+="  ✓ $(tool_desc "$tool")\n"
     done
+    summary+="\n"
   fi
 
-  if [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
-    log_warn "The following tools failed to uninstall:"
-    for tool in "${failed_uninstalls[@]}"; do
-      log_warn "  - $(tool_desc "$tool")"
+  # Successfully uninstalled
+  if [[ ${#successful_uninstalls[@]} -gt 0 ]]; then
+    summary+="UNINSTALLED SUCCESSFULLY:\n"
+    for tool in "${successful_uninstalls[@]}"; do
+      summary+="  ✓ $(tool_desc "$tool")\n"
     done
+    summary+="\n"
+  fi
+
+  # Already installed (skipped)
+  if [[ ${#already_installed[@]} -gt 0 ]]; then
+    summary+="ALREADY INSTALLED (skipped):\n"
+    for tool in "${already_installed[@]}"; do
+      summary+="  • $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Failed to install
+  if [[ ${#failed_installs[@]} -gt 0 ]]; then
+    has_failures=true
+    summary+="FAILED TO INSTALL:\n"
+    for tool in "${failed_installs[@]}"; do
+      summary+="  ✗ $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Failed to uninstall
+  if [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
+    has_failures=true
+    summary+="FAILED TO UNINSTALL:\n"
+    for tool in "${failed_uninstalls[@]}"; do
+      summary+="  ✗ $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Set appropriate title based on results
+  if [[ "$has_failures" == "true" ]]; then
+    title="Installation Complete (with warnings)"
+  fi
+
+  # No changes made
+  if [[ ${#successful_installs[@]} -eq 0 ]] && [[ ${#successful_uninstalls[@]} -eq 0 ]] && \
+     [[ ${#failed_installs[@]} -eq 0 ]] && [[ ${#failed_uninstalls[@]} -eq 0 ]]; then
+    summary="All selected tools are already installed.\nNo changes were made."
+    title="No Changes"
+  fi
+
+  # Show results in dialog (TUI mode) or log (non-TUI mode)
+  if ! $all && command -v dialog >/dev/null 2>&1; then
+    dialog --stdout --title "$title" --msgbox "$summary" "$DIALOG_HEIGHT" "$DIALOG_WIDTH"
+    clear
+  else
+    # Fallback to console output
+    log_info "===== $title ====="
+    echo -e "$summary"
   fi
 
   # Return non-zero if there were failures (but don't exit early)

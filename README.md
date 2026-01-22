@@ -95,17 +95,19 @@ distrodeck install-tools --all
 
 ### Install-tools categories
 
-The `install-tools` command offers 56 tools organized by category:
+The `install-tools` command offers 64 tools organized by category:
 
 | Category | Examples |
 |----------|----------|
 | `[Shell]` | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide |
 | `[Editor]` | mc, meld, micro, neovim, vscode |
 | `[System]` | bandwhich, duf, htop, ncdu |
-| `[Net]` | curl, nmap, mtr, tcpdump, wget |
+| `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
 | `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
-| `[Lang]` | go, java, node, php, rust |
+| `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
+| `[Util]` | flatpak, ntfs-3g, wine |
+| `[App]` | gimp, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 

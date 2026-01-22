@@ -185,7 +185,7 @@ distrodeck net-tools
 
 ### install-tools
 
-Install optional developer tools via a TUI checklist. Supports 56 tools organized by category.
+Install optional developer tools via a TUI checklist. Supports 64 tools organized by category.
 
 ```
 distrodeck install-tools        # opens TUI checklist
@@ -205,13 +205,13 @@ distrodeck install-tools --all  # installs all tools non-interactively
 | Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
 | Editors & Terminal | mc, meld, micro, neovim, screen, tmux, vscode |
 | System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
-| Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, traceroute, ufw, wget |
+| Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
 | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
 | Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
-| Languages | go, java, node, php, rust |
+| Languages | go, java, node (20 LTS), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
-| Utilities | adb, dialog, nala |
-| Apps | image-view, isoforge |
+| Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
+| Apps | gimp, image-view, isoforge, streamcontroller |
 
 **Notable tools:**
 - `bfg` - BFG Repo-Cleaner for removing large files from git history
@@ -219,6 +219,10 @@ distrodeck install-tools --all  # installs all tools non-interactively
 - `delta` - Syntax-highlighting pager for git diffs
 - `k9s` - Kubernetes cluster management TUI
 - `podman` - Daemonless container engine (Docker alternative)
+- `streamcontroller` - Control Elgato Stream Decks on Linux (via Flatpak)
+- `gimp` - GNU Image Manipulation Program with web export plugins
+- `wine` - Windows compatibility layer for running Windows applications
+- `tor` - Anonymous communication network with Tor Browser
 
 ### git-status
 

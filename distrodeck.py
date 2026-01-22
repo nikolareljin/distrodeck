@@ -2659,7 +2659,10 @@ def run_install_tools(args: argparse.Namespace) -> None:
     cmd = [str(script)]
     if args.all:
         cmd.append("--all")
-    run(cmd)
+    # Use check=False to allow partial failures (script reports them)
+    result = run(cmd, check=False)
+    if result.returncode != 0:
+        log("Some tools failed to install/uninstall. See warnings above.")
     log_action_end("install-tools")
 
 
