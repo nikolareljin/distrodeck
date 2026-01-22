@@ -404,6 +404,7 @@ def dialog_textbox(title: str, content: str) -> None:
     try:
         temp.unlink()
     except OSError:
+        # Temporary file cleanup is best-effort; failure to delete is non-fatal.
         pass
 
 
