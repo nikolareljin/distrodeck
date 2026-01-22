@@ -2700,6 +2700,7 @@ def git_status_shell_script() -> str:
             "",
             "distrodeck_git_status() {",
             "  command -v git >/dev/null 2>&1 || return",
+            "  # If git is available but the current directory is not a git repository, exit quietly.",
             "  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return",
             "  local branch upstream counts ahead behind status status_text dirty",
             "  branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null) || return",
