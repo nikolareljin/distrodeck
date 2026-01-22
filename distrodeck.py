@@ -2539,6 +2539,7 @@ def import_from_file(args: argparse.Namespace) -> None:
                     try:
                         os.unlink(tmp_path)
                     except OSError:
+                        # Best-effort cleanup: failure to remove the temporary file is non-fatal.
                         pass
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
