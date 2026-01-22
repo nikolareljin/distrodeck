@@ -2252,7 +2252,7 @@ def import_from_file(args: argparse.Namespace) -> None:
             if selected_sections:
                 backup_data = parse_export_file(backup_path)
                 write_export_subset(backup_path, backup_data, selected_sections)
-            log(f"Backup saved to {backup_path}")
+            log(f"Created pre-import backup for this attempt at: {backup_path}")
         log(
             "Plan: "
             f"{len(data['apt_manual'])} apt packages, "
