@@ -8,6 +8,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_HELPERS_DIR="${SCRIPT_HELPERS_DIR:-${SCRIPT_DIR}/script-helpers}"
+
+# Check if script-helpers directory exists
+if [[ ! -d "$SCRIPT_HELPERS_DIR" ]]; then
+  # Prompt to run update.sh to fetch submodules
+  echo "The script-helpers directory is missing."
+  echo "Please run the update.sh script to initialize submodules:"
+  echo "  ./scripts/update.sh"
+  exit 1
+fi
+
 # shellcheck source=/dev/null
 source "${SCRIPT_HELPERS_DIR}/helpers.sh"
 shlib_import logging dialog
