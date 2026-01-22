@@ -183,6 +183,43 @@ Run installed network tools from a TUI menu (nmap, mtr, iperf3, traceroute, tcpd
 distrodeck net-tools
 ```
 
+### install-tools
+
+Install optional developer tools via a TUI checklist. Supports 56 tools organized by category.
+
+```
+distrodeck install-tools        # opens TUI checklist
+distrodeck install-tools --all  # installs all tools non-interactively
+```
+
+**Features:**
+- Tools are grouped by category with prefixes: `[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Backup]`, `[Dev]`, `[Lang]`, `[DevOps]`, `[Util]`, `[App]`
+- Already installed tools are pre-checked and marked "(installed)"
+- **Uninstall support**: Unchecking a tool prompts to uninstall it
+- State tracking: Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`
+
+**Available tools by category:**
+
+| Category | Tools |
+|----------|-------|
+| Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
+| Editors & Terminal | mc, meld, micro, neovim, screen, tmux, vscode |
+| System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
+| Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, traceroute, ufw, wget |
+| Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
+| Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
+| Languages | go, java, node, php, rust |
+| DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
+| Utilities | adb, dialog, nala |
+| Apps | image-view, isoforge |
+
+**Notable tools:**
+- `bfg` - BFG Repo-Cleaner for removing large files from git history
+- `gh` - GitHub CLI for working with GitHub from the terminal
+- `delta` - Syntax-highlighting pager for git diffs
+- `k9s` - Kubernetes cluster management TUI
+- `podman` - Daemonless container engine (Docker alternative)
+
 ### git-status
 
 Enable or disable git branch status in your shell prompt.

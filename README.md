@@ -18,6 +18,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 - Repair apt repo issues (disable broken sources, refresh keys)
 - Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
+- Install 56+ developer tools via TUI with uninstall support
 
 ## Install
 
@@ -91,6 +92,22 @@ distrodeck  # use the TUI "Automate" action
 
 distrodeck install-tools --all
 ```
+
+### Install-tools categories
+
+The `install-tools` command offers 56 tools organized by category:
+
+| Category | Examples |
+|----------|----------|
+| `[Shell]` | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide |
+| `[Editor]` | mc, meld, micro, neovim, vscode |
+| `[System]` | bandwhich, duf, htop, ncdu |
+| `[Net]` | curl, nmap, mtr, tcpdump, wget |
+| `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
+| `[Lang]` | go, java, node, php, rust |
+| `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
+
+Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 
 Example prompt segment after `git-status set`:
 
