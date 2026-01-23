@@ -503,8 +503,8 @@ def config_edit_targets() -> List[Tuple[str, str]]:
 
 def git_config_targets() -> List[Tuple[str, str]]:
     candidates = [
-        ("Git config (user)", str(Path.home() / ".gitconfig")),
-        ("Git config (user)", str(Path.home() / ".config" / "git" / "config")),
+        ("Git config (user ~/.gitconfig)", str(Path.home() / ".gitconfig")),
+        ("Git config (user ~/.config/git/config)", str(Path.home() / ".config" / "git" / "config")),
         ("Git config (system)", "/etc/gitconfig"),
     ]
     items: List[Tuple[str, str]] = []
@@ -591,6 +591,7 @@ def run_config_edit_tui() -> None:
                 continue
             for choice in choices:
                 edit_config_file(Path(choice))
+            continue
         elif section == "git":
             items = []
             for label, path in git_config_targets():
@@ -3211,36 +3212,44 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
             "Alias names collide with existing git commands:\n"
             + "\n".join(conflicts),
         )
+    def next_safe_name(seed: str, used: Set[str]) -> str:
+        candidate = seed
+        suffix = 1
+        while candidate in git_cmds or candidate in used:
+            candidate = f"{seed}{suffix}"
+            suffix += 1
+        return candidate
+
     updated: List[Tuple[str, str, str]] = []
+    used_names: Set[str] = set()
     for name, value, desc in entries:
         if name in git_cmds:
             dialog_msgbox(
                 "Git Aliases",
                 f"Alias '{name}' conflicts with an existing git command.",
             )
-            default_name = f"d{name}" if not name.startswith("d") else f"{name}x"
-            new_name = dialog_input(
-                "Git Aliases",
-                f"Alias name for '{name}' (required):",
-                default_name,
-            )
-            if new_name is None:
-                new_name = default_name
-            new_name = new_name.strip() or default_name
-            while new_name in git_cmds:
-                dialog_msgbox(
-                    "Git Aliases",
-                    f"'{new_name}' is also a git command. Choose another name.",
-                )
-                next_name = dialog_input(
+            seed = f"d{name}" if not name.startswith("d") else f"{name}x"
+            default_name = next_safe_name(seed, used_names)
+            attempts = 0
+            while True:
+                new_name = dialog_input(
                     "Git Aliases",
                     f"Alias name for '{name}' (required):",
                     default_name,
                 )
-                if next_name is None:
+                if new_name is None:
                     new_name = default_name
-                else:
-                    new_name = next_name.strip() or default_name
+                new_name = new_name.strip() or default_name
+                if new_name not in git_cmds and new_name not in used_names:
+                    break
+                attempts += 1
+                if attempts >= 3:
+                    new_name = default_name
+                    break
+                dialog_msgbox(
+                    "Git Aliases",
+                    f"'{new_name}' is a git command or already used. Choose another name.",
+                )
             new_value = dialog_input(
                 "Git Aliases",
                 f"Alias command for '{new_name}':",
@@ -3249,8 +3258,10 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
             if new_value is None:
                 new_value = value
             new_value = new_value.strip() or value
+            used_names.add(new_name)
             updated.append((new_name, new_value, desc))
         else:
+            used_names.add(name)
             updated.append((name, value, desc))
     return updated
 
