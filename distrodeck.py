@@ -2,6 +2,7 @@
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -11,10 +12,11 @@ import threading
 import base64
 import socket
 import shutil
+from urllib.parse import urlparse
 from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Set
 from glob import glob
 
 VERSION = "0.4.0"
@@ -32,6 +34,20 @@ for path in (VERSION_FILE, SHARE_VERSION_FILE):
 DEFAULT_EXPORT_FILE = "distrodeck-export.txt"
 LOG_PATH: Optional[Path] = None
 VERBOSE = False
+
+OFFICIAL_APT_HOSTS = {
+    "ubuntu": {
+        "archive.ubuntu.com",
+        "security.ubuntu.com",
+        "ports.ubuntu.com",
+        "esm.ubuntu.com",
+    },
+    "debian": {
+        "deb.debian.org",
+        "security.debian.org",
+        "ftp.debian.org",
+    },
+}
 
 
 def require_python_version() -> None:
@@ -505,6 +521,13 @@ def apt_source_files() -> List[Path]:
     if sources_dir.exists():
         files.extend(sorted(sources_dir.glob("*.list")))
     return [path for path in files if path.exists()]
+
+
+def apt_deb822_files() -> List[Path]:
+    sources_dir = Path("/etc/apt/sources.list.d")
+    if not sources_dir.exists():
+        return []
+    return [path for path in sorted(sources_dir.glob("*.sources")) if path.exists()]
 
 
 def run_config_edit_tui() -> None:
@@ -1273,15 +1296,81 @@ def export_ppas() -> List[str]:
     return sorted(ppas)
 
 
+def normalize_apt_source_line(line: str) -> str:
+    return re.sub(r"\s+", " ", line.strip())
+
+
+def parse_apt_source_line(line: str) -> Optional[Dict[str, str]]:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if not (stripped.startswith("deb ") or stripped.startswith("deb-src ")):
+        return None
+    try:
+        parts = shlex.split(stripped)
+    except ValueError:
+        return None
+    if len(parts) < 2:
+        return None
+    kind = parts[0]
+    idx = 1
+    if idx < len(parts) and parts[idx].startswith("["):
+        while idx < len(parts) and not parts[idx].endswith("]"):
+            idx += 1
+        if idx < len(parts) and parts[idx].endswith("]"):
+            idx += 1
+    if idx >= len(parts):
+        return None
+    uri = parts[idx]
+    suite = parts[idx + 1] if idx + 1 < len(parts) else ""
+    return {"kind": kind, "uri": uri, "suite": suite, "line": stripped}
+
+
+def is_official_apt_repo(uri: str, os_id: str) -> bool:
+    parsed = urlparse(uri)
+    host = parsed.netloc.lower()
+    if not host:
+        return False
+    for official in OFFICIAL_APT_HOSTS.get(os_id, set()):
+        if host == official or host.endswith(f".{official}"):
+            return True
+    return False
+
+
+def active_apt_sources() -> Set[str]:
+    sources: Set[str] = set()
+    for path in apt_source_files():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            if stripped.startswith("deb ") or stripped.startswith("deb-src "):
+                sources.add(normalize_apt_source_line(stripped))
+    return sources
+
+
 def export_apt_sources() -> List[str]:
     sources = set()
-    path = Path("/etc/apt/sources.list.d")
-    if not path.exists():
-        return []
-    for item in path.glob("*.list"):
-        for line in item.read_text(encoding="utf-8").splitlines():
-            if line.startswith("deb ") and "ppa.launchpad.net" not in line:
-                sources.add(line.strip())
+    os_id = get_os_id()
+    for item in apt_source_files():
+        try:
+            lines = item.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            warn(f"Failed to read apt sources: {item}")
+            continue
+        for line in lines:
+            info = parse_apt_source_line(line)
+            if not info:
+                continue
+            if "ppa.launchpad.net" in info["line"]:
+                continue
+            if is_official_apt_repo(info["uri"], os_id):
+                continue
+            sources.add(normalize_apt_source_line(info["line"]))
     return sorted(sources)
 
 
@@ -1850,22 +1939,92 @@ def run_security() -> None:
     log_action_end("security", "failed")
 
 
-def run_upgrade() -> None:
+def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
     log_action_start("upgrade")
+    if args is None:
+        args = argparse.Namespace(target_codename=None)
     os_id = get_os_id()
+    old_codename = get_codename()
+    if os_id not in {"ubuntu", "debian"}:
+        warn(f"Distro upgrade not implemented for {os_id}")
+        log_action_end("upgrade", "unsupported")
+        return
+    export_path = Path(default_export_filename())
+    log(f"Creating pre-upgrade export at {export_path}")
+    export_args = argparse.Namespace(
+        output=str(export_path),
+        appimage_dirs=None,
+        include_config=False,
+        config_dirs=None,
+        config_exclude=[],
+        config_archive=None,
+        include_config_files=False,
+        config_files=None,
+        include_user_tools=False,
+        include_services=False,
+    )
+    export_all(export_args)
+
     if os_id == "ubuntu":
         if not cmd_exists("do-release-upgrade"):
             fail("do-release-upgrade not available")
-        old_codename = get_codename()
         cmd = ["sudo", "do-release-upgrade"]
         if in_dialog_mode():
             cmd.extend(["-f", "DistUpgradeViewText"])
         run(cmd)
         new_codename = get_codename()
         if old_codename and new_codename and old_codename != new_codename:
-            reenable_commented_apt_sources(old_codename, new_codename)
+            update_apt_sources_codename(old_codename, new_codename)
+        restore_args = argparse.Namespace(
+            input=str(export_path),
+            apply=True,
+            update_sources=True,
+            apply_config=False,
+            config_archive=None,
+            apply_services=False,
+            apply_config_files=False,
+            sections="apt_manual,apt_hold,ppas,apt_sources",
+            cleanup_extras=False,
+            appimage_dirs=None,
+            skip_backup=False,
+            skip_revert_prompt=False,
+        )
+        import_from_file(restore_args)
         log_action_end("upgrade")
         return
+
+    if os_id == "debian":
+        target_codename = args.target_codename or os.getenv("DISTRODECK_TARGET_CODENAME")
+        if not target_codename:
+            fail(
+                "Debian upgrade requires --target-codename or DISTRODECK_TARGET_CODENAME."
+            )
+        if not old_codename:
+            fail("Unable to detect current Debian codename for upgrade.")
+        update_apt_sources_codename(old_codename, target_codename)
+        run(["sudo", "apt-get", "update"])
+        run(["sudo", "apt-get", "full-upgrade", "-y"])
+        new_codename = get_codename()
+        if old_codename and new_codename and old_codename != new_codename:
+            update_apt_sources_codename(old_codename, new_codename)
+        restore_args = argparse.Namespace(
+            input=str(export_path),
+            apply=True,
+            update_sources=True,
+            apply_config=False,
+            config_archive=None,
+            apply_services=False,
+            apply_config_files=False,
+            sections="apt_manual,apt_hold,ppas,apt_sources",
+            cleanup_extras=False,
+            appimage_dirs=None,
+            skip_backup=False,
+            skip_revert_prompt=False,
+        )
+        import_from_file(restore_args)
+        log_action_end("upgrade")
+        return
+
     warn(f"Distro upgrade not implemented for {os_id}")
     log_action_end("upgrade", "unsupported")
 
@@ -2056,38 +2215,88 @@ def run_repo_repair() -> None:
     log_action_end("repo-repair")
 
 
-def reenable_commented_apt_sources(old_codename: str, new_codename: str) -> None:
+def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
     if not old_codename or not new_codename:
-        warn("Skipping apt source re-enable; missing release codename.")
+        warn("Skipping apt source update; missing release codename.")
         return
-    sources = [Path("/etc/apt/sources.list")]
-    sources_dir = Path("/etc/apt/sources.list.d")
-    if sources_dir.exists():
-        sources.extend(sorted(sources_dir.glob("*.list")))
-    for path in sources:
-        if not path.exists():
-            continue
+    active_sources = active_apt_sources()
+    for path in apt_source_files():
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
             warn(f"Failed to read apt sources: {path}")
             continue
-        changed = 0
-        updated_lines = []
         for line in lines:
-            match = re.match(r"^\s*#\s*(deb(?:-src)?\s+.+)$", line)
-            if match:
-                deb_line = match.group(1).strip()
-                if old_codename in deb_line:
-                    updated_lines.append(
-                        rewrite_codename(deb_line, old_codename, new_codename)
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            if stripped.startswith("deb ") or stripped.startswith("deb-src "):
+                if old_codename in stripped:
+                    normalized = normalize_apt_source_line(
+                        rewrite_codename(stripped, old_codename, new_codename)
                     )
-                    changed += 1
+                    active_sources.add(normalized)
+        updated_lines: List[str] = []
+        added_sources: Set[str] = set()
+        changed = 0
+        for line in lines:
+            stripped = line.lstrip()
+            prefix = line[: len(line) - len(stripped)]
+            if stripped.startswith("#"):
+                match = re.match(r"^\s*#\s*(deb(?:-src)?\s+.+)$", line)
+                if match:
+                    deb_line = match.group(1).strip()
+                    updated_lines.append(line)
+                    if old_codename in deb_line:
+                        new_line = prefix + rewrite_codename(
+                            deb_line, old_codename, new_codename
+                        )
+                        normalized = normalize_apt_source_line(new_line)
+                        if normalized not in active_sources and normalized not in added_sources:
+                            updated_lines.append(new_line)
+                            added_sources.add(normalized)
+                            active_sources.add(normalized)
+                            changed += 1
+                    continue
+                updated_lines.append(line)
+                continue
+            if stripped.startswith("deb ") or stripped.startswith("deb-src "):
+                if old_codename in stripped:
+                    new_line = prefix + rewrite_codename(
+                        stripped, old_codename, new_codename
+                    )
+                    if new_line != line:
+                        changed += 1
+                    updated_lines.append(new_line)
+                    active_sources.add(normalize_apt_source_line(new_line))
                     continue
             updated_lines.append(line)
-        if changed:
+        if updated_lines != lines:
             write_root_file(path, "\n".join(updated_lines))
-            log(f"Re-enabled {changed} apt source(s) in {path}")
+            log(f"Updated apt sources in {path}")
+    for path in apt_deb822_files():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            warn(f"Failed to read apt sources: {path}")
+            continue
+        updated_lines = []
+        changed = 0
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                updated_lines.append(line)
+                continue
+            if re.match(r"^\s*(Suites?|Codename):", line) and old_codename in line:
+                new_line = line.replace(old_codename, new_codename)
+                if new_line != line:
+                    changed += 1
+                updated_lines.append(new_line)
+                continue
+            updated_lines.append(line)
+        if updated_lines != lines:
+            write_root_file(path, "\n".join(updated_lines))
+            log(f"Updated deb822 apt sources in {path}")
 
 
 def parse_export_file(path: Path) -> dict:
@@ -2329,18 +2538,26 @@ def import_from_file(args: argparse.Namespace) -> None:
                 progress.update("Restoring apt sources...")
                 new_codename = get_codename()
                 sources_lines = []
+                existing_sources = active_apt_sources()
                 for src in data["apt_sources"]:
                     if args.update_sources:
                         src = rewrite_codename(src, data["codename"], new_codename)
+                    normalized = normalize_apt_source_line(src)
+                    if normalized in existing_sources:
+                        continue
                     sources_lines.append(src)
-                content = "\n".join(sources_lines) + "\n"
-                import_run(
-                    ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
-                    "write apt sources",
-                    input_text=content,
-                )
+                    existing_sources.add(normalized)
+                if sources_lines:
+                    content = "\n".join(sources_lines) + "\n"
+                    import_run(
+                        ["sudo", "tee", "/etc/apt/sources.list.d/distrodeck-import.list"],
+                        "write apt sources",
+                        input_text=content,
+                    )
+                else:
+                    log("No new apt sources to add; all entries already present.")
                 if args.update_sources:
-                    reenable_commented_apt_sources(data["codename"], new_codename)
+                    update_apt_sources_codename(data["codename"], new_codename)
 
             if wants("apt_manual") and data["apt_manual"] and cmd_exists("apt-get"):
                 progress.update("Installing apt packages...")
@@ -3693,7 +3910,12 @@ def build_parser() -> argparse.ArgumentParser:
     update_cmd.set_defaults(func=lambda _: run_update())
 
     upgrade_cmd = sub.add_parser("upgrade", help="Run distro upgrade")
-    upgrade_cmd.set_defaults(func=lambda _: run_upgrade())
+    upgrade_cmd.add_argument(
+        "--target-codename",
+        default=None,
+        help="Target codename for Debian upgrades (or set DISTRODECK_TARGET_CODENAME)",
+    )
+    upgrade_cmd.set_defaults(func=run_upgrade)
 
     security_cmd = sub.add_parser("security", help="Apply security upgrades")
     security_cmd.set_defaults(func=lambda _: run_security())

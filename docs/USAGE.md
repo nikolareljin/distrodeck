@@ -84,10 +84,14 @@ distrodeck update
 ### upgrade
 
 Run a distro upgrade. On Ubuntu this uses `do-release-upgrade`.
+On Debian you must specify the target codename (or set `DISTRODECK_TARGET_CODENAME`).
 
 ```
 distrodeck upgrade
 ```
+
+Options:
+- `--target-codename CODE`: target codename for Debian upgrades
 
 ### security
 

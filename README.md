@@ -63,6 +63,7 @@ distrodeck import --input backup.txt --apply-config-files
 distrodeck update
 
 distrodeck upgrade
+(On Debian, pass `--target-codename` or set `DISTRODECK_TARGET_CODENAME`.)
 
 distrodeck security
 
@@ -196,6 +197,7 @@ git
 ## Compatibility
 
 - Ubuntu: full support (apt, PPA, do-release-upgrade, snap, flatpak)
+- Debian: apt + snap/flatpak, upgrade via `apt-get full-upgrade` with target codename
 - Other Debian-based distros: apt + flatpak + snap (no `do-release-upgrade`)
 - Fedora/RHEL: export/import via `dnf` (no distro-upgrade automation)
 - Arch: export/import via `pacman` (no distro-upgrade automation)
