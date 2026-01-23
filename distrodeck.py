@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import configparser
 import os
 import re
 import shlex
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
-import time
-import signal
 import threading
-import base64
-import socket
+import time
 import shutil
-from urllib.parse import urlparse
-from shutil import get_terminal_size
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Set
 from glob import glob
+from pathlib import Path
+from shutil import get_terminal_size
+from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 VERSION = "0.4.0"
 VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
@@ -40,12 +41,18 @@ OFFICIAL_APT_HOSTS = {
         "archive.ubuntu.com",
         "security.ubuntu.com",
         "ports.ubuntu.com",
+        "old-releases.ubuntu.com",
         "esm.ubuntu.com",
+        "esm-infra.ubuntu.com",
+        "esm-apps.ubuntu.com",
     },
     "debian": {
         "deb.debian.org",
         "security.debian.org",
         "ftp.debian.org",
+        "archive.debian.org",
+        "cdn-fastly.deb.debian.org",
+        "snapshot.debian.org",
     },
 }
 
@@ -88,6 +95,59 @@ def fail(message: str) -> None:
     write_log("error", message)
     print(f"error: {message}", file=sys.stderr)
     sys.exit(1)
+
+
+def config_paths() -> List[Path]:
+    paths = []
+    config_home = os.getenv("XDG_CONFIG_HOME")
+    if config_home:
+        paths.append(Path(config_home) / "distrodeck" / "config.ini")
+    else:
+        paths.append(Path.home() / ".config" / "distrodeck" / "config.ini")
+    paths.append(Path("/etc/distrodeck/config.ini"))
+    return paths
+
+
+def load_config() -> configparser.ConfigParser:
+    cfg = configparser.ConfigParser()
+    for path in config_paths():
+        try:
+            if path.exists():
+                cfg.read(path, encoding="utf-8")
+        except (OSError, configparser.Error):
+            continue
+    return cfg
+
+
+def parse_csv_list(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    items: List[str] = []
+    for chunk in value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        for part in chunk.split():
+            if part:
+                items.append(part)
+    return items
+
+
+def get_official_apt_hosts(os_id: str) -> Set[str]:
+    default_hosts = set(OFFICIAL_APT_HOSTS.get(os_id, set()))
+    cfg = load_config()
+    if not cfg.has_section("apt"):
+        return default_hosts
+    override_key = f"official_hosts_{os_id}_override"
+    if cfg.has_option("apt", override_key):
+        override = {item.lower() for item in parse_csv_list(cfg.get("apt", override_key))}
+        return override
+    combined = set(default_hosts)
+    common = {item.lower() for item in parse_csv_list(cfg.get("apt", "official_hosts_common", fallback=""))}
+    specific = {item.lower() for item in parse_csv_list(cfg.get("apt", f"official_hosts_{os_id}", fallback=""))}
+    combined.update(common)
+    combined.update(specific)
+    return combined
 
 
 def run(
@@ -498,6 +558,7 @@ def repo_source_targets() -> List[Tuple[str, str]]:
     candidates = [
         ("Apt sources", "/etc/apt/sources.list"),
         ("Apt sources", "/etc/apt/sources.list.d/*.list"),
+        ("Apt sources (deb822)", "/etc/apt/sources.list.d/*.sources"),
         ("DNF/Yum repos", "/etc/yum.repos.d/*.repo"),
         ("Zypper repos", "/etc/zypp/repos.d/*.repo"),
         ("Pacman config", "/etc/pacman.conf"),
@@ -530,6 +591,15 @@ def apt_deb822_files() -> List[Path]:
     return [path for path in sorted(sources_dir.glob("*.sources")) if path.exists()]
 
 
+def distrodeck_config_targets() -> List[Tuple[str, str]]:
+    items: List[Tuple[str, str]] = []
+    for path in config_paths():
+        if path.exists():
+            label = "Distrodeck config (user)" if str(path).startswith(str(Path.home())) else "Distrodeck config (system)"
+            items.append((label, str(path)))
+    return items
+
+
 def run_config_edit_tui() -> None:
     log_action_start("config-edit")
     require_dialog()
@@ -540,6 +610,7 @@ def run_config_edit_tui() -> None:
             [
                 ("sources", "Repository sources"),
                 ("configs", "System configs"),
+                ("distrodeck", "Distrodeck config"),
                 ("custom", "Custom path..."),
                 ("back", "Back"),
             ],
@@ -571,6 +642,19 @@ def run_config_edit_tui() -> None:
             items = []
             for label, path in config_edit_targets():
                 items.append((path, label, "off"))
+            items.append(("back", "Back", "off"))
+            choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
+            if not choices or "back" in choices:
+                continue
+            for choice in choices:
+                edit_config_file(Path(choice))
+        elif section == "distrodeck":
+            items = []
+            for label, path in distrodeck_config_targets():
+                items.append((path, label, "off"))
+            if not items:
+                dialog_msgbox("Config Editor", "No distrodeck config file found.")
+                continue
             items.append(("back", "Back", "off"))
             choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
             if not choices or "back" in choices:
@@ -1331,7 +1415,7 @@ def is_official_apt_repo(uri: str, os_id: str) -> bool:
     host = parsed.netloc.lower()
     if not host:
         return False
-    for official in OFFICIAL_APT_HOSTS.get(os_id, set()):
+    for official in get_official_apt_hosts(os_id):
         if host == official or host.endswith(f".{official}"):
             return True
     return False

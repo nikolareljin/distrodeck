@@ -169,6 +169,8 @@ Edit common system config files or repository sources in a TUI editor (nginx/apa
 distrodeck config-edit
 ```
 
+Includes distrodeck config files if present (user and system).
+
 ### automate (TUI)
 
 Run an `ansible-pull` automation from the TUI, including auth prompts and playbook/inventory selection.
@@ -228,6 +230,23 @@ distrodeck install-tools --all  # installs all tools non-interactively
 - `wine` - Windows compatibility layer for running Windows applications
 - `tor` - Anonymous communication network with Tor Browser
 
+## Configuration
+
+Optional config file: `~/.config/distrodeck/config.ini` (or `/etc/distrodeck/config.ini`).
+
+Example:
+
+```
+[apt]
+official_hosts_common = mirrors.example.org
+official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
+official_hosts_debian = deb.debian.org, security.debian.org
+# To fully override defaults:
+# official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
+```
+
+Sample file: `examples/config.ini`.
+
 ### git-status
 
 Enable or disable git branch status in your shell prompt.
@@ -260,7 +279,7 @@ user@host ~/repo(main * 2↑)$
 [apt_manual]   # manually installed apt packages
 [apt_hold]     # held apt packages
 [ppas]         # Launchpad PPAs (ppa:user/name)
-[apt_sources]  # non-PPA apt sources
+[apt_sources]  # non-PPA apt sources (excluding official repos)
 [snap]         # snap packages with channel/classic info
 [flatpak]      # flatpak apps with remote info
 [pacman]       # pacman packages (Arch)
