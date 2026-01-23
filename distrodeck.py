@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 from glob import glob
 
-VERSION = "0.0.0"
+VERSION = "0.5.0"
 VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
 SHARE_VERSION_FILE = Path("/usr/share/distrodeck/VERSION")
 for path in (VERSION_FILE, SHARE_VERSION_FILE):
