@@ -3086,6 +3086,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dpr", "!gh pr create --fill", "create PR (requires gh)"),
         ("ds", "status -sb", "short status"),
         ("db", "branch -vv", "verbose branches"),
+        ("dbr", "branch -a", "all branches"),
         ("dd", "diff", "diff"),
         ("dds", "diff --staged", "diff staged"),
         ("dco", "checkout", "checkout"),

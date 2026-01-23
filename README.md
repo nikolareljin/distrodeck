@@ -96,6 +96,7 @@ Recommended git aliases (prefixed with `d`):
 - `git dpr` -> create PR (requires `gh`)
 - `git ds`  -> short status
 - `git db`  -> verbose branches
+- `git dbr` -> all branches (local + remote)
 - `git dd`  -> diff
 - `git dds` -> diff staged
 - `git dco` -> checkout
