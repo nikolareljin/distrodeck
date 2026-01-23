@@ -1,0 +1,25 @@
+# distrodeck export v1
+exported_at=2026-01-21T00:00:00Z
+distro_id=ubuntu
+codename=noble
+
+[apt_manual]
+curl
+
+[apt_hold]
+
+[ppas]
+
+[apt_sources]
+
+[snap]
+
+[flatpak]
+
+[pacman]
+
+[dnf]
+
+[zypper]
+
+[appimage]

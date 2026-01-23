@@ -1,0 +1,70 @@
+#!/usr/bin/expect -f
+set timeout 120
+cd /workspace
+spawn ./distrodeck
+expect {
+  -re {Select an action:} {}
+  timeout {exit 1}
+}
+# Move to Export (second item) and select it.
+send "\033[B"
+send "\r"
+
+# Output file
+expect {
+  -re {Output file:} {}
+  timeout {exit 1}
+}
+send "/workspace/.state/tui-export.txt"
+send "\r"
+
+# AppImage dirs
+expect {
+  -re {AppImage dirs} {}
+  timeout {exit 1}
+}
+send "\r"
+
+# Include user tools? -> No
+expect {
+  -re {Include user-level tools} {}
+  timeout {exit 1}
+}
+send "n\r"
+
+# Include config snapshot? -> No
+expect {
+  -re {Include system config snapshot} {}
+  timeout {exit 1}
+}
+send "n\r"
+
+# Include services? -> No
+expect {
+  -re {Include enabled/active services} {}
+  timeout {exit 1}
+}
+send "n\r"
+
+# Include config files? -> No
+expect {
+  -re {Include key config files} {}
+  timeout {exit 1}
+}
+send "n\r"
+
+# Wait for Done dialog
+expect {
+  -re {Done\.} {}
+  timeout {exit 1}
+}
+send "\r"
+
+# Back to menu, quit via End key
+expect {
+  -re {Select an action:} {}
+  timeout {exit 1}
+}
+send "\033[4~"
+send "\r"
+expect eof

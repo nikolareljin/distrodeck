@@ -11,12 +11,14 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 
 - Export installed packages and package sources (including PPAs)
 - Import and reinstall from the export file
+- Import makes an automatic backup and offers a revert prompt on failures
 - Update/upgrade system packages (uses Nala)
 - Trigger distro upgrades on Ubuntu
 - Apply security updates
 - Repair apt repo issues (disable broken sources, refresh keys)
 - Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
+- Install 56+ developer tools via TUI with uninstall support
 
 ## Install
 
@@ -49,6 +51,9 @@ distrodeck export --output backup.txt --include-services
 
 distrodeck export --output backup.txt --include-config-files
 
+Default exports are saved under `~/.local/state/distrodeck/exports` (or
+`$XDG_STATE_HOME/distrodeck/exports` when set).
+
 distrodeck import --input backup.txt --apply --update-sources
 
 distrodeck import --input backup.txt --apply-config
@@ -69,7 +74,13 @@ distrodeck preflight
 
 distrodeck logs
 
+distrodeck clear-logs
+
 distrodeck install-tools
+
+distrodeck git-status set
+
+distrodeck git-status unset
 
 distrodeck sysinfo
 
@@ -82,12 +93,47 @@ distrodeck  # use the TUI "Automate" action
 distrodeck install-tools --all
 ```
 
+### Install-tools categories
+
+The `install-tools` command offers 64 tools organized by category:
+
+| Category | Examples |
+|----------|----------|
+| `[Shell]` | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide |
+| `[Editor]` | mc, meld, micro, neovim, vscode |
+| `[System]` | bandwhich, duf, htop, ncdu |
+| `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
+| `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
+| `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
+| `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
+| `[Util]` | flatpak, ntfs-3g, wine |
+| `[App]` | gimp, streamcontroller |
+
+Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
+
+Example prompt segment after `git-status set`:
+
+```
+user@host ~/repo(main 2↑)$
+user@host ~/repo(main 3↓)$
+user@host ~/repo(main ≡)$
+user@host ~/repo(main 2↑1↓)$
+```
+
+Legend:
+- `≡` green: up to date with remote
+- `N↑` yellow: ahead by N commits
+- `N↓` red: behind by N commits
+- `A↑B↓` red: diverged (ahead by A, behind by B)
+- `*` yellow: local uncommitted changes
+
 ## Documentation
 
 - Usage guide: `docs/USAGE.md`
 - Man page: `docs/man/distrodeck.1` (regenerate with `make man`)
 - CI guide: `docs/CI.md`
 - Installer TUI: `scripts/install-tools-tui.sh`
+- Docker test runner: `scripts/test-docker.sh`
 
 ## Scripts
 

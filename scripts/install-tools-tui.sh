@@ -5,12 +5,95 @@
 # EXAMPLE: ./install-tools-tui.sh --all
 # ----------------------------------------------------
 set -euo pipefail
+# Tool installations are wrapped in subshells (see main loop) to isolate failures
+# while preserving -e for the rest of the script to catch unexpected errors.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_HELPERS_DIR="${SCRIPT_HELPERS_DIR:-${SCRIPT_DIR}/script-helpers}"
+
+# Check if script-helpers directory exists
+if [[ ! -d "$SCRIPT_HELPERS_DIR" ]]; then
+  # Prompt to run update.sh to fetch submodules
+  echo "The script-helpers directory is missing."
+  echo "Please run the update.sh script to initialize submodules:"
+  echo "  ./scripts/update.sh"
+  exit 1
+fi
+
 # shellcheck source=/dev/null
 source "${SCRIPT_HELPERS_DIR}/helpers.sh"
 shlib_import logging dialog
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback versions for GitHub release downloads
+# ─────────────────────────────────────────────────────────────────────────────
+# These versions are used when the GitHub API fails to return the latest release.
+# This can happen due to rate limiting, network issues, or API changes.
+#
+# MAINTENANCE: Update these periodically to recent stable versions.
+# Check each tool's GitHub releases page for current versions:
+#   - lazygit: https://github.com/jesseduffield/lazygit/releases
+#   - k9s:     https://github.com/derailed/k9s/releases
+#   - glow:    https://github.com/charmbracelet/glow/releases
+#   - delta:   https://github.com/dandavison/delta/releases
+#   - bfg:     https://github.com/rtyley/bfg-repo-cleaner/releases
+#
+# Last updated: 2025-01-22
+FALLBACK_VERSION_LAZYGIT="0.44.1"
+FALLBACK_VERSION_K9S="v0.50.18"
+FALLBACK_VERSION_GLOW="2.1.1"
+FALLBACK_VERSION_DELTA="0.18.2"
+FALLBACK_VERSION_BFG="1.15.0"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# State tracking for installed tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/distrodeck"
+INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+
+# Ensure state directory exists
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR"
+}
+
+# Load previously tracked installed tools into an associative array
+# Usage: declare -A tracked; load_tracked_tools tracked
+load_tracked_tools() {
+  local -n _tracked=$1
+  if [[ -f "$INSTALLED_TOOLS_FILE" ]]; then
+    while IFS= read -r tool; do
+      [[ -n "$tool" ]] && _tracked["$tool"]="true"
+    done < "$INSTALLED_TOOLS_FILE"
+  fi
+}
+
+# Save tracked installed tools from an array
+# Usage: save_tracked_tools "tool1" "tool2" ...
+save_tracked_tools() {
+  ensure_state_dir
+  printf "%s\n" "$@" > "$INSTALLED_TOOLS_FILE"
+}
+
+# Append a tool to the tracked list (if not already present)
+add_tracked_tool() {
+  ensure_state_dir
+  local tool="$1"
+  if ! grep -qx "$tool" "$INSTALLED_TOOLS_FILE" 2>/dev/null; then
+    echo "$tool" >> "$INSTALLED_TOOLS_FILE"
+  fi
+}
+
+# Remove a tool from the tracked list
+remove_tracked_tool() {
+  local tool="$1"
+  if [[ -f "$INSTALLED_TOOLS_FILE" ]]; then
+    local tmp_file
+    tmp_file="$(mktemp)"
+    grep -vx "$tool" "$INSTALLED_TOOLS_FILE" > "$tmp_file" || true
+    mv "$tmp_file" "$INSTALLED_TOOLS_FILE"
+  fi
+}
 
 detect_pkg_mgr() {
   if command -v apt-get >/dev/null 2>&1; then
@@ -29,10 +112,25 @@ detect_pkg_mgr() {
 install_pkg() {
   local mgr="$1"; shift
   case "$mgr" in
-    apt) sudo apt-get update && sudo apt-get install -y "$@";;
+    apt)
+      # Allow apt-get update to have some errors (e.g., broken PPAs) but still try to install
+      sudo apt-get update || log_warn "apt-get update had errors, attempting install anyway..."
+      sudo apt-get install -y "$@"
+      ;;
     dnf) sudo dnf install -y "$@";;
     pacman) sudo pacman -S --needed --noconfirm "$@";;
     zypper) sudo zypper install -y "$@";;
+    *) return 1;;
+  esac
+}
+
+uninstall_pkg() {
+  local mgr="$1"; shift
+  case "$mgr" in
+    apt) sudo apt-get remove -y "$@";;
+    dnf) sudo dnf remove -y "$@";;
+    pacman) sudo pacman -Rs --noconfirm "$@";;
+    zypper) sudo zypper remove -y "$@";;
     *) return 1;;
   esac
 }
@@ -192,26 +290,72 @@ install_micro() {
 install_node() {
   local mgr="$1"
   case "$mgr" in
-    apt) install_pkg "$mgr" nodejs npm;;
-    dnf|pacman|zypper) install_pkg "$mgr" nodejs npm;;
+    apt)
+      # Try system repo first (Ubuntu 22.04+ has Node 18+)
+      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
+        return
+      fi
+      # Fall back to NodeSource repository (manual setup, no piped scripts)
+      log_info "Adding NodeSource repository for Node.js 20.x..."
+      if ! command -v curl >/dev/null 2>&1; then
+        install_pkg "$mgr" curl ca-certificates gnupg || true
+      fi
+      sudo mkdir -p /etc/apt/keyrings
+      local keyring="/etc/apt/keyrings/nodesource.gpg"
+      local tmp_key
+      tmp_key="$(mktemp)"
+      if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$tmp_key"; then
+        sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null || \
+          cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"
+        rm -f "$tmp_key"
+        echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_20.x nodistro main" | \
+          sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+        sudo apt-get update || true
+        install_pkg "$mgr" nodejs
+      else
+        rm -f "$tmp_key"
+        log_warn "Failed to download NodeSource GPG key."
+      fi
+      ;;
+    dnf)
+      # Try system repo first (Fedora has recent Node.js)
+      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
+        return
+      fi
+      # Fall back to NodeSource repository (manual setup)
+      log_info "Adding NodeSource repository for Node.js 20.x..."
+      local keyring="/etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL"
+      local tmp_key
+      tmp_key="$(mktemp)"
+      if curl -fsSL https://rpm.nodesource.com/gpgkey/ns-operations-public.key -o "$tmp_key"; then
+        sudo cp "$tmp_key" "$keyring"
+        rm -f "$tmp_key"
+        cat << 'REPO' | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
+[nodesource-nodistro]
+name=Node.js Packages for Linux RPM based distros - x86_64
+baseurl=https://rpm.nodesource.com/pub_20.x/nodistro/x86_64
+priority=1
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL
+REPO
+        install_pkg "$mgr" nodejs
+      else
+        rm -f "$tmp_key"
+        log_warn "Failed to download NodeSource GPG key."
+      fi
+      ;;
+    pacman) install_pkg "$mgr" nodejs npm;;
+    zypper) install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm;;
     *) log_warn "Node install not supported for this distro.";;
   esac
 }
 
 install_lazygit() {
   local mgr="$1"
-  if [[ "$mgr" == "apt" ]]; then
-    if ! command -v add-apt-repository >/dev/null 2>&1; then
-      install_pkg "$mgr" software-properties-common || true
-    fi
-    if command -v add-apt-repository >/dev/null 2>&1; then
-      sudo add-apt-repository -y ppa:lazygit-team/release || true
-      sudo apt update || true
-      if sudo apt install -y lazygit; then
-        return
-      fi
-    fi
-  else
+
+  # For non-apt package managers, try native package first
+  if [[ "$mgr" != "apt" ]]; then
     if install_pkg "$mgr" lazygit; then
       return
     fi
@@ -219,6 +363,60 @@ install_lazygit() {
       return
     fi
   fi
+
+  # Primary method: Download from GitHub releases (most reliable)
+  if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+    local os arch url tmp_dir bin_path version api_url
+    os="$(uname -s)"
+    case "$os" in
+      Linux) os="Linux";;
+      Darwin) os="Darwin";;
+      *) log_warn "GitHub release lazygit install not supported for OS: $os";;
+    esac
+
+    if [[ "$os" == "Linux" || "$os" == "Darwin" ]]; then
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64|amd64) arch="x86_64";;
+        aarch64|arm64) arch="arm64";;
+        armv7l|armv7) arch="armv7";;
+        i386|i686) arch="386";;
+        *) log_warn "GitHub release lazygit install not supported for arch: $arch"; arch="";;
+      esac
+
+      if [[ -n "$arch" ]]; then
+        tmp_dir="$(mktemp -d)"
+        bin_path="$tmp_dir/lazygit"
+
+        # Get latest version from GitHub API
+        api_url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
+        if download_file "$api_url" "$tmp_dir/lazygit-release.json"; then
+          version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
+        fi
+        if [[ -z "$version" ]]; then
+          version="$FALLBACK_VERSION_LAZYGIT"
+        fi
+
+        url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
+        log_info "Downloading lazygit v${version} from GitHub releases..."
+
+        if download_file "$url" "$tmp_dir/lazygit.tar.gz"; then
+          if tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir"; then
+            if [[ -f "$bin_path" ]]; then
+              sudo install -m 0755 "$bin_path" /usr/local/bin/lazygit
+              log_info "Installed lazygit to /usr/local/bin/lazygit"
+              rm -rf "$tmp_dir"
+              return
+            fi
+          fi
+        fi
+        rm -rf "$tmp_dir"
+        log_warn "GitHub release download failed; trying alternative methods..."
+      fi
+    fi
+  fi
+
+  # Fallback: go install
   if ! command -v go >/dev/null 2>&1; then
     log_warn "Go is required for lazygit go-install fallback; installing Go..."
     install_go "$mgr" || true
@@ -230,61 +428,10 @@ install_lazygit() {
     if GOBIN="$GOBIN" go install github.com/jesseduffield/lazygit@latest; then
       return
     fi
-    log_warn "go install failed; falling back to release tarball."
+    log_warn "go install failed; trying snap..."
   fi
 
-  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-    log_warn "curl or wget is required for lazygit fallback download."
-    return
-  fi
-  local os arch url tmp_dir bin_path
-  os="$(uname -s)"
-  case "$os" in
-    Linux) os="Linux";;
-    Darwin) os="Darwin";;
-    *) log_warn "Fallback lazygit install not supported for OS: $os"; return;;
-  esac
-
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64|amd64) arch="x86_64";;
-    aarch64|arm64) arch="arm64";;
-    armv7l|armv7) arch="armv7";;
-    i386|i686) arch="386";;
-    *) log_warn "Fallback lazygit install not supported for arch: $arch"; return;;
-  esac
-
-  url="https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${os}_${arch}.tar.gz"
-  tmp_dir="$(mktemp -d)"
-  bin_path="$tmp_dir/lazygit"
-  if ! download_file "$url" "$tmp_dir/lazygit.tar.gz"; then
-    local version api_url
-    api_url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
-    if download_file "$api_url" "$tmp_dir/lazygit-release.json"; then
-      version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
-    fi
-    if [[ -n "$version" ]]; then
-      version="${version#v}"
-      url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
-      download_file "$url" "$tmp_dir/lazygit.tar.gz"
-    fi
-  fi
-  if [[ -f "$tmp_dir/lazygit.tar.gz" ]]; then
-    if tar -xzf "$tmp_dir/lazygit.tar.gz" -C "$tmp_dir"; then
-      if [[ -f "$bin_path" ]]; then
-        sudo install -m 0755 "$bin_path" /usr/local/bin/lazygit
-        log_info "Installed lazygit to /usr/local/bin/lazygit"
-      else
-        log_warn "Fallback lazygit install failed: binary not found in archive."
-      fi
-    else
-      log_warn "Fallback lazygit install failed: unable to extract archive."
-    fi
-  else
-    log_warn "Fallback lazygit install failed: download error."
-  fi
-  rm -rf "$tmp_dir"
-
+  # Last resort: snap
   if command -v snap >/dev/null 2>&1; then
     log_info "Installing lazygit via snap..."
     if sudo snap install lazygit; then
@@ -295,6 +442,8 @@ install_lazygit() {
     fi
     log_warn "Snap install failed for lazygit."
   fi
+
+  log_warn "All lazygit installation methods failed."
 }
 
 install_lazydocker() {
@@ -446,66 +595,879 @@ install_composer() {
   install_pkg "$1" composer || log_warn "Failed to install Composer from repos."
 }
 
+install_tldr() {
+  local mgr="$1"
+
+  # Try tealdeer (Rust-based, fast tldr client) first
+  case "$mgr" in
+    apt)
+      # tealdeer is available as 'tldr' in some Ubuntu versions
+      if install_pkg "$mgr" tldr 2>/dev/null; then
+        return
+      fi
+      ;;
+    dnf|pacman|zypper)
+      if install_pkg "$mgr" tealdeer 2>/dev/null || install_pkg "$mgr" tldr 2>/dev/null; then
+        return
+      fi
+      ;;
+  esac
+
+  # Fallback: install via cargo (tealdeer)
+  if command -v cargo >/dev/null 2>&1; then
+    log_info "Installing tealdeer (tldr) via cargo..."
+    if cargo install tealdeer; then
+      return
+    fi
+  fi
+
+  # Fallback: install via npm
+  if command -v npm >/dev/null 2>&1; then
+    log_info "Installing tldr via npm..."
+    if sudo npm install -g tldr; then
+      return
+    fi
+  fi
+
+  # Fallback: install via pip
+  if command -v pip3 >/dev/null 2>&1; then
+    log_info "Installing tldr via pip3..."
+    if pip3 install --user tldr; then
+      return
+    fi
+  fi
+
+  log_warn "Failed to install tldr. Install Node.js, Python pip, or Rust cargo for fallback methods."
+}
+
+install_bandwhich() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # bandwhich not in default repos, try cargo
+      if ! command -v cargo >/dev/null 2>&1; then
+        log_warn "cargo is required to install bandwhich; installing Rust..."
+        install_rust "$mgr" || true
+      fi
+      if command -v cargo >/dev/null 2>&1; then
+        cargo install bandwhich || log_warn "Failed to install bandwhich via cargo."
+      else
+        log_warn "cargo still missing; cannot install bandwhich."
+      fi
+      ;;
+    dnf) install_pkg "$mgr" bandwhich || log_warn "Failed to install bandwhich from repos.";;
+    pacman) install_pkg "$mgr" bandwhich;;
+    zypper)
+      if ! command -v cargo >/dev/null 2>&1; then
+        install_rust "$mgr" || true
+      fi
+      if command -v cargo >/dev/null 2>&1; then
+        cargo install bandwhich || log_warn "Failed to install bandwhich via cargo."
+      fi
+      ;;
+    *) log_warn "bandwhich install not supported for this distro.";;
+  esac
+}
+
+install_k9s() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # k9s not in default repos, download from GitHub
+      local version url tmp_dir arch os
+      tmp_dir="$(mktemp -d)"
+      os="Linux"
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64|amd64) arch="amd64";;
+        aarch64|arm64) arch="arm64";;
+        *) log_warn "k9s install not supported for arch: $arch"; return 1;;
+      esac
+      if download_file "https://api.github.com/repos/derailed/k9s/releases/latest" "$tmp_dir/release.json"; then
+        version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
+      fi
+      if [[ -z "$version" ]]; then
+        version="$FALLBACK_VERSION_K9S"
+      fi
+      url="https://github.com/derailed/k9s/releases/download/${version}/k9s_${os}_${arch}.tar.gz"
+      if download_file "$url" "$tmp_dir/k9s.tar.gz"; then
+        tar -xzf "$tmp_dir/k9s.tar.gz" -C "$tmp_dir"
+        sudo install -m 0755 "$tmp_dir/k9s" /usr/local/bin/k9s
+        log_info "Installed k9s to /usr/local/bin/k9s"
+      else
+        log_warn "Failed to download k9s."
+      fi
+      rm -rf "$tmp_dir"
+      ;;
+    dnf) install_pkg "$mgr" k9s || log_warn "Failed to install k9s from repos.";;
+    pacman) install_pkg "$mgr" k9s;;
+    zypper) install_pkg "$mgr" k9s || log_warn "Failed to install k9s from repos.";;
+    *) log_warn "k9s install not supported for this distro.";;
+  esac
+}
+
+install_podman() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" podman;;
+    dnf) install_pkg "$mgr" podman;;
+    pacman) install_pkg "$mgr" podman;;
+    zypper) install_pkg "$mgr" podman;;
+    *) log_warn "podman install not supported for this distro.";;
+  esac
+}
+
+install_tokei() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      if ! install_pkg "$mgr" tokei; then
+        if ! command -v cargo >/dev/null 2>&1; then
+          install_rust "$mgr" || true
+        fi
+        if command -v cargo >/dev/null 2>&1; then
+          cargo install tokei || log_warn "Failed to install tokei via cargo."
+        fi
+      fi
+      ;;
+    dnf) install_pkg "$mgr" tokei || log_warn "Failed to install tokei from repos.";;
+    pacman) install_pkg "$mgr" tokei;;
+    zypper)
+      if ! command -v cargo >/dev/null 2>&1; then
+        install_rust "$mgr" || true
+      fi
+      if command -v cargo >/dev/null 2>&1; then
+        cargo install tokei || log_warn "Failed to install tokei via cargo."
+      fi
+      ;;
+    *) log_warn "tokei install not supported for this distro.";;
+  esac
+}
+
+install_glow() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # glow not in default repos, download from GitHub
+      local version url tmp_dir arch
+      tmp_dir="$(mktemp -d)"
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64|amd64) arch="x86_64";;
+        aarch64|arm64) arch="arm64";;
+        i386|i686) arch="i386";;
+        *) log_warn "glow install not supported for arch: $arch"; return 1;;
+      esac
+      if download_file "https://api.github.com/repos/charmbracelet/glow/releases/latest" "$tmp_dir/release.json"; then
+        version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
+      fi
+      if [[ -z "$version" ]]; then
+        version="$FALLBACK_VERSION_GLOW"
+      fi
+      url="https://github.com/charmbracelet/glow/releases/download/v${version}/glow_${version}_Linux_${arch}.tar.gz"
+      if download_file "$url" "$tmp_dir/glow.tar.gz"; then
+        tar -xzf "$tmp_dir/glow.tar.gz" -C "$tmp_dir"
+        local glow_bin
+        glow_bin=$(find "$tmp_dir" -name "glow" -type f -executable 2>/dev/null | head -n1)
+        if [[ -z "$glow_bin" ]]; then
+          glow_bin=$(find "$tmp_dir" -name "glow" -type f 2>/dev/null | head -n1)
+        fi
+        if [[ -n "$glow_bin" ]]; then
+          sudo install -m 0755 "$glow_bin" /usr/local/bin/glow
+          log_info "Installed glow to /usr/local/bin/glow"
+        else
+          log_warn "glow binary not found in archive."
+        fi
+      else
+        log_warn "Failed to download glow."
+      fi
+      rm -rf "$tmp_dir"
+      ;;
+    dnf) install_pkg "$mgr" glow || log_warn "Failed to install glow from repos.";;
+    pacman) install_pkg "$mgr" glow;;
+    zypper) install_pkg "$mgr" glow || log_warn "Failed to install glow from repos.";;
+    *) log_warn "glow install not supported for this distro.";;
+  esac
+}
+
+install_delta() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # delta package is git-delta on some systems
+      if ! install_pkg "$mgr" git-delta; then
+        # Fallback: download from GitHub
+        local version url tmp_dir arch
+        tmp_dir="$(mktemp -d)"
+        arch="$(uname -m)"
+        case "$arch" in
+          x86_64|amd64) arch="x86_64-unknown-linux-gnu";;
+          aarch64|arm64) arch="aarch64-unknown-linux-gnu";;
+          i386|i686) arch="i686-unknown-linux-gnu";;
+          *) log_warn "delta install not supported for arch: $arch"; return 1;;
+        esac
+        if download_file "https://api.github.com/repos/dandavison/delta/releases/latest" "$tmp_dir/release.json"; then
+          version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
+        fi
+        if [[ -z "$version" ]]; then
+          version="$FALLBACK_VERSION_DELTA"
+        fi
+        url="https://github.com/dandavison/delta/releases/download/${version}/delta-${version}-${arch}.tar.gz"
+        if download_file "$url" "$tmp_dir/delta.tar.gz"; then
+          tar -xzf "$tmp_dir/delta.tar.gz" -C "$tmp_dir"
+          local delta_bin
+          delta_bin=$(find "$tmp_dir" -name "delta" -type f -executable | head -n1)
+          if [[ -n "$delta_bin" ]]; then
+            sudo install -m 0755 "$delta_bin" /usr/local/bin/delta
+            log_info "Installed delta to /usr/local/bin/delta"
+          fi
+        else
+          log_warn "Failed to download delta."
+        fi
+        rm -rf "$tmp_dir"
+      fi
+      ;;
+    dnf) install_pkg "$mgr" git-delta || log_warn "Failed to install delta from repos.";;
+    pacman) install_pkg "$mgr" git-delta;;
+    zypper) install_pkg "$mgr" git-delta || log_warn "Failed to install delta from repos.";;
+    *) log_warn "delta install not supported for this distro.";;
+  esac
+}
+
+install_meld() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" meld;;
+    dnf) install_pkg "$mgr" meld;;
+    pacman) install_pkg "$mgr" meld;;
+    zypper) install_pkg "$mgr" meld;;
+    *) log_warn "meld install not supported for this distro.";;
+  esac
+}
+
+install_ruby() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" ruby ruby-dev;;
+    dnf) install_pkg "$mgr" ruby ruby-devel;;
+    pacman) install_pkg "$mgr" ruby;;
+    zypper) install_pkg "$mgr" ruby ruby-devel;;
+    *) log_warn "ruby install not supported for this distro.";;
+  esac
+}
+
+install_flatpak() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" flatpak;;
+    dnf) install_pkg "$mgr" flatpak;;
+    pacman) install_pkg "$mgr" flatpak;;
+    zypper) install_pkg "$mgr" flatpak;;
+    *) log_warn "flatpak install not supported for this distro.";;
+  esac
+  # Add Flathub repository if flatpak is installed
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
+  fi
+}
+
+install_wine() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Enable 32-bit architecture for wine32
+      sudo dpkg --add-architecture i386 || true
+      sudo apt-get update || true
+      install_pkg "$mgr" wine wine64 wine32 || install_pkg "$mgr" wine
+      ;;
+    dnf) install_pkg "$mgr" wine;;
+    pacman) install_pkg "$mgr" wine wine-mono wine-gecko;;
+    zypper) install_pkg "$mgr" wine;;
+    *) log_warn "wine install not supported for this distro.";;
+  esac
+}
+
+install_tor() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Install tor and torbrowser-launcher
+      install_pkg "$mgr" tor torbrowser-launcher || install_pkg "$mgr" tor
+      ;;
+    dnf) install_pkg "$mgr" tor;;
+    pacman) install_pkg "$mgr" tor torbrowser-launcher || install_pkg "$mgr" tor;;
+    zypper) install_pkg "$mgr" tor;;
+    *) log_warn "tor install not supported for this distro.";;
+  esac
+}
+
+install_ntfs() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) install_pkg "$mgr" ntfs-3g;;
+    dnf) install_pkg "$mgr" ntfs-3g;;
+    pacman) install_pkg "$mgr" ntfs-3g;;
+    zypper) install_pkg "$mgr" ntfs-3g;;
+    *) log_warn "ntfs-3g install not supported for this distro.";;
+  esac
+}
+
+install_streamcontroller() {
+  # StreamController is installed via Flatpak
+  if ! command -v flatpak >/dev/null 2>&1; then
+    log_warn "Flatpak is required for StreamController; installing flatpak..."
+    install_flatpak "$1" || true
+  fi
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak install -y flathub com.core447.StreamController || log_warn "Failed to install StreamController via Flatpak."
+  else
+    log_warn "Flatpak still missing; cannot install StreamController."
+  fi
+}
+
+install_gimp() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Install GIMP with plugins including export-to-web
+      install_pkg "$mgr" gimp gimp-plugin-registry gimp-data-extras || install_pkg "$mgr" gimp
+      ;;
+    dnf) install_pkg "$mgr" gimp gimp-data-extras || install_pkg "$mgr" gimp;;
+    pacman) install_pkg "$mgr" gimp;;
+    zypper) install_pkg "$mgr" gimp;;
+    *) log_warn "gimp install not supported for this distro.";;
+  esac
+}
+
+install_gh() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      # Add GitHub CLI official repo for apt
+      if ! command -v gh >/dev/null 2>&1; then
+        # Ensure wget is available
+        if ! command -v wget >/dev/null 2>&1; then
+          if ! install_pkg "$mgr" wget; then
+            log_warn "Failed to install wget for gh CLI setup."
+            return 1
+          fi
+        fi
+
+        # Create keyrings directory
+        if ! sudo mkdir -p -m 755 /etc/apt/keyrings; then
+          log_warn "Failed to create /etc/apt/keyrings directory."
+          return 1
+        fi
+
+        # Download GPG key
+        local tmp_key
+        tmp_key="$(mktemp)"
+        if ! wget -nv -O "$tmp_key" https://cli.github.com/packages/githubcli-archive-keyring.gpg; then
+          log_warn "Failed to download GitHub CLI GPG key."
+          rm -f "$tmp_key"
+          return 1
+        fi
+
+        # Install GPG key
+        if ! sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg < "$tmp_key" > /dev/null; then
+          log_warn "Failed to install GitHub CLI GPG key."
+          rm -f "$tmp_key"
+          return 1
+        fi
+        rm -f "$tmp_key"
+        sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+        # Add repository
+        local arch
+        arch="$(dpkg --print-architecture)"
+        echo "deb [arch=$arch signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+          sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+        # Update and install
+        sudo apt-get update || true
+        install_pkg "$mgr" gh
+      fi
+      ;;
+    dnf)
+      sudo dnf install -y 'dnf-command(config-manager)' || true
+      sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo || true
+      install_pkg "$mgr" gh
+      ;;
+    pacman)
+      install_pkg "$mgr" github-cli
+      ;;
+    zypper)
+      sudo zypper addrepo https://cli.github.com/packages/rpm/gh-cli.repo || true
+      sudo zypper ref || true
+      install_pkg "$mgr" gh
+      ;;
+    *)
+      log_warn "gh CLI install not supported for this distro."
+      ;;
+  esac
+}
+
+install_bfg() {
+  local mgr="$1"
+  # Try package manager first
+  case "$mgr" in
+    apt)
+      if install_pkg "$mgr" bfg; then
+        return 0
+      fi
+      ;;
+    pacman)
+      if install_pkg "$mgr" bfg; then
+        return 0
+      fi
+      ;;
+  esac
+
+  # Fallback: download JAR directly
+  if ! command -v java >/dev/null 2>&1; then
+    log_warn "Java is required for BFG; installing Java..."
+    install_java "$mgr" || true
+  fi
+  if ! command -v java >/dev/null 2>&1; then
+    log_warn "Java still missing; cannot install BFG."
+    return 1
+  fi
+
+  local version url tmp_dir jar_path
+  local install_dir="/usr/local/lib/bfg"
+  local bin_path="/usr/local/bin/bfg"
+
+  # Get latest version from GitHub API
+  tmp_dir="$(mktemp -d)"
+  if download_file "https://api.github.com/repos/rtyley/bfg-repo-cleaner/releases/latest" "$tmp_dir/release.json"; then
+    version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
+  fi
+  if [[ -z "$version" ]]; then
+    version="$FALLBACK_VERSION_BFG"
+  fi
+
+  url="https://repo1.maven.org/maven2/com/madgag/bfg/${version}/bfg-${version}.jar"
+  jar_path="$tmp_dir/bfg.jar"
+
+  if download_file "$url" "$jar_path"; then
+    sudo mkdir -p "$install_dir"
+    if ! sudo cp "$jar_path" "$install_dir/bfg.jar"; then
+      log_warn "Failed to copy BFG JAR to $install_dir."
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    # Verify JAR was installed before creating wrapper
+    if [[ ! -f "$install_dir/bfg.jar" ]]; then
+      log_warn "BFG JAR not found at $install_dir/bfg.jar after copy."
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    # Create wrapper script
+    sudo tee "$bin_path" > /dev/null << 'WRAPPER'
+#!/bin/sh
+exec java -jar /usr/local/lib/bfg/bfg.jar "$@"
+WRAPPER
+    sudo chmod +x "$bin_path"
+    log_info "Installed BFG to $bin_path"
+  else
+    log_warn "Failed to download BFG JAR."
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  rm -rf "$tmp_dir"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Uninstall functions for tools that need special handling
+# ─────────────────────────────────────────────────────────────────────────────
+
+uninstall_pkg_simple() {
+  uninstall_pkg "$1" "$2" || log_warn "Failed to uninstall $2 from repos."
+}
+
+uninstall_docker() {
+  local mgr="$1"
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl disable --now docker || true
+  fi
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" docker.io;;
+    dnf|pacman|zypper) uninstall_pkg "$mgr" docker;;
+    *) log_warn "Docker uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_fd() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" fd-find;;
+    dnf|pacman|zypper) uninstall_pkg "$mgr" fd;;
+    *) log_warn "fd uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_adb() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" android-tools-adb;;
+    dnf|pacman|zypper) uninstall_pkg "$mgr" android-tools;;
+    *) log_warn "adb uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_build_tools() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" build-essential;;
+    dnf) uninstall_pkg "$mgr" gcc gcc-c++ make;;
+    pacman) uninstall_pkg "$mgr" base-devel;;
+    zypper) uninstall_pkg "$mgr" gcc gcc-c++ make;;
+    *) log_warn "Build tools uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_node() {
+  local mgr="$1"
+  case "$mgr" in
+    apt|dnf|pacman|zypper) uninstall_pkg "$mgr" nodejs npm;;
+    *) log_warn "Node uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_java() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" default-jdk;;
+    dnf) uninstall_pkg "$mgr" java-17-openjdk-devel;;
+    pacman) uninstall_pkg "$mgr" jdk-openjdk;;
+    zypper) uninstall_pkg "$mgr" java-17-openjdk;;
+    *) log_warn "Java uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_rust() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" rustc cargo;;
+    dnf) uninstall_pkg "$mgr" rust cargo;;
+    pacman) uninstall_pkg "$mgr" rust;;
+    zypper) uninstall_pkg "$mgr" rust cargo;;
+    *) log_warn "Rust uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_go() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" golang;;
+    dnf) uninstall_pkg "$mgr" golang;;
+    pacman) uninstall_pkg "$mgr" go;;
+    zypper) uninstall_pkg "$mgr" go;;
+    *) log_warn "Go uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_vscode() {
+  if command -v snap >/dev/null 2>&1; then
+    sudo snap remove code || true
+    return
+  fi
+  local mgr="$1"
+  uninstall_pkg "$mgr" code || log_warn "Failed to uninstall VS Code."
+}
+
+uninstall_lazygit() {
+  local mgr="$1"
+  # Try package manager first
+  if [[ "$mgr" == "apt" ]]; then
+    uninstall_pkg "$mgr" lazygit || true
+  else
+    uninstall_pkg "$mgr" lazygit || uninstall_pkg "$mgr" lazygit-gm || true
+  fi
+  # Remove go install version
+  rm -f "$HOME/.local/bin/lazygit" 2>/dev/null || true
+  # Remove manual install version
+  sudo rm -f /usr/local/bin/lazygit 2>/dev/null || true
+  # Try snap removal
+  if command -v snap >/dev/null 2>&1; then
+    sudo snap remove lazygit 2>/dev/null || true
+    sudo snap remove lazygit-gm 2>/dev/null || true
+  fi
+}
+
+uninstall_lazydocker() {
+  local mgr="$1"
+  uninstall_pkg "$mgr" lazydocker || true
+  # Remove manual install version
+  rm -f "$HOME/.local/bin/lazydocker" 2>/dev/null || true
+  sudo rm -f /usr/local/bin/lazydocker 2>/dev/null || true
+}
+
+uninstall_image_view() {
+  # Installed via cargo
+  if command -v cargo >/dev/null 2>&1; then
+    cargo uninstall image-view 2>/dev/null || true
+  fi
+  rm -f "$HOME/.cargo/bin/image-view" 2>/dev/null || true
+}
+
+uninstall_isoforge() {
+  local mgr="$1"
+  if dpkg -s isoforge >/dev/null 2>&1; then
+    sudo dpkg -r isoforge || true
+  fi
+  uninstall_pkg "$mgr" isoforge || true
+}
+
+uninstall_bfg() {
+  local mgr="$1"
+  # Try package manager first
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" bfg || true;;
+    pacman) uninstall_pkg "$mgr" bfg || true;;
+  esac
+  # Remove manual install version
+  sudo rm -f /usr/local/bin/bfg 2>/dev/null || true
+  sudo rm -rf /usr/local/lib/bfg 2>/dev/null || true
+}
+
+uninstall_gh() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      uninstall_pkg "$mgr" gh || true
+      # Optionally remove the repo
+      sudo rm -f /etc/apt/sources.list.d/github-cli.list 2>/dev/null || true
+      sudo rm -f /etc/apt/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || true
+      ;;
+    dnf|zypper)
+      uninstall_pkg "$mgr" gh || true
+      ;;
+    pacman)
+      uninstall_pkg "$mgr" github-cli || true
+      ;;
+    *)
+      log_warn "gh CLI uninstall not supported for this distro."
+      ;;
+  esac
+}
+
+uninstall_tldr() {
+  local mgr="$1"
+  # Try package manager
+  uninstall_pkg "$mgr" tldr 2>/dev/null || true
+  uninstall_pkg "$mgr" tealdeer 2>/dev/null || true
+  # Remove cargo install version
+  rm -f "$HOME/.cargo/bin/tldr" 2>/dev/null || true
+  # Remove npm global install
+  if command -v npm >/dev/null 2>&1; then
+    sudo npm uninstall -g tldr 2>/dev/null || true
+  fi
+  # Remove pip install version
+  if command -v pip3 >/dev/null 2>&1; then
+    pip3 uninstall -y tldr 2>/dev/null || true
+  fi
+}
+
+uninstall_bandwhich() {
+  local mgr="$1"
+  uninstall_pkg "$mgr" bandwhich || true
+  # Remove cargo install version
+  rm -f "$HOME/.cargo/bin/bandwhich" 2>/dev/null || true
+}
+
+uninstall_k9s() {
+  local mgr="$1"
+  uninstall_pkg "$mgr" k9s || true
+  # Remove manual install version
+  sudo rm -f /usr/local/bin/k9s 2>/dev/null || true
+}
+
+uninstall_podman() {
+  uninstall_pkg "$1" podman || log_warn "Failed to uninstall podman."
+}
+
+uninstall_tokei() {
+  local mgr="$1"
+  uninstall_pkg "$mgr" tokei || true
+  # Remove cargo install version
+  rm -f "$HOME/.cargo/bin/tokei" 2>/dev/null || true
+}
+
+uninstall_glow() {
+  local mgr="$1"
+  uninstall_pkg "$mgr" glow || true
+  # Remove manual install version
+  sudo rm -f /usr/local/bin/glow 2>/dev/null || true
+}
+
+uninstall_delta() {
+  local mgr="$1"
+  uninstall_pkg "$mgr" git-delta || true
+  # Remove manual install version
+  sudo rm -f /usr/local/bin/delta 2>/dev/null || true
+}
+
+uninstall_meld() {
+  uninstall_pkg "$1" meld || log_warn "Failed to uninstall meld."
+}
+
+uninstall_ruby() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" ruby ruby-dev || true;;
+    dnf) uninstall_pkg "$mgr" ruby ruby-devel || true;;
+    pacman) uninstall_pkg "$mgr" ruby || true;;
+    zypper) uninstall_pkg "$mgr" ruby ruby-devel || true;;
+  esac
+}
+
+uninstall_flatpak() {
+  uninstall_pkg "$1" flatpak || log_warn "Failed to uninstall flatpak."
+}
+
+uninstall_wine() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" wine wine64 wine32 || uninstall_pkg "$mgr" wine || true;;
+    dnf|pacman|zypper) uninstall_pkg "$mgr" wine || true;;
+  esac
+}
+
+uninstall_tor() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" tor torbrowser-launcher || uninstall_pkg "$mgr" tor || true;;
+    dnf|zypper) uninstall_pkg "$mgr" tor || true;;
+    pacman) uninstall_pkg "$mgr" tor torbrowser-launcher || uninstall_pkg "$mgr" tor || true;;
+  esac
+}
+
+uninstall_ntfs() {
+  uninstall_pkg "$1" ntfs-3g || log_warn "Failed to uninstall ntfs-3g."
+}
+
+uninstall_streamcontroller() {
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak uninstall -y com.core447.StreamController || log_warn "Failed to uninstall StreamController via Flatpak."
+  fi
+}
+
+uninstall_gimp() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" gimp gimp-plugin-registry gimp-data-extras || uninstall_pkg "$mgr" gimp || true;;
+    dnf) uninstall_pkg "$mgr" gimp gimp-data-extras || uninstall_pkg "$mgr" gimp || true;;
+    pacman|zypper) uninstall_pkg "$mgr" gimp || true;;
+  esac
+}
+
+uninstall_bind_tools() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" dnsutils;;
+    dnf|pacman|zypper) uninstall_pkg "$mgr" bind-tools;;
+    *) log_warn "bind-tools uninstall not supported for this distro.";;
+  esac
+}
+
+uninstall_cron() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" cron;;
+    dnf|pacman) uninstall_pkg "$mgr" cronie;;
+    zypper) uninstall_pkg "$mgr" cron;;
+    *) log_warn "cron uninstall not supported for this distro.";;
+  esac
+}
+
 tool_desc() {
   case "$1" in
-    bat) echo "bat (cat alternative)";;
-    curl) echo "curl";;
-    eza) echo "eza (ls alternative)";;
-    fd) echo "fd (find alternative)";;
-    fzf) echo "fzf (fuzzy finder)";;
-    git) echo "git";;
-    ansible) echo "Ansible (ansible-pull)";;
-    adb) echo "adb (Android Debug Bridge)";;
-    git-lfs) echo "git-lfs";;
-    jq) echo "jq (JSON CLI)";;
-    ripgrep) echo "ripgrep (rg)";;
-    tree) echo "tree";;
-    wget) echo "wget";;
-    yq) echo "yq (YAML CLI)";;
-    zoxide) echo "zoxide (smart cd)";;
-    starship) echo "starship prompt";;
-    tmux) echo "tmux";;
-    zsh) echo "zsh";;
-    duf) echo "duf (disk space)";;
-    htop) echo "htop";;
-    ncdu) echo "ncdu (disk usage)";;
-    build-tools) echo "build-essential / toolchain";;
-    go) echo "Go";;
-    java) echo "Java (JDK)";;
-    php) echo "PHP";;
-    composer) echo "Composer (PHP)";;
-    micro) echo "micro editor";;
-    neovim) echo "Neovim";;
-    node) echo "Node.js + npm";;
-    rust) echo "Rust (rustc/cargo)";;
-    dialog) echo "dialog (TUI)";;
-    docker) echo "Docker Engine";;
-    lazydocker) echo "LazyDocker";;
-    lazygit) echo "LazyGit";;
-    nala) echo "Nala (apt UI)";;
-    vscode) echo "VS Code (code)";;
-    isoforge) echo "Isoforge (burn-iso)";;
-    image-view) echo "image-view (Rust image viewer)";;
-    lm-sensors) echo "lm-sensors (hardware sensors)";;
-    usbutils) echo "usbutils (lsusb)";;
-    pciutils) echo "pciutils (lspci)";;
-    borgbackup) echo "borgbackup";;
-    duplicity) echo "duplicity";;
-    fdupes) echo "fdupes";;
-    lz4) echo "lz4";;
-    tar) echo "tar";;
-    unzip) echo "unzip";;
-    mc) echo "mc (Midnight Commander)";;
-    nmap) echo "nmap";;
-    iperf3) echo "iperf3";;
-    mtr) echo "mtr";;
-    net-tools) echo "net-tools";;
-    tcpdump) echo "tcpdump";;
-    traceroute) echo "traceroute";;
-    bind-tools) echo "bind-tools (dig/nslookup)";;
-    screen) echo "screen";;
-    cron) echo "cron";;
-    ufw) echo "ufw firewall";;
+    # ── Shell & CLI ──
+    bat) echo "[Shell] bat - cat with syntax highlighting";;
+    eza) echo "[Shell] eza - modern ls replacement";;
+    fd) echo "[Shell] fd - fast find alternative";;
+    fzf) echo "[Shell] fzf - fuzzy finder";;
+    glow) echo "[Shell] glow - terminal markdown viewer";;
+    jq) echo "[Shell] jq - JSON processor";;
+    ripgrep) echo "[Shell] ripgrep (rg) - fast grep";;
+    tldr) echo "[Shell] tldr - simplified man pages";;
+    tree) echo "[Shell] tree - directory listing";;
+    yq) echo "[Shell] yq - YAML processor";;
+    zoxide) echo "[Shell] zoxide - smart cd command";;
+    zsh) echo "[Shell] zsh - Z shell";;
+    # ── Editors & Terminal ──
+    mc) echo "[Editor] mc - Midnight Commander";;
+    meld) echo "[Editor] Meld - visual diff/merge tool";;
+    micro) echo "[Editor] micro - terminal text editor";;
+    neovim) echo "[Editor] Neovim - vim fork";;
+    screen) echo "[Term] screen - terminal multiplexer";;
+    tmux) echo "[Term] tmux - terminal multiplexer";;
+    vscode) echo "[Editor] VS Code";;
+    # ── System & Monitoring ──
+    bandwhich) echo "[System] bandwhich - bandwidth by process";;
+    cron) echo "[System] cron - task scheduler";;
+    duf) echo "[System] duf - disk usage viewer";;
+    htop) echo "[System] htop - process viewer";;
+    lm-sensors) echo "[System] lm-sensors - hardware sensors";;
+    ncdu) echo "[System] ncdu - disk usage analyzer";;
+    pciutils) echo "[System] pciutils - lspci";;
+    usbutils) echo "[System] usbutils - lsusb";;
+    # ── Networking ──
+    bind-tools) echo "[Net] bind-tools - dig/nslookup";;
+    curl) echo "[Net] curl - HTTP client";;
+    iperf3) echo "[Net] iperf3 - network benchmark";;
+    mtr) echo "[Net] mtr - traceroute + ping";;
+    net-tools) echo "[Net] net-tools - ifconfig/netstat";;
+    nmap) echo "[Net] nmap - network scanner";;
+    tcpdump) echo "[Net] tcpdump - packet analyzer";;
+    traceroute) echo "[Net] traceroute";;
+    wget) echo "[Net] wget - file downloader";;
+    ufw) echo "[Net] ufw - firewall";;
+    # ── Backup & Storage ──
+    borgbackup) echo "[Backup] borgbackup - deduplicating backup";;
+    duplicity) echo "[Backup] duplicity - encrypted backup";;
+    fdupes) echo "[Backup] fdupes - find duplicate files";;
+    lz4) echo "[Backup] lz4 - fast compression";;
+    tar) echo "[Backup] tar - archiver";;
+    unzip) echo "[Backup] unzip - ZIP extractor";;
+    # ── Development ──
+    bfg) echo "[Dev] BFG - git repo cleaner";;
+    build-tools) echo "[Dev] build-essential / toolchain";;
+    composer) echo "[Dev] Composer - PHP package manager";;
+    delta) echo "[Dev] delta - better git diff";;
+    gh) echo "[Dev] GitHub CLI";;
+    git) echo "[Dev] git - version control";;
+    git-lfs) echo "[Dev] git-lfs - large file storage";;
+    lazygit) echo "[Dev] LazyGit - git TUI";;
+    tokei) echo "[Dev] tokei - code statistics";;
+    # ── Languages & Runtimes ──
+    go) echo "[Lang] Go";;
+    java) echo "[Lang] Java (JDK)";;
+    node) echo "[Lang] Node.js 20 LTS";;
+    php) echo "[Lang] PHP";;
+    ruby) echo "[Lang] Ruby";;
+    rust) echo "[Lang] Rust (rustc/cargo)";;
+    # ── DevOps & Containers ──
+    ansible) echo "[DevOps] Ansible";;
+    docker) echo "[DevOps] Docker Engine";;
+    k9s) echo "[DevOps] k9s - Kubernetes TUI";;
+    lazydocker) echo "[DevOps] LazyDocker - docker TUI";;
+    podman) echo "[DevOps] Podman - container engine";;
+    # ── Utilities ──
+    adb) echo "[Util] adb - Android Debug Bridge";;
+    dialog) echo "[Util] dialog - TUI dialogs";;
+    flatpak) echo "[Util] Flatpak - app packaging";;
+    nala) echo "[Util] Nala - prettier apt";;
+    ntfs) echo "[Util] ntfs-3g - NTFS filesystem";;
+    wine) echo "[Util] Wine - Windows compatibility";;
+    # ── Networking ── (additional)
+    tor) echo "[Net] Tor - anonymous browsing";;
+    # ── Apps ──
+    gimp) echo "[App] GIMP - image editor";;
+    image-view) echo "[App] image-view - terminal image viewer";;
+    isoforge) echo "[App] Isoforge - ISO burner";;
+    streamcontroller) echo "[App] StreamController - Stream Deck";;
     *) echo "$1";;
   esac
 }
@@ -570,6 +1532,23 @@ is_installed_tool() {
     screen) command -v screen >/dev/null 2>&1;;
     cron) command -v crontab >/dev/null 2>&1;;
     ufw) command -v ufw >/dev/null 2>&1;;
+    bfg) command -v bfg >/dev/null 2>&1;;
+    gh) command -v gh >/dev/null 2>&1;;
+    tldr) command -v tldr >/dev/null 2>&1;;
+    bandwhich) command -v bandwhich >/dev/null 2>&1;;
+    k9s) command -v k9s >/dev/null 2>&1;;
+    podman) command -v podman >/dev/null 2>&1;;
+    tokei) command -v tokei >/dev/null 2>&1;;
+    glow) command -v glow >/dev/null 2>&1;;
+    delta) command -v delta >/dev/null 2>&1;;
+    meld) command -v meld >/dev/null 2>&1;;
+    ruby) command -v ruby >/dev/null 2>&1;;
+    flatpak) command -v flatpak >/dev/null 2>&1;;
+    wine) command -v wine >/dev/null 2>&1;;
+    tor) command -v tor >/dev/null 2>&1;;
+    ntfs) command -v ntfs-3g >/dev/null 2>&1 || command -v mount.ntfs-3g >/dev/null 2>&1;;
+    streamcontroller) command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.core447.StreamController";;
+    gimp) command -v gimp >/dev/null 2>&1;;
     *) return 1;;
   esac
 }
@@ -589,24 +1568,32 @@ main() {
     all=true
   fi
 
+  # Load previously tracked tools (installed via distrodeck)
+  declare -A tracked=()
+  load_tracked_tools tracked
+
   declare -A installed=()
   local tools=(
-    # Shell UX
-    bat eza fd fzf jq ripgrep tree yq zoxide
-    # Editors/terminal
-    mc micro neovim screen tmux zsh
-    # System/monitoring
-    cron duf htop lm-sensors ncdu pciutils usbutils
-    # Networking
-    bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget
-    # Storage/backup
+    # ── Shell & CLI ──
+    bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh
+    # ── Editors & Terminal ──
+    mc meld micro neovim screen tmux vscode
+    # ── System & Monitoring ──
+    bandwhich cron duf htop lm-sensors ncdu pciutils usbutils
+    # ── Networking ──
+    bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget
+    # ── Backup & Storage ──
     borgbackup duplicity fdupes lz4 tar unzip
-    # Dev/tooling
-    build-tools composer git ansible adb git-lfs go java node php rust
-    # Containers/tools
-    dialog docker lazydocker lazygit nala ufw vscode
-    # Apps
-    image-view isoforge
+    # ── Development ──
+    bfg build-tools composer delta gh git git-lfs lazygit tokei
+    # ── Languages & Runtimes ──
+    go java node php ruby rust
+    # ── DevOps & Containers ──
+    ansible docker k9s lazydocker podman
+    # ── Utilities ──
+    adb dialog flatpak nala ntfs wine
+    # ── Apps ──
+    gimp image-view isoforge streamcontroller
   )
 
   for tool in "${tools[@]}"; do
@@ -638,24 +1625,75 @@ main() {
     (( list_height < 10 )) && list_height=10
     selected=$(dialog --stdout --title "Distrodeck Installer" \
       --scrollbar \
-      --checklist "Select tools to install:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
-      "${items[@]}")
+      --checklist "Select tools to install/keep:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
+      "${items[@]}") || true  # User may cancel/escape
+    # Clear the screen after dialog closes before showing installation output
+    clear
   else
-    selected="bat eza fd fzf jq ripgrep tree yq zoxide mc micro neovim screen tmux zsh cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump traceroute wget borgbackup duplicity fdupes lz4 tar unzip build-tools composer git ansible adb git-lfs go java node php rust dialog docker lazydocker lazygit nala ufw vscode image-view isoforge"
+    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge streamcontroller"
   fi
 
-  if [[ -z "$selected" ]]; then
+  # Build set of selected tools
+  declare -A selected_set=()
+  if [[ -n "$selected" ]]; then
+    IFS=' ' read -r -a choices_arr <<< "$selected"
+    for choice in "${choices_arr[@]}"; do
+      choice="${choice//\"/}"
+      selected_set["$choice"]="true"
+    done
+  fi
+
+  # Find tools to uninstall: tracked + currently installed + NOT selected
+  local to_uninstall=()
+  for tool in "${tools[@]}"; do
+    if [[ "${tracked[$tool]:-}" == "true" ]] && \
+       [[ "${installed[$tool]:-}" == "true" ]] && \
+       [[ "${selected_set[$tool]:-}" != "true" ]]; then
+      to_uninstall+=("$tool")
+    fi
+  done
+
+  # Prompt user about uninstalling unchecked tools
+  local do_uninstall=false
+  if [[ ${#to_uninstall[@]} -gt 0 ]] && ! $all; then
+    local uninstall_list=""
+    for tool in "${to_uninstall[@]}"; do
+      uninstall_list+="  - $(tool_desc "$tool")\n"
+    done
+    if dialog --stdout --title "Uninstall Tools" \
+        --yesno "The following tools were unchecked and are currently installed:\n\n${uninstall_list}\nDo you want to uninstall these tools?" \
+        "$DIALOG_HEIGHT" "$DIALOG_WIDTH"; then
+      do_uninstall=true
+    fi
+    # Clear after uninstall dialog closes
+    clear
+  fi
+
+  # If no selections and no uninstalls, exit
+  if [[ -z "$selected" ]] && [[ "$do_uninstall" != "true" ]]; then
     log_warn "No selections made."
     exit 0
   fi
 
-  IFS=' ' read -r -a choices <<< "$selected"
-  for choice in "${choices[@]}"; do
-    choice="${choice//\"/}"
-    if [[ "${installed[$choice]}" == "true" ]]; then
+  # Track installation/uninstallation results
+  local failed_installs=()
+  local failed_uninstalls=()
+  local successful_installs=()
+  local successful_uninstalls=()
+  local already_installed=()
+
+  # Install selected tools
+  for choice in "${!selected_set[@]}"; do
+    if [[ "${installed[$choice]:-}" == "true" ]]; then
       log_info "Already installed: $choice"
+      # Track it if not already tracked
+      add_tracked_tool "$choice"
+      already_installed+=("$choice")
       continue
     fi
+    log_info "Installing: $choice"
+    # Run installation in subshell to catch errors without exiting
+    if (
     case "$choice" in
       ripgrep) install_ripgrep "$mgr";;
       fd) install_fd "$mgr";;
@@ -677,6 +1715,16 @@ main() {
       ncdu) install_ncdu "$mgr";;
       duf) install_duf "$mgr";;
       tree) install_tree "$mgr";;
+      bfg) install_bfg "$mgr";;
+      gh) install_gh "$mgr";;
+      tldr) install_tldr "$mgr";;
+      bandwhich) install_bandwhich "$mgr";;
+      k9s) install_k9s "$mgr";;
+      podman) install_podman "$mgr";;
+      tokei) install_tokei "$mgr";;
+      glow) install_glow "$mgr";;
+      delta) install_delta "$mgr";;
+      meld) install_meld "$mgr";;
       build-tools) install_build_tools "$mgr";;
       neovim) install_neovim "$mgr";;
       micro) install_micro "$mgr";;
@@ -729,8 +1777,203 @@ main() {
         esac
         ;;
       ufw) install_pkg_simple "$mgr" ufw;;
+      ruby) install_ruby "$mgr";;
+      flatpak) install_flatpak "$mgr";;
+      wine) install_wine "$mgr";;
+      tor) install_tor "$mgr";;
+      ntfs) install_ntfs "$mgr";;
+      streamcontroller) install_streamcontroller "$mgr";;
+      gimp) install_gimp "$mgr";;
     esac
+    ); then
+      # Installation command succeeded, verify tool is now installed
+      if is_installed_tool "$choice"; then
+        add_tracked_tool "$choice"
+        successful_installs+=("$choice")
+        log_info "Successfully installed: $choice"
+      else
+        log_warn "Installation command completed but $choice not detected as installed."
+        failed_installs+=("$choice")
+      fi
+    else
+      log_error "Failed to install: $choice"
+      failed_installs+=("$choice")
+    fi
   done
+
+  # Uninstall unchecked tools if user agreed
+  if [[ "$do_uninstall" == "true" ]]; then
+    for tool in "${to_uninstall[@]}"; do
+      log_info "Uninstalling: $tool"
+      # Run uninstallation in subshell to catch errors without exiting
+      if (
+      case "$tool" in
+        ripgrep) uninstall_pkg_simple "$mgr" ripgrep;;
+        fd) uninstall_fd "$mgr";;
+        bat) uninstall_pkg_simple "$mgr" bat;;
+        eza) uninstall_pkg_simple "$mgr" eza;;
+        fzf) uninstall_pkg_simple "$mgr" fzf;;
+        zoxide) uninstall_pkg_simple "$mgr" zoxide;;
+        yq) uninstall_pkg_simple "$mgr" yq;;
+        curl) uninstall_pkg_simple "$mgr" curl;;
+        wget) uninstall_pkg_simple "$mgr" wget;;
+        git) uninstall_pkg_simple "$mgr" git;;
+        ansible) uninstall_pkg_simple "$mgr" ansible;;
+        adb) uninstall_adb "$mgr";;
+        git-lfs) uninstall_pkg_simple "$mgr" git-lfs;;
+        zsh) uninstall_pkg_simple "$mgr" zsh;;
+        starship) uninstall_pkg_simple "$mgr" starship;;
+        tmux) uninstall_pkg_simple "$mgr" tmux;;
+        htop) uninstall_pkg_simple "$mgr" htop;;
+        ncdu) uninstall_pkg_simple "$mgr" ncdu;;
+        duf) uninstall_pkg_simple "$mgr" duf;;
+        tree) uninstall_pkg_simple "$mgr" tree;;
+        bfg) uninstall_bfg "$mgr";;
+        gh) uninstall_gh "$mgr";;
+        tldr) uninstall_tldr "$mgr";;
+        bandwhich) uninstall_bandwhich "$mgr";;
+        k9s) uninstall_k9s "$mgr";;
+        podman) uninstall_podman "$mgr";;
+        tokei) uninstall_tokei "$mgr";;
+        glow) uninstall_glow "$mgr";;
+        delta) uninstall_delta "$mgr";;
+        meld) uninstall_meld "$mgr";;
+        build-tools) uninstall_build_tools "$mgr";;
+        neovim) uninstall_pkg_simple "$mgr" neovim;;
+        micro) uninstall_pkg_simple "$mgr" micro;;
+        docker) uninstall_docker "$mgr";;
+        nala) uninstall_pkg_simple "$mgr" nala;;
+        dialog) uninstall_pkg_simple "$mgr" dialog;;
+        jq) uninstall_pkg_simple "$mgr" jq;;
+        node) uninstall_node "$mgr";;
+        lazygit) uninstall_lazygit "$mgr";;
+        lazydocker) uninstall_lazydocker "$mgr";;
+        java) uninstall_java "$mgr";;
+        php) uninstall_pkg_simple "$mgr" php;;
+        composer) uninstall_pkg_simple "$mgr" composer;;
+        rust) uninstall_rust "$mgr";;
+        go) uninstall_go "$mgr";;
+        vscode) uninstall_vscode "$mgr";;
+        isoforge) uninstall_isoforge "$mgr";;
+        image-view) uninstall_image_view "$mgr";;
+        lm-sensors) uninstall_pkg_simple "$mgr" lm-sensors;;
+        usbutils) uninstall_pkg_simple "$mgr" usbutils;;
+        pciutils) uninstall_pkg_simple "$mgr" pciutils;;
+        borgbackup) uninstall_pkg_simple "$mgr" borgbackup;;
+        duplicity) uninstall_pkg_simple "$mgr" duplicity;;
+        fdupes) uninstall_pkg_simple "$mgr" fdupes;;
+        lz4) uninstall_pkg_simple "$mgr" lz4;;
+        tar) uninstall_pkg_simple "$mgr" tar;;
+        unzip) uninstall_pkg_simple "$mgr" unzip;;
+        mc) uninstall_pkg_simple "$mgr" mc;;
+        nmap) uninstall_pkg_simple "$mgr" nmap;;
+        iperf3) uninstall_pkg_simple "$mgr" iperf3;;
+        mtr) uninstall_pkg_simple "$mgr" mtr;;
+        net-tools) uninstall_pkg_simple "$mgr" net-tools;;
+        tcpdump) uninstall_pkg_simple "$mgr" tcpdump;;
+        traceroute) uninstall_pkg_simple "$mgr" traceroute;;
+        bind-tools) uninstall_bind_tools "$mgr";;
+        screen) uninstall_pkg_simple "$mgr" screen;;
+        cron) uninstall_cron "$mgr";;
+        ufw) uninstall_pkg_simple "$mgr" ufw;;
+        ruby) uninstall_ruby "$mgr";;
+        flatpak) uninstall_flatpak "$mgr";;
+        wine) uninstall_wine "$mgr";;
+        tor) uninstall_tor "$mgr";;
+        ntfs) uninstall_ntfs "$mgr";;
+        streamcontroller) uninstall_streamcontroller "$mgr";;
+        gimp) uninstall_gimp "$mgr";;
+      esac
+      ); then
+        # Uninstallation succeeded
+        remove_tracked_tool "$tool"
+        successful_uninstalls+=("$tool")
+        log_info "Successfully uninstalled: $tool"
+      else
+        log_error "Failed to uninstall: $tool"
+        failed_uninstalls+=("$tool")
+      fi
+    done
+  fi
+
+  # Build summary message for dialog
+  local summary=""
+  local title="Installation Complete"
+  local has_failures=false
+
+  # Successfully installed
+  if [[ ${#successful_installs[@]} -gt 0 ]]; then
+    summary+="INSTALLED SUCCESSFULLY:\n"
+    for tool in "${successful_installs[@]}"; do
+      summary+="  ✓ $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Successfully uninstalled
+  if [[ ${#successful_uninstalls[@]} -gt 0 ]]; then
+    summary+="UNINSTALLED SUCCESSFULLY:\n"
+    for tool in "${successful_uninstalls[@]}"; do
+      summary+="  ✓ $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Already installed (skipped)
+  if [[ ${#already_installed[@]} -gt 0 ]]; then
+    summary+="ALREADY INSTALLED (skipped):\n"
+    for tool in "${already_installed[@]}"; do
+      summary+="  • $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Failed to install
+  if [[ ${#failed_installs[@]} -gt 0 ]]; then
+    has_failures=true
+    summary+="FAILED TO INSTALL:\n"
+    for tool in "${failed_installs[@]}"; do
+      summary+="  ✗ $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Failed to uninstall
+  if [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
+    has_failures=true
+    summary+="FAILED TO UNINSTALL:\n"
+    for tool in "${failed_uninstalls[@]}"; do
+      summary+="  ✗ $(tool_desc "$tool")\n"
+    done
+    summary+="\n"
+  fi
+
+  # Set appropriate title based on results
+  if [[ "$has_failures" == "true" ]]; then
+    title="Installation Complete (with warnings)"
+  fi
+
+  # No changes made
+  if [[ ${#successful_installs[@]} -eq 0 ]] && [[ ${#successful_uninstalls[@]} -eq 0 ]] && \
+     [[ ${#failed_installs[@]} -eq 0 ]] && [[ ${#failed_uninstalls[@]} -eq 0 ]]; then
+    summary="All selected tools are already installed.\nNo changes were made."
+    title="No Changes"
+  fi
+
+  # Show results in dialog (TUI mode) or log (non-TUI mode)
+  if ! $all && command -v dialog >/dev/null 2>&1; then
+    dialog --stdout --title "$title" --msgbox "$summary" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" || true
+    clear
+  else
+    # Fallback to console output
+    log_info "===== $title ====="
+    echo -e "$summary"
+  fi
+
+  # Return non-zero if there were failures (but don't exit early)
+  if [[ ${#failed_installs[@]} -gt 0 ]] || [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
+    return 1
+  fi
 }
 
 main "$@"

@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-01-08" "distrodeck 0.3.0" "User Commands"
+.TH DISTRODECK 1 "2026-01-22" "distrodeck 0.4.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -23,22 +23,74 @@ Run distro upgrade
 .B security
 Apply security upgrades
 .TP
+.B repo-repair
+Repair apt repo issues
+.TP
 .B doctor
 Check system prerequisites
+.TP
+.B install-tools
+Install optional tools via a TUI checklist
+.TP
+.B git-status
+Enable or disable git status in the shell prompt
+.TP
+.B preflight
+Run preflight checks
+.TP
+.B logs
+View logs
+.TP
+.B clear-logs
+Delete all logs
+.TP
+.B sysinfo
+Show full system info
+.TP
+.B config-edit
+Edit common system config files (TUI)
+.TP
+.B net-tools
+Run installed network tools (TUI)
 .SH COMMAND HELP
 .SS export
 .nf
 usage: distrodeck export [-h] [--output OUTPUT]
-                         [--appimage-dirs APPIMAGE_DIRS]
+                         [--appimage-dirs APPIMAGE_DIRS] [--include-config]
+                         [--config-dirs CONFIG_DIRS]
+                         [--config-exclude CONFIG_EXCLUDE]
+                         [--config-archive CONFIG_ARCHIVE]
+                         [--include-config-files]
+                         [--config-files CONFIG_FILES] [--include-user-tools]
+                         [--include-services]
 
 options:
   -h, --help            show this help message and exit
   --output OUTPUT
   --appimage-dirs APPIMAGE_DIRS
+  --include-config      Include system config snapshots (opt-in)
+  --config-dirs CONFIG_DIRS
+                        Colon-separated config dirs (default:
+                        /etc:/etc/apt:/etc/dnf:/etc/pacman.d)
+  --config-exclude CONFIG_EXCLUDE
+                        Exclude patterns for config snapshot (repeatable)
+  --config-archive CONFIG_ARCHIVE
+                        Path for config snapshot archive
+  --include-config-files
+                        Include key config files as entries
+  --config-files CONFIG_FILES
+                        Colon-separated config files (default:
+                        /etc/hosts:/etc/fstab:~/.ssh/config)
+  --include-user-tools  Include user-level tools (pipx, npm, composer, nuget,
+                        cargo, gem, go)
+  --include-services    Include enabled/active systemd services
 .fi
 .SS import
 .nf
 usage: distrodeck import [-h] --input INPUT [--apply] [--update-sources]
+                         [--apply-config] [--config-archive CONFIG_ARCHIVE]
+                         [--apply-services] [--apply-config-files]
+                         [--sections SECTIONS] [--cleanup-extras]
                          [--appimage-dirs APPIMAGE_DIRS]
 
 options:
@@ -46,6 +98,14 @@ options:
   --input INPUT
   --apply
   --update-sources
+  --apply-config        Restore config snapshot from the export file
+  --config-archive CONFIG_ARCHIVE
+                        Override config snapshot archive path
+  --apply-services      Enable systemd services captured in the export
+  --apply-config-files  Restore exported config files to their paths
+  --sections SECTIONS   Comma-separated sections to restore (e.g.,
+                        apt_manual,snap,flatpak)
+  --cleanup-extras      Remove snap/flatpak extras not present in the export
   --appimage-dirs APPIMAGE_DIRS
 .fi
 .SS update
@@ -69,9 +129,80 @@ usage: distrodeck security [-h]
 options:
   -h, --help  show this help message and exit
 .fi
+.SS repo-repair
+.nf
+usage: distrodeck repo-repair [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
 .SS doctor
 .nf
 usage: distrodeck doctor [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS install-tools
+.nf
+usage: distrodeck install-tools [-h] [--all]
+
+options:
+  -h, --help  show this help message and exit
+  --all       Install all tools without showing the TUI
+.fi
+.SS git-status
+.nf
+usage: distrodeck git-status [-h] {set,unset} ...
+
+positional arguments:
+  {set,unset}
+    set        Enable git status prompt
+    unset      Disable git status prompt
+
+options:
+  -h, --help   show this help message and exit
+.fi
+.SS preflight
+.nf
+usage: distrodeck preflight [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS logs
+.nf
+usage: distrodeck logs [-h] [--latest] [--tail TAIL]
+
+options:
+  -h, --help   show this help message and exit
+  --latest     Show latest log
+  --tail TAIL  Show last N lines (implies --latest)
+.fi
+.SS clear-logs
+.nf
+usage: distrodeck clear-logs [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS sysinfo
+.nf
+usage: distrodeck sysinfo [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS config-edit
+.nf
+usage: distrodeck config-edit [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS net-tools
+.nf
+usage: distrodeck net-tools [-h]
 
 options:
   -h, --help  show this help message and exit

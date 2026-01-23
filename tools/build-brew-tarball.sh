@@ -8,8 +8,8 @@ source "$SCRIPT_HELPERS_DIR/helpers.sh"
 shlib_import logging
 
 helper="$REPO_ROOT/scripts/script-helpers/scripts/build_brew_tarball.sh"
-if [[ -x "$helper" ]]; then
-  exec "$helper" \
+if [[ -f "$helper" ]]; then
+  exec bash "$helper" \
     --name "distrodeck" \
     --repo "$REPO_ROOT" \
     --dist-dir "$REPO_ROOT/dist" \

@@ -21,7 +21,7 @@ distrodeck export --output backup.txt
 ```
 
 Options:
-- `--output FILE`: export destination (default: `distrodeck-export.txt`)
+- `--output FILE`: export destination (default: `~/.local/state/distrodeck/exports/distrodeck-export-<host>-<timestamp>.txt`)
 - `--appimage-dirs DIRS`: colon-separated AppImage search dirs
 - `--include-config`: include a config snapshot of selected system directories
 - `--config-dirs DIRS`: colon-separated config dirs (default: `/etc:/etc/apt:/etc/dnf:/etc/pacman.d`)
@@ -54,6 +54,10 @@ Import packages and sources from a file. Dry-run by default.
 ```
 distrodeck import --input backup.txt --apply --update-sources
 ```
+
+Import automatically creates a backup of the sections being restored (saved as
+`distrodeck-backup-<hostname>-<timestamp>.txt` next to the input file). If the
+import fails, it prompts to revert using the backup.
 
 Dry-run shows a diff (desired vs current) and highlights missing/extra entries.
 
@@ -128,6 +132,23 @@ distrodeck logs --latest
 distrodeck logs --tail 50
 ```
 
+### clear-logs
+
+Delete all previous logs.
+
+```
+distrodeck clear-logs
+```
+
+### Docker test suite (Ubuntu 24.04)
+
+Run the full automated test suite in a privileged Ubuntu 24.04 container with
+the repo mounted from the host:
+
+```
+scripts/test-docker.sh
+```
+
 ### sysinfo
 
 Show full system info (CPU/GPU/memory/disks/network/public IP/ports/USB, plus speed test if available).
@@ -160,6 +181,73 @@ Run installed network tools from a TUI menu (nmap, mtr, iperf3, traceroute, tcpd
 
 ```
 distrodeck net-tools
+```
+
+### install-tools
+
+Install optional developer tools via a TUI checklist. Supports 64 tools organized by category.
+
+```
+distrodeck install-tools        # opens TUI checklist
+distrodeck install-tools --all  # installs all tools non-interactively
+```
+
+**Features:**
+- Tools are grouped by category with prefixes: `[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Backup]`, `[Dev]`, `[Lang]`, `[DevOps]`, `[Util]`, `[App]`
+- Already installed tools are pre-checked and marked "(installed)"
+- **Uninstall support**: Unchecking a tool prompts to uninstall it
+- State tracking: Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`
+
+**Available tools by category:**
+
+| Category | Tools |
+|----------|-------|
+| Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
+| Editors & Terminal | mc, meld, micro, neovim, screen, tmux, vscode |
+| System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
+| Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
+| Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
+| Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
+| Languages | go, java, node (20 LTS), php, ruby, rust |
+| DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
+| Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
+| Apps | gimp, image-view, isoforge, streamcontroller |
+
+**Notable tools:**
+- `bfg` - BFG Repo-Cleaner for removing large files from git history
+- `gh` - GitHub CLI for working with GitHub from the terminal
+- `delta` - Syntax-highlighting pager for git diffs
+- `k9s` - Kubernetes cluster management TUI
+- `podman` - Daemonless container engine (Docker alternative)
+- `streamcontroller` - Control Elgato Stream Decks on Linux (via Flatpak)
+- `gimp` - GNU Image Manipulation Program with web export plugins
+- `wine` - Windows compatibility layer for running Windows applications
+- `tor` - Anonymous communication network with Tor Browser
+
+### git-status
+
+Enable or disable git branch status in your shell prompt.
+Branch name stays green; status shows as:
+- `≡` green when up to date with remote
+- `N↑` yellow when ahead by N commits
+- `N↓` red when behind by N commits
+- `A↑B↓` red when diverged (ahead by A, behind by B)
+- `*` yellow when there are local uncommitted changes
+Defaults to bash, but uses the active shell when available (bash, zsh, fish).
+
+```
+distrodeck git-status set
+distrodeck git-status unset
+```
+
+Example prompt segment:
+
+```
+user@host ~/repo(main 2↑)$
+user@host ~/repo(main 3↓)$
+user@host ~/repo(main ≡)$
+user@host ~/repo(main 2↑1↓)$
+user@host ~/repo(main * 2↑)$
 ```
 
 ## Export file sections

@@ -2,6 +2,41 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [0.4.0]
+
+### Added
+- New `git-status` command (and TUI action) to enable/disable git status in the shell prompt.
+- Prompt shows branch name plus compact status symbols: `≡` (up to date), `N↑` (ahead), `N↓` (behind), and `A↑B↓` (diverged).
+- Dirty working tree indicator (`*`) for uncommitted changes.
+- Auto-detection of bash/zsh/fish and safe prompt injection with automatic removal.
+- Prompt color rules: branch name stays green; status color reflects state (green/yellow/red).
+- Examples and legend added to README, USAGE, and man page.
+- Import now creates an automatic backup of the sections being restored and offers a revert prompt on failure.
+- New `clear-logs` command and TUI action to delete all previous logs.
+- Action start/end entries added to logs for easier troubleshooting.
+- Import shows section-level progress in the TUI with an indeterminate progress bar.
+- Docker-based Ubuntu 24.04 test suite with automated CLI + TUI coverage.
+- **Uninstall support for install-tools**: Unchecking a previously installed tool now prompts to uninstall it.
+- **State tracking**: Tools installed via distrodeck are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
+- **18 new tools** in install-tools: bfg (git repo cleaner), gh (GitHub CLI), tldr (simplified man pages), bandwhich (bandwidth monitor), k9s (Kubernetes TUI), podman (container engine), tokei (code statistics), glow (markdown viewer), delta (git diff viewer), meld (visual diff/merge), ruby, flatpak, wine (Windows compatibility), tor (anonymous browsing), ntfs-3g (NTFS filesystem), streamcontroller (Stream Deck via Flatpak), gimp (image editor with plugins).
+- **Reorganized tool categories** in the TUI with clear category prefixes (`[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Dev]`, `[Lang]`, `[DevOps]`, etc.) for easier navigation.
+
+### Changed
+- Install-tools TUI now offers 64 tools (up from 47), grouped by category.
+- Node.js installation now uses NodeSource to install Node.js 20 LTS instead of distro default version.
+- Tool installation errors no longer stop the entire process; failures are collected and reported at the end.
+- git-status install now overwrites the generated script on each set, ensures executable permissions, and instructs users to reload the shell config.
+- Export/import warnings and errors are captured in the per-run log file.
+- TUI export uses an indeterminate progress bar with per-section status text.
+- TUI logs view shows log contents instead of the log filename.
+- `distrodeck logs` now prints to stdout instead of writing into the log file.
+- Default exports/backups now go to the state exports directory instead of the repo root.
+
+### Fixed
+- Export progress dialog now renders reliably in TUI flows (no dialog flag errors).
+- Suppressed missing config-dir warnings when the corresponding package manager is not installed.
+
+
 ## [0.3.0]
 
 ### Added

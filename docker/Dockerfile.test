@@ -1,0 +1,21 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV container=docker
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        systemd systemd-sysv dbus sudo \
+        python3 python3-venv python3-pip \
+        dialog expect \
+        git curl ca-certificates \
+        iproute2 net-tools \
+        nmap mtr iperf3 traceroute tcpdump \
+        flatpak snapd \
+        tar \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+STOPSIGNAL SIGRTMIN+3
+
+CMD ["/sbin/init"]
