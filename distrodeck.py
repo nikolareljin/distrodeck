@@ -214,6 +214,7 @@ def git_command_names() -> Set[str]:
     if result.returncode == 0 and result.stdout:
         for token in result.stdout.split():
             names.add(token.strip())
+    if names:
         return names
     result = run(["git", "help", "-a"], check=False, capture_output=True)
     if result.returncode != 0:
@@ -605,6 +606,7 @@ def run_config_edit_tui() -> None:
                 continue
             for choice in choices:
                 edit_config_file(Path(choice))
+            continue
 
 def dialog_gauge(
     title: str, message: str, no_percent: bool = False
@@ -3206,13 +3208,6 @@ def run_git_aliases_show(_: argparse.Namespace) -> None:
 
 def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
     git_cmds = git_command_names()
-    conflicts = [name for name, _, _ in entries if name in git_cmds]
-    if conflicts:
-        dialog_msgbox(
-            "Git Aliases",
-            "Alias names collide with existing git commands:\n"
-            + "\n".join(conflicts),
-        )
     def next_safe_name(seed: str, used: Set[str]) -> str:
         candidate = seed
         suffix = 1
