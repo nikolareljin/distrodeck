@@ -3083,7 +3083,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
     return [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
-        ("dfp", "!git fetch --all && git pull --all", "fetch --all; pull --all"),
+        ("dfp", "!git fetch --all && git pull --all", "fetch --all && pull --all"),
         ("dl", "log --graph --decorate --oneline --all --color=always", "history"),
         ("dpr", "!gh pr create --fill", "create PR (requires gh)"),
         ("ds", "status -sb", "short status"),
