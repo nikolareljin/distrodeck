@@ -705,6 +705,12 @@ def handle_sigint(signum, frame) -> None:
 
 
 def dialog_log_spinner(log_path: str, message: str, stop_event: threading.Event) -> None:
+    """Write periodic spinner updates to log when command produces no output.
+
+    This provides visual feedback in the dialog tailbox that the process is still
+    running. Spinner lines are prefixed with [SPINNER] for easy filtering if
+    log parsing is needed (e.g., grep -v '^\\[SPINNER\\]' logfile).
+    """
     frames = ["|", "/", "-", "\\"]
     index = 0
     try:
@@ -721,7 +727,7 @@ def dialog_log_spinner(log_path: str, message: str, stop_event: threading.Event)
             index += 1
             try:
                 with open(log_path, "a", encoding="utf-8", buffering=1) as handle:
-                    handle.write(f"{message} {frame}\n")
+                    handle.write(f"[SPINNER] {message} {frame}\n")
             except OSError:
                 return
             try:
@@ -3332,7 +3338,14 @@ def run_tui() -> None:
                 extra_files = []
                 if extra_input:
                     extra_files = [p for p in extra_input.split(":") if p.strip()]
-                # dialog checklist can escape "~" as "\~" in some terminals; normalize it.
+                # Normalize escaped tildes from dialog output.
+                # The dialog utility escapes "~" as "\~" in some terminals to prevent
+                # shell expansion when output is captured. Other special characters
+                # (spaces, quotes) are handled by dialog_checklist which strips quotes
+                # from output. We only need tilde handling here because:
+                # 1. Our predefined paths use ~ for home directory (e.g., ~/.ssh/config)
+                # 2. User-provided paths via extra_input are colon-separated, not quoted
+                # 3. Paths with spaces would need quoting which dialog handles differently
                 combined = [p.replace("\\~", "~") for p in (selected_files + extra_files)]
                 if combined:
                     cmd.append("--include-config-files")

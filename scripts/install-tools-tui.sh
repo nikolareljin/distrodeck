@@ -4,8 +4,9 @@
 # USAGE: ./install-tools-tui.sh [--all]
 # EXAMPLE: ./install-tools-tui.sh --all
 # ----------------------------------------------------
-set -uo pipefail
-# Note: -e removed to allow continuing after individual tool install failures
+set -euo pipefail
+# Tool installations are wrapped in subshells (see main loop) to isolate failures
+# while preserving -e for the rest of the script to catch unexpected errors.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_HELPERS_DIR="${SCRIPT_HELPERS_DIR:-${SCRIPT_DIR}/script-helpers}"
@@ -290,17 +291,59 @@ install_node() {
   local mgr="$1"
   case "$mgr" in
     apt)
-      # Use NodeSource for Node.js 20.x LTS
-      if ! command -v curl >/dev/null 2>&1; then
-        install_pkg "$mgr" curl || true
+      # Try system repo first (Ubuntu 22.04+ has Node 18+)
+      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
+        return
       fi
-      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - || true
-      install_pkg "$mgr" nodejs
+      # Fall back to NodeSource repository (manual setup, no piped scripts)
+      log_info "Adding NodeSource repository for Node.js 20.x..."
+      if ! command -v curl >/dev/null 2>&1; then
+        install_pkg "$mgr" curl ca-certificates gnupg || true
+      fi
+      sudo mkdir -p /etc/apt/keyrings
+      local keyring="/etc/apt/keyrings/nodesource.gpg"
+      local tmp_key
+      tmp_key="$(mktemp)"
+      if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$tmp_key"; then
+        sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null || \
+          cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"
+        rm -f "$tmp_key"
+        echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_20.x nodistro main" | \
+          sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+        sudo apt-get update || true
+        install_pkg "$mgr" nodejs
+      else
+        rm -f "$tmp_key"
+        log_warn "Failed to download NodeSource GPG key."
+      fi
       ;;
     dnf)
-      # Use NodeSource for Fedora/RHEL
-      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - || true
-      install_pkg "$mgr" nodejs
+      # Try system repo first (Fedora has recent Node.js)
+      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
+        return
+      fi
+      # Fall back to NodeSource repository (manual setup)
+      log_info "Adding NodeSource repository for Node.js 20.x..."
+      local keyring="/etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL"
+      local tmp_key
+      tmp_key="$(mktemp)"
+      if curl -fsSL https://rpm.nodesource.com/gpgkey/ns-operations-public.key -o "$tmp_key"; then
+        sudo cp "$tmp_key" "$keyring"
+        rm -f "$tmp_key"
+        cat << 'REPO' | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
+[nodesource-nodistro]
+name=Node.js Packages for Linux RPM based distros - x86_64
+baseurl=https://rpm.nodesource.com/pub_20.x/nodistro/x86_64
+priority=1
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL
+REPO
+        install_pkg "$mgr" nodejs
+      else
+        rm -f "$tmp_key"
+        log_warn "Failed to download NodeSource GPG key."
+      fi
       ;;
     pacman) install_pkg "$mgr" nodejs npm;;
     zypper) install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm;;
@@ -902,17 +945,47 @@ install_gh() {
     apt)
       # Add GitHub CLI official repo for apt
       if ! command -v gh >/dev/null 2>&1; then
-        if ! command -v curl >/dev/null 2>&1; then
-          install_pkg "$mgr" curl || true
+        # Ensure wget is available
+        if ! command -v wget >/dev/null 2>&1; then
+          if ! install_pkg "$mgr" wget; then
+            log_warn "Failed to install wget for gh CLI setup."
+            return 1
+          fi
         fi
-        (type -p wget >/dev/null || sudo apt-get install wget -y) \
-          && sudo mkdir -p -m 755 /etc/apt/keyrings \
-          && out=$(mktemp) && wget -nv -O"$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-          && cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
-          && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-          && sudo apt update \
-          && sudo apt install gh -y
+
+        # Create keyrings directory
+        if ! sudo mkdir -p -m 755 /etc/apt/keyrings; then
+          log_warn "Failed to create /etc/apt/keyrings directory."
+          return 1
+        fi
+
+        # Download GPG key
+        local tmp_key
+        tmp_key="$(mktemp)"
+        if ! wget -nv -O "$tmp_key" https://cli.github.com/packages/githubcli-archive-keyring.gpg; then
+          log_warn "Failed to download GitHub CLI GPG key."
+          rm -f "$tmp_key"
+          return 1
+        fi
+
+        # Install GPG key
+        if ! sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg < "$tmp_key" > /dev/null; then
+          log_warn "Failed to install GitHub CLI GPG key."
+          rm -f "$tmp_key"
+          return 1
+        fi
+        rm -f "$tmp_key"
+        sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+
+        # Add repository
+        local arch
+        arch="$(dpkg --print-architecture)"
+        echo "deb [arch=$arch signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+          sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+        # Update and install
+        sudo apt-get update || true
+        install_pkg "$mgr" gh
       fi
       ;;
     dnf)
@@ -978,7 +1051,17 @@ install_bfg() {
 
   if download_file "$url" "$jar_path"; then
     sudo mkdir -p "$install_dir"
-    sudo cp "$jar_path" "$install_dir/bfg.jar"
+    if ! sudo cp "$jar_path" "$install_dir/bfg.jar"; then
+      log_warn "Failed to copy BFG JAR to $install_dir."
+      rm -rf "$tmp_dir"
+      return 1
+    fi
+    # Verify JAR was installed before creating wrapper
+    if [[ ! -f "$install_dir/bfg.jar" ]]; then
+      log_warn "BFG JAR not found at $install_dir/bfg.jar after copy."
+      rm -rf "$tmp_dir"
+      return 1
+    fi
     # Create wrapper script
     sudo tee "$bin_path" > /dev/null << 'WRAPPER'
 #!/bin/sh
@@ -1543,7 +1626,7 @@ main() {
     selected=$(dialog --stdout --title "Distrodeck Installer" \
       --scrollbar \
       --checklist "Select tools to install/keep:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
-      "${items[@]}")
+      "${items[@]}") || true  # User may cancel/escape
     # Clear the screen after dialog closes before showing installation output
     clear
   else
@@ -1879,7 +1962,7 @@ main() {
 
   # Show results in dialog (TUI mode) or log (non-TUI mode)
   if ! $all && command -v dialog >/dev/null 2>&1; then
-    dialog --stdout --title "$title" --msgbox "$summary" "$DIALOG_HEIGHT" "$DIALOG_WIDTH"
+    dialog --stdout --title "$title" --msgbox "$summary" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" || true
     clear
   else
     # Fallback to console output
