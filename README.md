@@ -215,6 +215,14 @@ git
 - AppImages are discovered in `~/Applications`, `~/AppImage`, `~/AppImages`, or `DISTRODECK_APPIMAGE_DIRS`.
 - Import is dry-run by default. Use `--apply` to install.
 
+## Development
+
+Enable lightweight pre-commit checks:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Compatibility
 
 - Ubuntu: full support (apt, PPA, do-release-upgrade, snap, flatpak)
