@@ -24,6 +24,27 @@ source "${SCRIPT_HELPERS_DIR}/helpers.sh"
 shlib_import logging dialog
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Fallback versions for GitHub release downloads
+# ─────────────────────────────────────────────────────────────────────────────
+# These versions are used when the GitHub API fails to return the latest release.
+# This can happen due to rate limiting, network issues, or API changes.
+#
+# MAINTENANCE: Update these periodically to recent stable versions.
+# Check each tool's GitHub releases page for current versions:
+#   - lazygit: https://github.com/jesseduffield/lazygit/releases
+#   - k9s:     https://github.com/derailed/k9s/releases
+#   - glow:    https://github.com/charmbracelet/glow/releases
+#   - delta:   https://github.com/dandavison/delta/releases
+#   - bfg:     https://github.com/rtyley/bfg-repo-cleaner/releases
+#
+# Last updated: 2025-01-22
+FALLBACK_VERSION_LAZYGIT="0.44.1"
+FALLBACK_VERSION_K9S="v0.50.18"
+FALLBACK_VERSION_GLOW="2.1.1"
+FALLBACK_VERSION_DELTA="0.18.2"
+FALLBACK_VERSION_BFG="1.15.0"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # State tracking for installed tools
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -330,7 +351,7 @@ install_lazygit() {
           version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/lazygit-release.json" | head -n1)"
         fi
         if [[ -z "$version" ]]; then
-          version="0.44.1"  # Fallback version
+          version="$FALLBACK_VERSION_LAZYGIT"
         fi
 
         url="https://github.com/jesseduffield/lazygit/releases/download/v${version}/lazygit_${version}_${os}_${arch}.tar.gz"
@@ -623,7 +644,7 @@ install_k9s() {
         version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
       fi
       if [[ -z "$version" ]]; then
-        version="v0.50.18"  # Fallback
+        version="$FALLBACK_VERSION_K9S"
       fi
       url="https://github.com/derailed/k9s/releases/download/${version}/k9s_${os}_${arch}.tar.gz"
       if download_file "$url" "$tmp_dir/k9s.tar.gz"; then
@@ -698,7 +719,7 @@ install_glow() {
         version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
       fi
       if [[ -z "$version" ]]; then
-        version="2.1.1"  # Fallback
+        version="$FALLBACK_VERSION_GLOW"
       fi
       url="https://github.com/charmbracelet/glow/releases/download/v${version}/glow_${version}_Linux_${arch}.tar.gz"
       if download_file "$url" "$tmp_dir/glow.tar.gz"; then
@@ -746,7 +767,7 @@ install_delta() {
           version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
         fi
         if [[ -z "$version" ]]; then
-          version="0.18.2"  # Fallback
+          version="$FALLBACK_VERSION_DELTA"
         fi
         url="https://github.com/dandavison/delta/releases/download/${version}/delta-${version}-${arch}.tar.gz"
         if download_file "$url" "$tmp_dir/delta.tar.gz"; then
@@ -949,7 +970,7 @@ install_bfg() {
     version="$(sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"v\\([^\"]*\\)\".*/\\1/p' "$tmp_dir/release.json" | head -n1)"
   fi
   if [[ -z "$version" ]]; then
-    version="1.15.0"  # Fallback version
+    version="$FALLBACK_VERSION_BFG"
   fi
 
   url="https://repo1.maven.org/maven2/com/madgag/bfg/${version}/bfg-${version}.jar"
