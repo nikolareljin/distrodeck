@@ -3094,6 +3094,10 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
 
 
 def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> None:
+    run(
+        ["git", "config", "--global", "--unset-all", "distrodeck.alias"],
+        check=False,
+    )
     for name, value, _ in entries:
         current = run(
             ["git", "config", "--global", "--get", f"alias.{name}"],
@@ -3105,6 +3109,30 @@ def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> None:
             if existing and existing != value:
                 warn(f"Overwriting git alias {name}: {existing} -> {value}")
         run(["git", "config", "--global", f"alias.{name}", value], check=False)
+        run(
+            ["git", "config", "--global", "--add", "distrodeck.alias", f"{name}={value}"],
+            check=False,
+        )
+
+
+def stored_git_alias_entries() -> List[Tuple[str, str]]:
+    result = run(
+        ["git", "config", "--global", "--get-all", "distrodeck.alias"],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return []
+    entries = []
+    for line in (result.stdout or "").splitlines():
+        if "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if name:
+            entries.append((name, value))
+    return entries
 
 
 def run_git_aliases_set(args: argparse.Namespace) -> None:
@@ -3125,6 +3153,20 @@ def run_git_aliases_unset(_: argparse.Namespace) -> None:
         warn("git not available; cannot unset aliases.")
         log_action_end("git-aliases unset", "failed")
         return
+    stored = stored_git_alias_entries()
+    if stored:
+        for name, _ in stored:
+            run(
+                ["git", "config", "--global", "--unset", f"alias.{name}"],
+                check=False,
+            )
+        run(
+            ["git", "config", "--global", "--unset-all", "distrodeck.alias"],
+            check=False,
+        )
+        log("Git aliases removed from global git config (stored entries).")
+        log_action_end("git-aliases unset")
+        return
     for name, _, _ in git_alias_definitions():
         run(["git", "config", "--global", "--unset", f"alias.{name}"], check=False)
     log("Git aliases removed from global git config.")
@@ -3138,6 +3180,13 @@ def run_git_aliases_show(_: argparse.Namespace) -> None:
         log_action_end("git-aliases show", "failed")
         return
     lines = []
+    stored = stored_git_alias_entries()
+    if stored:
+        for name, value in stored:
+            lines.append(f"{name} = {value}  (stored)")
+        log("\n".join(lines))
+        log_action_end("git-aliases show")
+        return
     for name, _, desc in git_alias_definitions():
         current = run(
             ["git", "config", "--global", "--get", f"alias.{name}"],
