@@ -19,10 +19,10 @@ fi
 
 man_version="$(rg -n \"^\\.TH DISTRODECK\" docs/man/distrodeck.1 | sed -E 's/.*\"distrodeck ([^\"]+)\".*/\\1/')"
 if [[ -n "$man_version" && "$man_version" != "$version" ]]; then
-  echo \"[pre-commit] VERSION ($version) does not match docs/man/distrodeck.1 ($man_version).\" >&2
+  echo "[pre-commit] VERSION ($version) does not match docs/man/distrodeck.1 ($man_version)." >&2
   exit 1
 fi
 
 python3 -m py_compile distrodeck.py >/dev/null
 
-echo \"[pre-commit] OK\"
+echo "[pre-commit] OK"
