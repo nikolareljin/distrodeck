@@ -14,7 +14,7 @@ import shutil
 from shutil import get_terminal_size
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 from glob import glob
 
 VERSION = "0.4.0"
@@ -204,12 +204,27 @@ def cmd_exists(name: str) -> bool:
     ) == 0
 
 
-def command_path(name: str) -> Optional[str]:
-    result = run(["bash", "-lc", f"command -v {name}"], check=False, capture_output=True)
+def git_command_names() -> Set[str]:
+    result = run(
+        ["git", "--list-cmds=main,others"],
+        check=False,
+        capture_output=True,
+    )
+    names: Set[str] = set()
+    if result.returncode == 0 and result.stdout:
+        for token in result.stdout.split():
+            names.add(token.strip())
+        return names
+    result = run(["git", "help", "-a"], check=False, capture_output=True)
     if result.returncode != 0:
-        return None
-    path = (result.stdout or "").strip()
-    return path or None
+        return names
+    output = (result.stdout or "") + (result.stderr or "")
+    for line in output.splitlines():
+        if line.startswith("  "):
+            for token in line.strip().split():
+                if token and token[0].isalnum():
+                    names.add(token)
+    return names
 
 
 def require_dialog() -> None:
@@ -3063,17 +3078,13 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
 
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
     return [
-        ("gitf", "fetch", "git fetch"),
-        ("gitp", "pull", "git pull"),
-        ("gitfp", "!git fetch --all && git pull --all", "git fetch --all; git pull --all"),
-        ("glog", "log --graph --decorate --oneline --all --color=always", "colored git history"),
-        ("gpr", "!gh pr create --fill", "create PR for current branch (requires gh)"),
-        ("gs", "status -sb", "short status"),
-        ("gb", "branch -vv", "verbose branches"),
-        ("gd", "diff", "diff"),
-        ("gds", "diff --staged", "diff staged"),
-        ("gco", "checkout", "checkout"),
-        ("gcb", "checkout -b", "create branch"),
+        ("df", "fetch", "fetch"),
+        ("dp", "pull", "pull"),
+        ("dfa", "fetch --all", "fetch --all"),
+        ("dpa", "pull --all", "pull --all"),
+        ("dh", "log --oneline --graph --decorate --all --color=always", "history"),
+        ("dpr", "!gh pr create --fill", "create PR (requires gh)"),
+        ("dhelp", "!git config --get-regexp '^alias\\.d' || true", "show distrodeck aliases"),
     ]
 
 
@@ -3138,33 +3149,44 @@ def run_git_aliases_show(_: argparse.Namespace) -> None:
 
 
 def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
-    conflicts = []
-    for name, _, _ in entries:
-        path = command_path(name)
-        if path:
-            conflicts.append(f"{name} -> {path}")
+    git_cmds = git_command_names()
+    conflicts = [name for name, _, _ in entries if name in git_cmds]
     if conflicts:
         dialog_msgbox(
             "Git Aliases",
-            "Command jamming detected (alias matches an existing command):\n"
+            "Alias names collide with existing git commands:\n"
             + "\n".join(conflicts),
         )
     updated: List[Tuple[str, str, str]] = []
     for name, value, desc in entries:
-        conflict = command_path(name)
-        if conflict:
+        if name in git_cmds:
             dialog_msgbox(
                 "Git Aliases",
-                f"Alias '{name}' conflicts with existing command:\n{conflict}",
+                f"Alias '{name}' conflicts with an existing git command.",
             )
+            default_name = f"d{name}" if not name.startswith("d") else f"{name}x"
             new_name = dialog_input(
                 "Git Aliases",
-                f"Alias name for '{name}' (blank to keep):",
-                name,
+                f"Alias name for '{name}' (required):",
+                default_name,
             )
             if new_name is None:
-                new_name = name
-            new_name = new_name.strip() or name
+                new_name = default_name
+            new_name = new_name.strip() or default_name
+            while new_name in git_cmds:
+                dialog_msgbox(
+                    "Git Aliases",
+                    f"'{new_name}' is also a git command. Choose another name.",
+                )
+                next_name = dialog_input(
+                    "Git Aliases",
+                    f"Alias name for '{name}' (required):",
+                    default_name,
+                )
+                if next_name is None:
+                    new_name = default_name
+                else:
+                    new_name = next_name.strip() or default_name
             new_value = dialog_input(
                 "Git Aliases",
                 f"Alias command for '{new_name}':",
@@ -3173,11 +3195,6 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
             if new_value is None:
                 new_value = value
             new_value = new_value.strip() or value
-            if new_name != name and command_path(new_name):
-                dialog_msgbox(
-                    "Git Aliases",
-                    f"Warning: '{new_name}' also exists on PATH. Keeping your choice.",
-                )
             updated.append((new_name, new_value, desc))
         else:
             updated.append((name, value, desc))

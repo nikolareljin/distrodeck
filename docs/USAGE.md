@@ -251,6 +251,15 @@ distrodeck git-aliases unset
 distrodeck git-aliases show
 ```
 
+Recommended aliases (all prefixed with `d`):
+- `git df`  -> `fetch`
+- `git dp`  -> `pull`
+- `git dfa` -> `fetch --all`
+- `git dpa` -> `pull --all`
+- `git dh`  -> history (graph, oneline, all, colored)
+- `git dpr` -> create PR (requires `gh`)
+- `git dhelp` -> list distrodeck aliases
+
 Example prompt segment:
 
 ```
