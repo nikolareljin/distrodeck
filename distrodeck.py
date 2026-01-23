@@ -3080,10 +3080,15 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
     return [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
-        ("dfa", "fetch --all", "fetch --all"),
-        ("dpa", "pull --all", "pull --all"),
-        ("dh", "log --oneline --graph --decorate --all --color=always", "history"),
+        ("dfp", "!git fetch --all && git pull --all", "fetch --all; pull --all"),
+        ("dl", "log --graph --decorate --oneline --all --color=always", "history"),
         ("dpr", "!gh pr create --fill", "create PR (requires gh)"),
+        ("ds", "status -sb", "short status"),
+        ("db", "branch -vv", "verbose branches"),
+        ("dd", "diff", "diff"),
+        ("dds", "diff --staged", "diff staged"),
+        ("dco", "checkout", "checkout"),
+        ("dcb", "checkout -b", "create branch"),
         ("dhelp", "!git config --get-regexp '^alias\\.d' || true", "show distrodeck aliases"),
     ]
 
