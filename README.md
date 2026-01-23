@@ -82,9 +82,16 @@ distrodeck git-status set
 
 distrodeck git-status unset
 
+distrodeck git-aliases set
+
+distrodeck git-aliases unset
+
+distrodeck git-aliases show
+
 distrodeck sysinfo
 
 distrodeck config-edit
+Includes git config files when present.
 
 distrodeck net-tools
 

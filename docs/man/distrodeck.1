@@ -35,6 +35,9 @@ Install optional tools via a TUI checklist
 .B git-status
 Enable or disable git status in the shell prompt
 .TP
+.B git-aliases
+Manage recommended git aliases
+.TP
 .B preflight
 Run preflight checks
 .TP
@@ -48,7 +51,7 @@ Delete all logs
 Show full system info
 .TP
 .B config-edit
-Edit common system config files (TUI)
+Edit common system config files (TUI, includes git config files when present)
 .TP
 .B net-tools
 Run installed network tools (TUI)
@@ -159,6 +162,19 @@ positional arguments:
   {set,unset}
     set        Enable git status prompt
     unset      Disable git status prompt
+
+options:
+  -h, --help   show this help message and exit
+.fi
+.SS git-aliases
+.nf
+usage: distrodeck git-aliases [-h] {set,unset,show} ...
+
+positional arguments:
+  {set,unset,show}
+    set        Set recommended git aliases
+    unset      Remove recommended git aliases
+    show       Show recommended git aliases
 
 options:
   -h, --help   show this help message and exit

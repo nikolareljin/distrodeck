@@ -204,6 +204,14 @@ def cmd_exists(name: str) -> bool:
     ) == 0
 
 
+def command_path(name: str) -> Optional[str]:
+    result = run(["bash", "-lc", f"command -v {name}"], check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    path = (result.stdout or "").strip()
+    return path or None
+
+
 def require_dialog() -> None:
     if not cmd_exists("dialog"):
         fail("dialog not found. Install it or run distrodeck with CLI arguments.")
@@ -478,6 +486,19 @@ def config_edit_targets() -> List[Tuple[str, str]]:
     return items
 
 
+def git_config_targets() -> List[Tuple[str, str]]:
+    candidates = [
+        ("Git config (user)", str(Path.home() / ".gitconfig")),
+        ("Git config (user)", str(Path.home() / ".config" / "git" / "config")),
+        ("Git config (system)", "/etc/gitconfig"),
+    ]
+    items: List[Tuple[str, str]] = []
+    for label, path in candidates:
+        if Path(path).exists():
+            items.append((label, path))
+    return items
+
+
 def repo_source_targets() -> List[Tuple[str, str]]:
     candidates = [
         ("Apt sources", "/etc/apt/sources.list"),
@@ -517,6 +538,7 @@ def run_config_edit_tui() -> None:
             [
                 ("sources", "Repository sources"),
                 ("configs", "System configs"),
+                ("git", "Git config"),
                 ("custom", "Custom path..."),
                 ("back", "Back"),
             ],
@@ -550,6 +572,19 @@ def run_config_edit_tui() -> None:
                 items.append((path, label, "off"))
             items.append(("back", "Back", "off"))
             choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
+            if not choices or "back" in choices:
+                continue
+            for choice in choices:
+                edit_config_file(Path(choice))
+        elif section == "git":
+            items = []
+            for label, path in git_config_targets():
+                items.append((path, label, "off"))
+            if not items:
+                dialog_msgbox("Config Editor", "No git config files found.")
+                continue
+            items.append(("back", "Back", "off"))
+            choices = dialog_checklist("Config Editor", "Select a git config file:", items)
             if not choices or "back" in choices:
                 continue
             for choice in choices:
@@ -3026,6 +3061,169 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
     log_action_end("git-status unset")
 
 
+def git_alias_definitions() -> List[Tuple[str, str, str]]:
+    return [
+        ("gitf", "fetch", "git fetch"),
+        ("gitp", "pull", "git pull"),
+        ("gitfp", "!git fetch --all && git pull --all", "git fetch --all; git pull --all"),
+        ("glog", "log --graph --decorate --oneline --all --color=always", "colored git history"),
+        ("gpr", "!gh pr create --fill", "create PR for current branch (requires gh)"),
+        ("gs", "status -sb", "short status"),
+        ("gb", "branch -vv", "verbose branches"),
+        ("gd", "diff", "diff"),
+        ("gds", "diff --staged", "diff staged"),
+        ("gco", "checkout", "checkout"),
+        ("gcb", "checkout -b", "create branch"),
+    ]
+
+
+def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> None:
+    for name, value, _ in entries:
+        current = run(
+            ["git", "config", "--global", "--get", f"alias.{name}"],
+            check=False,
+            capture_output=True,
+        )
+        if current.returncode == 0:
+            existing = (current.stdout or "").strip()
+            if existing and existing != value:
+                warn(f"Overwriting git alias {name}: {existing} -> {value}")
+        run(["git", "config", "--global", f"alias.{name}", value], check=False)
+
+
+def run_git_aliases_set(args: argparse.Namespace) -> None:
+    log_action_start("git-aliases set")
+    if not cmd_exists("git"):
+        warn("git not available; cannot set aliases.")
+        log_action_end("git-aliases set", "failed")
+        return
+    entries = getattr(args, "entries", None) or git_alias_definitions()
+    apply_git_aliases(entries)
+    log("Git aliases configured in global git config.")
+    log_action_end("git-aliases set")
+
+
+def run_git_aliases_unset(_: argparse.Namespace) -> None:
+    log_action_start("git-aliases unset")
+    if not cmd_exists("git"):
+        warn("git not available; cannot unset aliases.")
+        log_action_end("git-aliases unset", "failed")
+        return
+    for name, _, _ in git_alias_definitions():
+        run(["git", "config", "--global", "--unset", f"alias.{name}"], check=False)
+    log("Git aliases removed from global git config.")
+    log_action_end("git-aliases unset")
+
+
+def run_git_aliases_show(_: argparse.Namespace) -> None:
+    log_action_start("git-aliases show")
+    if not cmd_exists("git"):
+        warn("git not available; cannot show aliases.")
+        log_action_end("git-aliases show", "failed")
+        return
+    lines = []
+    for name, _, desc in git_alias_definitions():
+        current = run(
+            ["git", "config", "--global", "--get", f"alias.{name}"],
+            check=False,
+            capture_output=True,
+        )
+        value = (current.stdout or "").strip()
+        if value:
+            lines.append(f"{name} = {value}  ({desc})")
+        else:
+            lines.append(f"{name} = (not set)  ({desc})")
+    log("\n".join(lines))
+    log_action_end("git-aliases show")
+
+
+def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
+    conflicts = []
+    for name, _, _ in entries:
+        path = command_path(name)
+        if path:
+            conflicts.append(f"{name} -> {path}")
+    if conflicts:
+        dialog_msgbox(
+            "Git Aliases",
+            "Command jamming detected (alias matches an existing command):\n"
+            + "\n".join(conflicts),
+        )
+    updated: List[Tuple[str, str, str]] = []
+    for name, value, desc in entries:
+        conflict = command_path(name)
+        if conflict:
+            dialog_msgbox(
+                "Git Aliases",
+                f"Alias '{name}' conflicts with existing command:\n{conflict}",
+            )
+            new_name = dialog_input(
+                "Git Aliases",
+                f"Alias name for '{name}' (blank to keep):",
+                name,
+            )
+            if new_name is None:
+                new_name = name
+            new_name = new_name.strip() or name
+            new_value = dialog_input(
+                "Git Aliases",
+                f"Alias command for '{new_name}':",
+                value,
+            )
+            if new_value is None:
+                new_value = value
+            new_value = new_value.strip() or value
+            if new_name != name and command_path(new_name):
+                dialog_msgbox(
+                    "Git Aliases",
+                    f"Warning: '{new_name}' also exists on PATH. Keeping your choice.",
+                )
+            updated.append((new_name, new_value, desc))
+        else:
+            updated.append((name, value, desc))
+    return updated
+
+
+def run_git_aliases_tui() -> None:
+    require_dialog()
+    if not cmd_exists("git"):
+        dialog_msgbox("Git Aliases", "git not available; cannot manage aliases.")
+        return
+    choice = dialog_menu(
+        "Git Aliases",
+        "Configure git aliases:",
+        [
+            ("set", "Set recommended git aliases"),
+            ("unset", "Remove recommended git aliases"),
+            ("show", "Show current alias values"),
+            ("back", "Back"),
+        ],
+    )
+    if not choice or choice == "back":
+        return
+    if choice == "set":
+        entries = resolve_git_alias_conflicts(git_alias_definitions())
+        run_git_aliases_set(argparse.Namespace(entries=entries))
+        dialog_msgbox("Git Aliases", "Aliases set in global git config.")
+    elif choice == "unset":
+        run_git_aliases_unset(argparse.Namespace())
+        dialog_msgbox("Git Aliases", "Aliases removed from global git config.")
+    elif choice == "show":
+        lines = []
+        for name, _, desc in git_alias_definitions():
+            current = run(
+                ["git", "config", "--global", "--get", f"alias.{name}"],
+                check=False,
+                capture_output=True,
+            )
+            value = (current.stdout or "").strip()
+            if value:
+                lines.append(f"{name} = {value}  ({desc})")
+            else:
+                lines.append(f"{name} = (not set)  ({desc})")
+        dialog_msgbox("Git Aliases", "\n".join(lines) if lines else "No aliases found.")
+
+
 def shell_config_path(shell_name: str) -> Path:
     home = Path.home()
     if shell_name == "zsh":
@@ -3243,6 +3441,7 @@ def run_tui() -> None:
         ("repo-repair", "Packages: Repo repair (apt issues)"),
         ("install-tools", "Tools: Install optional tools"),
         ("git-status", "Tools: Enable git status in shell prompt"),
+        ("git-aliases", "Tools: Configure git aliases"),
         ("automate", "Automation: Run Ansible pull"),
         ("net-tools", "Network: Run installed tools"),
         ("config-edit", "System: Edit config files"),
@@ -3585,6 +3784,9 @@ def run_tui() -> None:
         if choice == "git-status":
             run_git_status_tui()
             continue
+        if choice == "git-aliases":
+            run_git_aliases_tui()
+            continue
 
         env = None
         if choice == "export":
@@ -3737,6 +3939,18 @@ def build_parser() -> argparse.ArgumentParser:
     git_set_cmd.set_defaults(func=run_git_status_set)
     git_unset_cmd = git_sub.add_parser("unset", help="Disable git status prompt")
     git_unset_cmd.set_defaults(func=run_git_status_unset)
+
+    alias_cmd = sub.add_parser(
+        "git-aliases",
+        help="Manage recommended git aliases",
+    )
+    alias_sub = alias_cmd.add_subparsers(dest="action", required=True)
+    alias_set_cmd = alias_sub.add_parser("set", help="Set recommended git aliases")
+    alias_set_cmd.set_defaults(func=run_git_aliases_set)
+    alias_unset_cmd = alias_sub.add_parser("unset", help="Remove recommended git aliases")
+    alias_unset_cmd.set_defaults(func=run_git_aliases_unset)
+    alias_show_cmd = alias_sub.add_parser("show", help="Show recommended git aliases")
+    alias_show_cmd.set_defaults(func=run_git_aliases_show)
 
     preflight_cmd = sub.add_parser("preflight", help="Run preflight checks")
     preflight_cmd.set_defaults(func=run_preflight_cmd)

@@ -164,6 +164,7 @@ Edit common system config files or repository sources in a TUI editor (nginx/apa
 ```
 distrodeck config-edit
 ```
+Includes git config files when present.
 
 ### automate (TUI)
 
@@ -238,6 +239,16 @@ Defaults to bash, but uses the active shell when available (bash, zsh, fish).
 ```
 distrodeck git-status set
 distrodeck git-status unset
+```
+
+### git-aliases
+
+Manage recommended git aliases in your global git config.
+
+```
+distrodeck git-aliases set
+distrodeck git-aliases unset
+distrodeck git-aliases show
 ```
 
 Example prompt segment:
