@@ -593,7 +593,7 @@ def run_config_edit_tui() -> None:
             for choice in choices:
                 edit_config_file(Path(choice))
             continue
-        elif section == "git":
+        if section == "git":
             items = []
             for label, path in git_config_targets():
                 items.append((path, label, "off"))
