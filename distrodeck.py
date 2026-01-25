@@ -3093,15 +3093,16 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dds", "diff --staged", "diff staged"),
         ("dco", "checkout", "checkout"),
         ("dcb", "checkout -b", "create branch"),
-        ("dhelp", "!git config --get-regexp '^alias\\.d' || true", "show distrodeck aliases"),
+        (
+            "dhelp",
+            "!git config --get-regexp '^alias\\.(df|dp|dfp|dl|dpr|ds|db|dbr|dd|dds|dco|dcb|dhelp)$' || true",
+            "show distrodeck aliases",
+        ),
     ]
 
 
-def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> None:
-    run(
-        ["git", "config", "--global", "--unset-all", "distrodeck.alias"],
-        check=False,
-    )
+def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> bool:
+    failures: List[Tuple[str, str]] = []
     for name, value, _ in entries:
         current = run(
             ["git", "config", "--global", "--get", f"alias.{name}"],
@@ -3112,11 +3113,29 @@ def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> None:
             existing = (current.stdout or "").strip()
             if existing and existing != value:
                 warn(f"Overwriting git alias {name}: {existing} -> {value}")
-        run(["git", "config", "--global", f"alias.{name}", value], check=False)
+        result = run(
+            ["git", "config", "--global", f"alias.{name}", value],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip() or "unknown error"
+            failures.append((name, details))
+    if failures:
+        warn("Failed to set one or more git aliases; tracking entries unchanged.")
+        for name, details in failures:
+            warn(f"Alias {name} failed: {details}")
+        return False
+    run(
+        ["git", "config", "--global", "--unset-all", "distrodeck.alias"],
+        check=False,
+    )
+    for name, value, _ in entries:
         run(
             ["git", "config", "--global", "--add", "distrodeck.alias", f"{name}={value}"],
             check=False,
         )
+    return True
 
 
 def stored_git_alias_entries() -> List[Tuple[str, str]]:
@@ -3146,9 +3165,11 @@ def run_git_aliases_set(args: argparse.Namespace) -> None:
         log_action_end("git-aliases set", "failed")
         return
     entries = getattr(args, "entries", None) or git_alias_definitions()
-    apply_git_aliases(entries)
-    log("Git aliases configured in global git config.")
-    log_action_end("git-aliases set")
+    if apply_git_aliases(entries):
+        log("Git aliases configured in global git config.")
+        log_action_end("git-aliases set")
+        return
+    log_action_end("git-aliases set", "failed")
 
 
 def run_git_aliases_unset(_: argparse.Namespace) -> None:
