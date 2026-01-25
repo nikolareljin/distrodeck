@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+version="$(cat VERSION | tr -d '\n' | tr -d '\r')"
+
+if [[ -z "$version" ]]; then
+  echo "[pre-commit] VERSION file is empty." >&2
+  exit 1
+fi
+
+if command -v rg >/dev/null 2>&1; then
+  SEARCH_CMD='rg -n'
+else
+  SEARCH_CMD='grep -n'
+fi
+
+changelog_version="$($SEARCH_CMD '^## \[' CHANGELOG.md | head -n 1 | sed -E 's/^## \[([^]]+)\].*/\1/')"
+if [[ -n "$changelog_version" && "$changelog_version" != "$version" ]]; then
+  echo "[pre-commit] VERSION ($version) does not match CHANGELOG.md ($changelog_version)." >&2
+  exit 1
+fi
+
+man_version="$($SEARCH_CMD '^\.TH DISTRODECK' docs/man/distrodeck.1 | sed -E 's/.*"distrodeck ([^"]+)".*/\1/')"
+if [[ -n "$man_version" && "$man_version" != "$version" ]]; then
+  echo "[pre-commit] VERSION ($version) does not match docs/man/distrodeck.1 ($man_version)." >&2
+  exit 1
+fi
+
+python3 -m py_compile distrodeck.py >/dev/null
+
+echo "[pre-commit] OK"

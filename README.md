@@ -82,9 +82,31 @@ distrodeck git-status set
 
 distrodeck git-status unset
 
+distrodeck git-aliases set
+
+distrodeck git-aliases unset
+
+distrodeck git-aliases show
+
+Recommended git aliases (prefixed with `d`):
+- `git df`  -> fetch
+- `git dp`  -> pull
+- `git dfp` -> fetch --all; pull --all
+- `git dl`  -> history (graph, oneline, all, colored)
+- `git dpr` -> create PR (requires `gh`)
+- `git ds`  -> short status
+- `git db`  -> verbose branches
+- `git dbr` -> all branches (local + remote)
+- `git dd`  -> diff
+- `git dds` -> diff staged
+- `git dco` -> checkout
+- `git dcb` -> create branch
+- `git dhelp` -> list distrodeck aliases
+
 distrodeck sysinfo
 
 distrodeck config-edit
+Includes git config files when present.
 
 distrodeck net-tools
 
@@ -192,6 +214,14 @@ git
 - `--update-sources` replaces the old distro codename with the current one for `apt_sources` entries.
 - AppImages are discovered in `~/Applications`, `~/AppImage`, `~/AppImages`, or `DISTRODECK_APPIMAGE_DIRS`.
 - Import is dry-run by default. Use `--apply` to install.
+
+## Development
+
+Enable lightweight pre-commit checks:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Compatibility
 

@@ -2,6 +2,16 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [0.5.0]
+
+### Added
+- New `git-aliases` command (and TUI action) to set/unset/show recommended git aliases.
+- Git aliases now include simplified `d*` shortcuts for common git operations, plus `dhelp` to list them.
+- Config editor now includes git config files when present.
+
+### Changed
+- TUI git-aliases flow now validates alias names against existing git commands.
+
 ## [0.4.0]
 
 ### Added
