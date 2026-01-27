@@ -116,7 +116,9 @@ def load_config() -> configparser.ConfigParser:
         try:
             if path.exists():
                 cfg.read(path, encoding="utf-8")
-        except (OSError, configparser.Error):
+        except (OSError, configparser.Error) as exc:
+            if path.exists():
+                warn(f"Failed to read config file '{path}': {exc}")
             continue
     return cfg
 
