@@ -2430,7 +2430,7 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
             if stripped.startswith("#"):
                 updated_lines.append(line)
                 continue
-            if re.match(r"^\s*(Suites?|Codename):", line) and old_codename in line:
+            if re.match(r"^\s*(Suite|Suites|Codename):", line, flags=re.IGNORECASE) and old_codename in line:
                 new_line = line.replace(old_codename, new_codename)
                 if new_line != line:
                     changed += 1
