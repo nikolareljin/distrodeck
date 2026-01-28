@@ -1475,13 +1475,33 @@ def parse_apt_source_line(line: str) -> Optional[Dict[str, str]]:
     return {"kind": kind, "uri": uri, "suite": suite, "line": stripped}
 
 
+def _is_same_or_subdomain(host: str, parent: str) -> bool:
+    """
+    Return True if ``host`` is exactly ``parent`` or a subdomain of it.
+
+    Both arguments are treated as DNS hostnames (no ports) and are compared
+    case-insensitively based on their label structure.
+    """
+    if not host or not parent:
+        return False
+    host_norm = host.lower().rstrip(".")
+    parent_norm = parent.lower().rstrip(".")
+    if host_norm == parent_norm:
+        return True
+    host_labels = host_norm.split(".")
+    parent_labels = parent_norm.split(".")
+    if len(host_labels) <= len(parent_labels):
+        return False
+    return host_labels[-len(parent_labels) :] == parent_labels
+
+
 def is_official_apt_repo(uri: str, os_id: str) -> bool:
     parsed = urlparse(uri)
-    host = parsed.netloc.lower()
+    host = (parsed.hostname or "").lower()
     if not host:
         return False
     for official in get_official_apt_hosts(os_id):
-        if host == official or host.endswith(f".{official}"):
+        if _is_same_or_subdomain(host, official):
             return True
     return False
 
