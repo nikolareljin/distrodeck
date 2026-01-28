@@ -705,6 +705,10 @@ def run_config_edit_tui() -> None:
                 continue
             for choice in choices:
                 edit_config_file(Path(choice))
+            if not choices or "back" in choices:
+                continue
+            for choice in choices:
+                edit_config_file(Path(choice))
             continue
         if section == "git":
             items = []
