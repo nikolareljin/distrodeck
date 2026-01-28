@@ -690,6 +690,7 @@ def run_config_edit_tui() -> None:
                 continue
             for choice in choices:
                 edit_config_file(Path(choice))
+            continue
         elif section == "distrodeck":
             items = []
             for label, path in distrodeck_config_targets():
