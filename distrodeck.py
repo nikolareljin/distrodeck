@@ -124,6 +124,7 @@ def load_config() -> configparser.ConfigParser:
 
 
 def parse_csv_list(value: Optional[str]) -> List[str]:
+    """Parse comma/whitespace-delimited lists (both separators are accepted)."""
     if not value:
         return []
     items: List[str] = []
@@ -700,6 +701,10 @@ def run_config_edit_tui() -> None:
                 continue
             items.append(("back", "Back", "off"))
             choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
+            if not choices or "back" in choices:
+                continue
+            for choice in choices:
+                edit_config_file(Path(choice))
             continue
         if section == "git":
             items = []
@@ -2149,8 +2154,11 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
         run(["sudo", "apt-get", "update"])
         run(["sudo", "apt-get", "full-upgrade", "-y"])
         new_codename = get_codename()
-        if old_codename and new_codename and old_codename != new_codename:
-            update_apt_sources_codename(old_codename, new_codename)
+        if new_codename and target_codename and new_codename != target_codename:
+            warn(
+                "Debian codename does not match target after upgrade; "
+                "sources already set to target."
+            )
         restore_args = argparse.Namespace(
             input=str(export_path),
             apply=True,
@@ -2169,8 +2177,6 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
         log_action_end("upgrade")
         return
 
-    warn(f"Distro upgrade not implemented for {os_id}")
-    log_action_end("upgrade", "unsupported")
 
 
 def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
