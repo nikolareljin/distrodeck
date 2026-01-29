@@ -6,6 +6,20 @@ distrodeck \- Export and restore packages before distro upgrades.
 \fIcommand\fR [options]
 .SH DESCRIPTION
 distrodeck exports installed packages and sources, then re-installs them after a distro upgrade.
+.SH CONFIGURATION
+Optional config file: \fI~/.config/distrodeck/config.ini\fR or \fI/etc/distrodeck/config.ini\fR.
+.PP
+Sample file: \fIexamples/config.ini\fR.
+.PP
+Example:
+.PP
+.nf
+[apt]
+official_hosts_common = mirrors.example.org
+official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
+official_hosts_debian = deb.debian.org, security.debian.org
+# official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
+.fi
 .SH COMMANDS
 .TP
 .B export
@@ -51,7 +65,7 @@ Delete all logs
 Show full system info
 .TP
 .B config-edit
-Edit common system config files (TUI, includes git config files when present)
+Edit common system config files (TUI, includes distrodeck config files when present)
 .TP
 .B net-tools
 Run installed network tools (TUI)
@@ -120,10 +134,12 @@ options:
 .fi
 .SS upgrade
 .nf
-usage: distrodeck upgrade [-h]
+usage: distrodeck upgrade [-h] [--target-codename TARGET_CODENAME]
 
 options:
   -h, --help  show this help message and exit
+  --target-codename TARGET_CODENAME
+                Target codename for Debian upgrades (or set DISTRODECK_TARGET_CODENAME)
 .fi
 .SS security
 .nf
