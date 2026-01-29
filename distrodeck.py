@@ -16,9 +16,7 @@ import shutil
 from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
 from glob import glob
-from pathlib import Path
 from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
@@ -701,10 +699,6 @@ def run_config_edit_tui() -> None:
                 continue
             items.append(("back", "Back", "off"))
             choices = dialog_checklist("Config Editor", "Select a file to edit:", items)
-            if not choices or "back" in choices:
-                continue
-            for choice in choices:
-                edit_config_file(Path(choice))
             if not choices or "back" in choices:
                 continue
             for choice in choices:
