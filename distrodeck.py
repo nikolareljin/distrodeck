@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import shutil
+from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -110,6 +111,7 @@ def config_paths() -> List[Path]:
     return paths
 
 
+@lru_cache(maxsize=1)
 def load_config() -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     for path in config_paths():
@@ -124,7 +126,7 @@ def load_config() -> configparser.ConfigParser:
 
 
 def parse_csv_list(value: Optional[str]) -> List[str]:
-    """Parse comma/whitespace-delimited lists (both separators are accepted)."""
+    """Parse comma-delimited lists (whitespace around commas is ignored)."""
     if not value:
         return []
     items: List[str] = []
@@ -132,9 +134,7 @@ def parse_csv_list(value: Optional[str]) -> List[str]:
         chunk = chunk.strip()
         if not chunk:
             continue
-        for part in chunk.split():
-            if part:
-                items.append(part)
+        items.append(chunk)
     return items
 
 
@@ -2152,6 +2152,7 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             input=str(export_path),
             apply=True,
             update_sources=True,
+            skip_existing_source_update=True,
             apply_config=False,
             config_archive=None,
             apply_services=False,
@@ -2187,6 +2188,7 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             input=str(export_path),
             apply=True,
             update_sources=True,
+            skip_existing_source_update=True,
             apply_config=False,
             config_archive=None,
             apply_services=False,
@@ -2461,11 +2463,20 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
             if stripped.startswith("#"):
                 updated_lines.append(line)
                 continue
-            if re.match(r"^\s*(Suite|Suites|Codename):", line, flags=re.IGNORECASE) and old_codename in line:
-                new_line = line.replace(old_codename, new_codename)
-                if new_line != line:
+            match = re.match(
+                r"^(\s*(?:Suite|Suites|Codename):\s*)(.*)$",
+                line,
+                flags=re.IGNORECASE,
+            )
+            if match and old_codename in line:
+                prefix, value = match.groups()
+                pattern = r"\b" + re.escape(old_codename) + r"\b"
+                new_value, num_subs = re.subn(pattern, new_codename, value)
+                if num_subs > 0:
                     changed += 1
-                updated_lines.append(new_line)
+                    updated_lines.append(prefix + new_value)
+                else:
+                    updated_lines.append(line)
                 continue
             updated_lines.append(line)
         if updated_lines != lines:
@@ -2730,7 +2741,9 @@ def import_from_file(args: argparse.Namespace) -> None:
                     )
                 else:
                     log("No new apt sources to add; all entries already present.")
-                if args.update_sources:
+                if args.update_sources and not getattr(
+                    args, "skip_existing_source_update", False
+                ):
                     update_apt_sources_codename(data["codename"], new_codename)
 
             if wants("apt_manual") and data["apt_manual"] and cmd_exists("apt-get"):
