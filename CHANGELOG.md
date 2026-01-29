@@ -11,6 +11,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ### Changed
 - TUI git-aliases flow now validates alias names against existing git commands.
+- Debian packages now bundle the install-tools TUI and script-helpers so `distrodeck install-tools` works without git submodules on first run.
 
 ## [0.4.0]
 

@@ -166,6 +166,8 @@ This repo includes the `nikolareljin/script-helpers` git submodule under `script
 git submodule update --init --recursive
 ```
 
+When building Debian packages, `scripts/install-tools-tui.sh` and `scripts/script-helpers` are bundled so `distrodeck install-tools` works on fresh installs without initializing submodules.
+
 ## Export file format
 
 The export is a plain text file with sections:

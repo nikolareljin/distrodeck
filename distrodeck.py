@@ -3136,9 +3136,15 @@ def run_doctor() -> None:
 
 def run_install_tools(args: argparse.Namespace) -> None:
     log_action_start("install-tools")
-    script = Path(__file__).resolve().parent / "scripts" / "install-tools-tui.sh"
-    if not script.exists():
-        fail(f"Installer script not found: {script}")
+    script_candidates = [
+        Path(__file__).resolve().parent / "scripts" / "install-tools-tui.sh",
+        Path("/usr/share/distrodeck/scripts/install-tools-tui.sh"),
+        Path("/usr/lib/distrodeck/scripts/install-tools-tui.sh"),
+    ]
+    script = next((path for path in script_candidates if path.exists()), None)
+    if script is None:
+        locations = ", ".join(str(path) for path in script_candidates)
+        fail(f"Installer script not found. Checked: {locations}")
     cmd = [str(script)]
     if args.all:
         cmd.append("--all")
