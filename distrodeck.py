@@ -100,12 +100,12 @@ def fail(message: str) -> None:
 
 def config_paths() -> List[Path]:
     paths = []
+    paths.append(Path("/etc/distrodeck/config.ini"))
     config_home = os.getenv("XDG_CONFIG_HOME")
     if config_home:
         paths.append(Path(config_home) / "distrodeck" / "config.ini")
     else:
         paths.append(Path.home() / ".config" / "distrodeck" / "config.ini")
-    paths.append(Path("/etc/distrodeck/config.ini"))
     return paths
 
 
@@ -633,9 +633,15 @@ def apt_deb822_files() -> List[Path]:
 
 def distrodeck_config_targets() -> List[Tuple[str, str]]:
     items: List[Tuple[str, str]] = []
-    for path in config_paths():
+    paths = list(config_paths())
+    user_config = paths[-1] if paths else None
+    for path in paths:
         if path.exists():
-            label = "Distrodeck config (user)" if str(path).startswith(str(Path.home())) else "Distrodeck config (system)"
+            label = (
+                "Distrodeck config (user)"
+                if user_config is not None and path == user_config
+                else "Distrodeck config (system)"
+            )
             items.append((label, str(path)))
     return items
 
@@ -1453,24 +1459,89 @@ def parse_apt_source_line(line: str) -> Optional[Dict[str, str]]:
         return None
     if not (stripped.startswith("deb ") or stripped.startswith("deb-src ")):
         return None
+    parsed_line = stripped
+    if re.match(r"^deb(?:-src)?\s+\[", stripped):
+        bracket_start = stripped.find("[")
+        bracket_end = stripped.find("]", bracket_start + 1)
+        if bracket_start == -1 or bracket_end == -1:
+            return None
+        before = stripped[:bracket_start].rstrip()
+        after = stripped[bracket_end + 1 :].lstrip()
+        parsed_line = f"{before} {after}".strip()
     try:
-        parts = shlex.split(stripped)
+        parts = shlex.split(parsed_line)
     except ValueError:
         return None
     if len(parts) < 2:
         return None
     kind = parts[0]
     idx = 1
-    if idx < len(parts) and parts[idx].startswith("["):
-        while idx < len(parts) and not parts[idx].endswith("]"):
-            idx += 1
-        if idx < len(parts) and parts[idx].endswith("]"):
-            idx += 1
     if idx >= len(parts):
         return None
     uri = parts[idx]
     suite = parts[idx + 1] if idx + 1 < len(parts) else ""
     return {"kind": kind, "uri": uri, "suite": suite, "line": stripped}
+
+
+def _split_deb822_field(value: str) -> List[str]:
+    return [part for part in value.split() if part]
+
+
+def _normalize_deb822_option_value(value: str) -> str:
+    return ",".join(value.split())
+
+
+def deb822_to_deb_lines(lines: List[str]) -> List[str]:
+    stanzas: List[Dict[str, str]] = []
+    current: Dict[str, str] = {}
+    current_key: Optional[str] = None
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if not line.strip():
+            if current:
+                stanzas.append(current)
+                current = {}
+            current_key = None
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+        if line[:1].isspace():
+            if current_key:
+                current[current_key] = f"{current[current_key]} {line.strip()}"
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        current[key] = value.strip()
+        current_key = key
+    if current:
+        stanzas.append(current)
+
+    output: List[str] = []
+    for stanza in stanzas:
+        types = _split_deb822_field(stanza.get("types", "deb"))
+        uris = _split_deb822_field(stanza.get("uris", "") or stanza.get("uri", ""))
+        suites = _split_deb822_field(stanza.get("suites", "") or stanza.get("suite", ""))
+        components = _split_deb822_field(stanza.get("components", ""))
+        if not uris or not suites:
+            continue
+        options = []
+        architectures = stanza.get("architectures", "")
+        if architectures:
+            options.append(f"arch={_normalize_deb822_option_value(architectures)}")
+        signed_by = stanza.get("signed-by", "")
+        if signed_by:
+            options.append(f"signed-by={_normalize_deb822_option_value(signed_by)}")
+        options_prefix = f"[{' '.join(options)}] " if options else ""
+        for entry_type in types:
+            for uri in uris:
+                for suite in suites:
+                    line = f"{entry_type} {options_prefix}{uri} {suite}"
+                    if components:
+                        line += " " + " ".join(components)
+                    output.append(line)
+    return output
 
 
 def _is_same_or_subdomain(host: str, parent: str) -> bool:
@@ -1531,6 +1602,21 @@ def export_apt_sources() -> List[str]:
             continue
         for line in lines:
             info = parse_apt_source_line(line)
+            if not info:
+                continue
+            if "ppa.launchpad.net" in info["line"]:
+                continue
+            if is_official_apt_repo(info["uri"], os_id):
+                continue
+            sources.add(normalize_apt_source_line(info["line"]))
+    for item in apt_deb822_files():
+        try:
+            lines = item.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            warn(f"Failed to read apt sources: {item}")
+            continue
+        for deb_line in deb822_to_deb_lines(lines):
+            info = parse_apt_source_line(deb_line)
             if not info:
                 continue
             if "ppa.launchpad.net" in info["line"]:
@@ -2106,6 +2192,26 @@ def run_security() -> None:
     log_action_end("security", "failed")
 
 
+def build_upgrade_restore_args(
+    export_path: Path, *, skip_existing_source_update: bool
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        input=str(export_path),
+        apply=True,
+        update_sources=True,
+        skip_existing_source_update=skip_existing_source_update,
+        apply_config=False,
+        config_archive=None,
+        apply_services=False,
+        apply_config_files=False,
+        sections="apt_manual,apt_hold,ppas,apt_sources",
+        cleanup_extras=False,
+        appimage_dirs=None,
+        skip_backup=False,
+        skip_revert_prompt=False,
+    )
+
+
 def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
     log_action_start("upgrade")
     if args is None:
@@ -2142,20 +2248,8 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
         new_codename = get_codename()
         if old_codename and new_codename and old_codename != new_codename:
             update_apt_sources_codename(old_codename, new_codename)
-        restore_args = argparse.Namespace(
-            input=str(export_path),
-            apply=True,
-            update_sources=True,
-            skip_existing_source_update=True,
-            apply_config=False,
-            config_archive=None,
-            apply_services=False,
-            apply_config_files=False,
-            sections="apt_manual,apt_hold,ppas,apt_sources",
-            cleanup_extras=False,
-            appimage_dirs=None,
-            skip_backup=False,
-            skip_revert_prompt=False,
+        restore_args = build_upgrade_restore_args(
+            export_path, skip_existing_source_update=True
         )
         import_from_file(restore_args)
         log_action_end("upgrade")
@@ -2178,20 +2272,8 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
                 "Debian codename does not match target after upgrade; "
                 "sources already set to target."
             )
-        restore_args = argparse.Namespace(
-            input=str(export_path),
-            apply=True,
-            update_sources=True,
-            skip_existing_source_update=True,
-            apply_config=False,
-            config_archive=None,
-            apply_services=False,
-            apply_config_files=False,
-            sections="apt_manual,apt_hold,ppas,apt_sources",
-            cleanup_extras=False,
-            appimage_dirs=None,
-            skip_backup=False,
-            skip_revert_prompt=False,
+        restore_args = build_upgrade_restore_args(
+            export_path, skip_existing_source_update=True
         )
         import_from_file(restore_args)
         log_action_end("upgrade")
@@ -2396,6 +2478,7 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
         except OSError:
             warn(f"Failed to read apt sources: {path}")
             continue
+        # Pre-populate with rewritten active sources to prevent duplicate re-enables below.
         for line in lines:
             stripped = line.lstrip()
             if stripped.startswith("#"):
@@ -2443,7 +2526,7 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
             updated_lines.append(line)
         if updated_lines != lines:
             write_root_file(path, "\n".join(updated_lines))
-            log(f"Updated apt sources in {path}")
+            log(f"Updated apt sources in {path} ({changed} entries)")
     for path in apt_deb822_files():
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -2475,7 +2558,7 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
             updated_lines.append(line)
         if updated_lines != lines:
             write_root_file(path, "\n".join(updated_lines))
-            log(f"Updated deb822 apt sources in {path}")
+            log(f"Updated deb822 apt sources in {path} ({changed} entries)")
 
 
 def parse_export_file(path: Path) -> dict:
