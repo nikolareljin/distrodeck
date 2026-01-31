@@ -116,7 +116,7 @@ def load_config() -> configparser.ConfigParser:
         try:
             if path.exists():
                 cfg.read(path, encoding="utf-8")
-        except (OSError, configparser.Error) as exc:
+        except (OSError, UnicodeDecodeError, configparser.Error) as exc:
             if path.exists():
                 warn(f"Failed to read config file '{path}': {exc}")
             continue
@@ -284,6 +284,8 @@ def cmd_exists(name: str) -> bool:
 
 
 def git_command_names() -> Set[str]:
+    if not cmd_exists("git"):
+        return set()
     result = run(
         ["git", "--list-cmds=main,others"],
         check=False,
@@ -710,7 +712,7 @@ def run_config_edit_tui() -> None:
             for choice in choices:
                 edit_config_file(Path(choice))
             continue
-        if section == "git":
+        elif section == "git":
             items = []
             for label, path in git_config_targets():
                 items.append((path, label, "off"))
@@ -1550,6 +1552,11 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
 
     Both arguments are treated as DNS hostnames (no ports) and are compared
     case-insensitively based on their label structure.
+
+    Examples:
+      - host=archive.ubuntu.com, parent=ubuntu.com -> True
+      - host=ubuntu.com.attacker.com, parent=ubuntu.com -> True
+      - host=evilarchive.ubuntu.com.attacker.com, parent=archive.ubuntu.com -> False
     """
     if not host or not parent:
         return False
@@ -1566,6 +1573,8 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
 
 def is_official_apt_repo(uri: str, os_id: str) -> bool:
     parsed = urlparse(uri)
+    if parsed.scheme in {"file", "cdrom"} or uri.startswith("/"):
+        return "/cdrom" in uri or uri.startswith("file:/cdrom")
     host = (parsed.hostname or "").lower()
     if not host:
         return False
@@ -1588,6 +1597,13 @@ def active_apt_sources() -> Set[str]:
                 continue
             if stripped.startswith("deb ") or stripped.startswith("deb-src "):
                 sources.add(normalize_apt_source_line(stripped))
+    for path in apt_deb822_files():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for deb_line in deb822_to_deb_lines(lines):
+            sources.add(normalize_apt_source_line(deb_line))
     return sources
 
 
@@ -2263,21 +2279,38 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             )
         if not old_codename:
             fail("Unable to detect current Debian codename for upgrade.")
-        update_apt_sources_codename(old_codename, target_codename)
-        run(["sudo", "apt-get", "update"])
-        run(["sudo", "apt-get", "full-upgrade", "-y"])
-        new_codename = get_codename()
-        if new_codename and target_codename and new_codename != target_codename:
-            warn(
-                "Debian codename does not match target after upgrade; "
-                "sources already set to target."
+        sources_updated = False
+        try:
+            update_apt_sources_codename(old_codename, target_codename)
+            sources_updated = True
+            run(["sudo", "apt-get", "update"])
+            run(["sudo", "apt-get", "full-upgrade", "-y"])
+            new_codename = get_codename()
+            if new_codename and target_codename and new_codename != target_codename:
+                warn(
+                    "Debian codename does not match target after upgrade; "
+                    "sources already set to target."
+                )
+            restore_args = build_upgrade_restore_args(
+                export_path, skip_existing_source_update=True
             )
-        restore_args = build_upgrade_restore_args(
-            export_path, skip_existing_source_update=True
-        )
-        import_from_file(restore_args)
-        log_action_end("upgrade")
-        return
+            import_from_file(restore_args)
+            log_action_end("upgrade")
+            return
+        except Exception as exc:
+            if sources_updated:
+                warn(
+                    "Debian upgrade failed after updating APT sources; "
+                    "attempting to revert sources to the previous codename."
+                )
+                try:
+                    update_apt_sources_codename(target_codename, old_codename)
+                except Exception as revert_err:
+                    warn(
+                        f"Failed to revert APT sources to {old_codename}: {revert_err}"
+                    )
+            log_action_end("upgrade", "failed")
+            raise exc
 
 
 
@@ -2481,14 +2514,18 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
         # Pre-populate with rewritten active sources to prevent duplicate re-enables below.
         for line in lines:
             stripped = line.lstrip()
+            deb_line: Optional[str] = None
             if stripped.startswith("#"):
-                continue
-            if stripped.startswith("deb ") or stripped.startswith("deb-src "):
-                if old_codename in stripped:
-                    normalized = normalize_apt_source_line(
-                        rewrite_codename(stripped, old_codename, new_codename)
-                    )
-                    active_sources.add(normalized)
+                match = re.match(r"^\s*#\s*(deb(?:-src)?\s+.+)$", line)
+                if match:
+                    deb_line = match.group(1).strip()
+            elif stripped.startswith("deb ") or stripped.startswith("deb-src "):
+                deb_line = stripped
+            if deb_line is not None and old_codename in deb_line:
+                normalized = normalize_apt_source_line(
+                    rewrite_codename(deb_line, old_codename, new_codename)
+                )
+                active_sources.add(normalized)
         updated_lines: List[str] = []
         added_sources: Set[str] = set()
         changed = 0
@@ -3508,7 +3545,7 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
 
 
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
-    return [
+    entries = [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
         ("dfp", "!git fetch --all && git pull --all", "fetch --all && pull --all"),
@@ -3521,12 +3558,17 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dds", "diff --staged", "diff staged"),
         ("dco", "checkout", "checkout"),
         ("dcb", "checkout -b", "create branch"),
+    ]
+    alias_names = [name for name, _, _ in entries] + ["dhelp"]
+    alias_pattern = "|".join(re.escape(name) for name in alias_names)
+    entries.append(
         (
             "dhelp",
-            "!git config --get-regexp '^alias\\.(df|dp|dfp|dl|dpr|ds|db|dbr|dd|dds|dco|dcb|dhelp)$' || true",
+            f"!git config --get-regexp '^alias\\.({alias_pattern})$' || true",
             "show distrodeck aliases",
-        ),
-    ]
+        )
+    )
+    return entries
 
 
 def apply_git_aliases(entries: List[Tuple[str, str, str]]) -> bool:
@@ -3586,18 +3628,19 @@ def stored_git_alias_entries() -> List[Tuple[str, str]]:
     return entries
 
 
-def run_git_aliases_set(args: argparse.Namespace) -> None:
+def run_git_aliases_set(args: argparse.Namespace) -> bool:
     log_action_start("git-aliases set")
     if not cmd_exists("git"):
         warn("git not available; cannot set aliases.")
         log_action_end("git-aliases set", "failed")
-        return
+        return False
     entries = getattr(args, "entries", None) or git_alias_definitions()
     if apply_git_aliases(entries):
         log("Git aliases configured in global git config.")
         log_action_end("git-aliases set")
-        return
+        return True
     log_action_end("git-aliases set", "failed")
+    return False
 
 
 def run_git_aliases_unset(_: argparse.Namespace) -> None:
@@ -3673,7 +3716,7 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
                 "Git Aliases",
                 f"Alias '{name}' conflicts with an existing git command.",
             )
-            seed = f"d{name}" if not name.startswith("d") else f"{name}x"
+            seed = f"d{name}"
             default_name = next_safe_name(seed, used_names)
             attempts = 0
             while True:
@@ -3730,8 +3773,13 @@ def run_git_aliases_tui() -> None:
         return
     if choice == "set":
         entries = resolve_git_alias_conflicts(git_alias_definitions())
-        run_git_aliases_set(argparse.Namespace(entries=entries))
-        dialog_msgbox("Git Aliases", "Aliases set in global git config.")
+        if run_git_aliases_set(argparse.Namespace(entries=entries)):
+            dialog_msgbox("Git Aliases", "Aliases set in global git config.")
+        else:
+            dialog_msgbox(
+                "Git Aliases",
+                "Failed to set aliases. See logs for details.",
+            )
     elif choice == "unset":
         run_git_aliases_unset(argparse.Namespace())
         dialog_msgbox("Git Aliases", "Aliases removed from global git config.")
