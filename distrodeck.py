@@ -1559,7 +1559,7 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
 
     Examples:
       - host=archive.ubuntu.com, parent=ubuntu.com -> True
-      - host=ubuntu.com.attacker.com, parent=ubuntu.com -> True
+      - host=ubuntu.com.attacker.com, parent=ubuntu.com -> False
       - host=evilarchive.ubuntu.com.attacker.com, parent=archive.ubuntu.com -> False
     """
     if not host or not parent:
@@ -1568,6 +1568,8 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
     parent_norm = parent.lower().rstrip(".")
     if host_norm == parent_norm:
         return True
+    if not host_norm.endswith(f".{parent_norm}"):
+        return False
     host_labels = host_norm.split(".")
     parent_labels = parent_norm.split(".")
     if len(host_labels) <= len(parent_labels):
