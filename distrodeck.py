@@ -135,7 +135,10 @@ def run_warn(cmd, title: str) -> subprocess.CompletedProcess:
 def run_warn_live(cmd, title: str) -> subprocess.CompletedProcess:
     if in_dialog_mode():
         return run(cmd, check=False)
-    return run_warn(cmd, title)
+    result = run(cmd, check=False)
+    if result.returncode != 0:
+        warn(f"{title} failed.")
+    return result
 
 
 def get_log_dir() -> Path:
@@ -3611,12 +3614,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Export and restore packages before distro upgrades.",
     )
     parser.add_argument(
-        "-v",
+        "-V",
         "--verbose",
         action="store_true",
         help="Enable verbose output where applicable",
     )
-    parser.add_argument("--version", action="version", version=VERSION)
+    parser.add_argument("-v", "--version", action="version", version=VERSION)
     sub = parser.add_subparsers(dest="command", required=True)
 
     export_cmd = sub.add_parser("export", help="Export installed packages and sources")
