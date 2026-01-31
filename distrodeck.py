@@ -214,7 +214,11 @@ def run_warn(cmd, title: str) -> subprocess.CompletedProcess:
 def run_warn_live(cmd, title: str) -> subprocess.CompletedProcess:
     if in_dialog_mode():
         return run(cmd, check=False)
-    return run_warn(cmd, title)
+    log(f"{title}...")
+    result = run(cmd, check=False)
+    if result.returncode != 0:
+        warn(f"{title} failed.")
+    return result
 
 
 def get_log_dir() -> Path:
