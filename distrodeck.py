@@ -215,7 +215,44 @@ def run_warn_live(cmd, title: str) -> subprocess.CompletedProcess:
     if in_dialog_mode():
         return run(cmd, check=False)
     log(f"{title}...")
-    result = run(cmd, check=False)
+    try:
+        import pty
+
+        master_fd, slave_fd = pty.openpty()
+        try:
+            proc = subprocess.Popen(cmd, stdout=slave_fd, stderr=slave_fd)
+        except OSError:
+            os.close(master_fd)
+            os.close(slave_fd)
+            result = run(cmd, check=False)
+        else:
+            os.close(slave_fd)
+            output_chunks = []
+            try:
+                while True:
+                    try:
+                        data = os.read(master_fd, 1024)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    output_chunks.append(data)
+                    if hasattr(sys.stdout, "buffer"):
+                        sys.stdout.buffer.write(data)
+                        sys.stdout.buffer.flush()
+                    else:
+                        sys.stdout.write(data.decode(errors="replace"))
+                        sys.stdout.flush()
+            finally:
+                os.close(master_fd)
+            result = subprocess.CompletedProcess(
+                cmd,
+                proc.wait(),
+                stdout=b"".join(output_chunks).decode(errors="replace"),
+                stderr=None,
+            )
+    except Exception:
+        result = run(cmd, check=False)
     if result.returncode != 0:
         warn(f"{title} failed.")
     return result
