@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-version="$(cat VERSION | tr -d '\n' | tr -d '\r')"
+version="$(tr -d '\n\r' < VERSION)"
 
 if [[ -z "$version" ]]; then
   echo "[pre-commit] VERSION file is empty." >&2
@@ -17,7 +17,7 @@ else
   SEARCH_CMD='grep -n'
 fi
 
-changelog_version="$($SEARCH_CMD '^## \[' CHANGELOG.md | head -n 1 | sed -E 's/^## \[([^]]+)\].*/\1/')"
+changelog_version="$($SEARCH_CMD -m 1 '^## \[' CHANGELOG.md 2>/dev/null | sed -E 's/^## \[([^]]+)\].*/\1/' || true)"
 if [[ -n "$changelog_version" && "$changelog_version" != "$version" ]]; then
   echo "[pre-commit] VERSION ($version) does not match CHANGELOG.md ($changelog_version)." >&2
   exit 1
