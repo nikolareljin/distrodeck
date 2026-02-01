@@ -18,6 +18,8 @@ Export installed packages and sources to a file.
 
 ```
 distrodeck export --output backup.txt
+
+Note: deb822 `.sources` conversion preserves Architectures and Signed-By options only; other deb822 fields are ignored.
 ```
 
 Options:
