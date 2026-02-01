@@ -1498,6 +1498,12 @@ def _normalize_deb822_option_value(value: str) -> str:
 
 
 def deb822_to_deb_lines(lines: List[str]) -> List[str]:
+    """
+    Convert deb822 stanzas to deb/deb-src lines.
+
+    Supported options: Architectures, Signed-By.
+    Other deb822 fields are ignored during conversion.
+    """
     stanzas: List[Dict[str, str]] = []
     current: Dict[str, str] = {}
     current_key: Optional[str] = None
@@ -1579,8 +1585,12 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
 
 def is_official_apt_repo(uri: str, os_id: str) -> bool:
     parsed = urlparse(uri)
-    if parsed.scheme in {"file", "cdrom"} or uri.startswith("/"):
-        return "/cdrom" in uri or uri.startswith("file:/cdrom")
+    if parsed.scheme == "cdrom":
+        return True
+    if parsed.scheme == "file":
+        return parsed.path.startswith("/cdrom")
+    if uri.startswith("/"):
+        return uri.startswith("/cdrom")
     host = (parsed.hostname or "").lower()
     if not host:
         return False
@@ -2283,6 +2293,11 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             fail(
                 "Debian upgrade requires --target-codename or DISTRODECK_TARGET_CODENAME."
             )
+        if not re.fullmatch(r"[a-z]+", target_codename):
+            fail(
+                "Invalid Debian target codename. Expected lowercase letters only, "
+                "for example 'bookworm' or 'trixie'."
+            )
         if not old_codename:
             fail("Unable to detect current Debian codename for upgrade.")
         sources_updated = False
@@ -2303,7 +2318,7 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             import_from_file(restore_args)
             log_action_end("upgrade")
             return
-        except Exception as exc:
+        except (subprocess.CalledProcessError, OSError) as exc:
             if sources_updated:
                 warn(
                     "Debian upgrade failed after updating APT sources; "
@@ -3554,7 +3569,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
     entries = [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
-        ("dfp", "!git fetch --all && git pull --all", "fetch --all && pull --all"),
+        ("dfp", "!git fetch --all; git pull --all", "fetch --all; pull --all"),
         ("dl", "log --graph --decorate --oneline --all --color=always", "history"),
         ("dpr", "!gh pr create --fill", "create PR (requires gh)"),
         ("ds", "status -sb", "short status"),
@@ -3641,6 +3656,8 @@ def run_git_aliases_set(args: argparse.Namespace) -> bool:
         log_action_end("git-aliases set", "failed")
         return False
     entries = getattr(args, "entries", None) or git_alias_definitions()
+    if getattr(args, "entries", None) is None:
+        entries = resolve_git_alias_conflicts(entries)
     if apply_git_aliases(entries):
         log("Git aliases configured in global git config.")
         log_action_end("git-aliases set")

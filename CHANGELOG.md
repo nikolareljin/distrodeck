@@ -16,6 +16,10 @@ This project follows Keep a Changelog and Semantic Versioning.
 - TUI git-aliases flow now validates alias names against existing git commands.
 - Debian packages now bundle the install-tools TUI and script-helpers so `distrodeck install-tools` works without git submodules on first run.
 - `apt_sources` exports now exclude official distribution repository hosts; only non-official/custom APT sources are included in exports.
+- CLI git-aliases now validates alias names against existing git commands.
+- `git dfp` now runs `fetch --all; pull --all` to match docs.
+- Debian upgrade validates target codename format; cdrom sources are detected more robustly.
+- LazyDocker fallback install via upstream script is opt-in via `LAZYDOCKER_ALLOW_CURL_BASH=1`.
 
 ## [0.4.0]
 
