@@ -18,6 +18,8 @@ Export installed packages and sources to a file.
 
 ```
 distrodeck export --output backup.txt
+
+Note: deb822 `.sources` conversion preserves Architectures and Signed-By options only; other deb822 fields are ignored.
 ```
 
 Options:
@@ -197,6 +199,8 @@ Install optional developer tools via a TUI checklist. Supports 64 tools organize
 ```
 distrodeck install-tools        # opens TUI checklist
 distrodeck install-tools --all  # installs all tools non-interactively
+
+Note: lazydocker fallback install via upstream script is disabled by default. Set `LAZYDOCKER_ALLOW_CURL_BASH=1` to enable.
 ```
 
 **Features:**
