@@ -56,6 +56,7 @@ OFFICIAL_APT_HOSTS = {
         "snapshot.debian.org",
     },
 }
+DEBIAN_CODENAME_PATTERN = re.compile(r"[a-z]+")
 
 
 def require_python_version() -> None:
@@ -2299,10 +2300,10 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             fail(
                 "Debian upgrade requires --target-codename or DISTRODECK_TARGET_CODENAME."
             )
-        if not re.fullmatch(r"[a-z]+", target_codename):
-            fail(
-                "Invalid Debian target codename. Expected lowercase letters only, "
-                "for example 'bookworm' or 'trixie'."
+        if not DEBIAN_CODENAME_PATTERN.fullmatch(target_codename):
+            warn(
+                "Debian target codename does not match the expected lowercase format "
+                "(for example 'bookworm' or 'trixie'). Proceeding anyway."
             )
         if not old_codename:
             fail("Unable to detect current Debian codename for upgrade.")
