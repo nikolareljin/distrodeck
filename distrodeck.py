@@ -2338,7 +2338,20 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
 def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
     if not old_codename or not new_codename:
         return line
-    return line.replace(old_codename, new_codename)
+    stripped = line.lstrip()
+    prefix = line[: len(line) - len(stripped)]
+    match = re.match(
+        r"^(deb(?:-src)?\s+(?:\[[^\]]*\]\s+)?\S+\s+)(\S+)",
+        stripped,
+    )
+    if match:
+        suite = match.group(2)
+        if suite == old_codename:
+            tail = stripped[match.end(2) :]
+            return f"{prefix}{match.group(1)}{new_codename}{tail}"
+        return line
+    pattern = r"\b" + re.escape(old_codename) + r"\b"
+    return re.sub(pattern, new_codename, line)
 
 
 def write_root_file(path: Path, content: str) -> None:
