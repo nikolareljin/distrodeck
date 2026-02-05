@@ -1506,7 +1506,8 @@ def deb822_to_deb_lines(lines: List[str]) -> List[str]:
     Convert deb822 stanzas to deb/deb-src lines.
 
     Supported options: Architectures, Signed-By.
-    Other deb822 fields are ignored during conversion.
+    Other deb822 fields are ignored during conversion, so conversion is lossy.
+    Stanzas missing URIs or Suites are skipped.
     """
     stanzas: List[Dict[str, str]] = []
     current: Dict[str, str] = {}
@@ -2358,6 +2359,20 @@ def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
     return re.sub(pattern, new_codename, line)
 
 
+def replace_codename_tokens(value: str, old_codename: str, new_codename: str) -> Tuple[str, int]:
+    parts = re.split(r"(\s+)", value)
+    substitutions = 0
+    for idx in range(0, len(parts), 2):
+        token = parts[idx]
+        if token == old_codename:
+            parts[idx] = new_codename
+            substitutions += 1
+        elif token.startswith(f"{old_codename}-"):
+            parts[idx] = f"{new_codename}{token[len(old_codename):]}"
+            substitutions += 1
+    return "".join(parts), substitutions
+
+
 def write_root_file(path: Path, content: str) -> None:
     if not content.endswith("\n"):
         content += "\n"
@@ -2620,16 +2635,17 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
                 line,
                 flags=re.IGNORECASE,
             )
-            if match and old_codename in line:
+            if match:
                 prefix, value = match.groups()
-                pattern = r"\b" + re.escape(old_codename) + r"\b"
-                new_value, num_subs = re.subn(pattern, new_codename, value)
+                new_value, num_subs = replace_codename_tokens(
+                    value,
+                    old_codename,
+                    new_codename,
+                )
                 if num_subs > 0:
                     changed += 1
                     updated_lines.append(prefix + new_value)
-                else:
-                    updated_lines.append(line)
-                continue
+                    continue
             updated_lines.append(line)
         if updated_lines != lines:
             write_root_file(path, "\n".join(updated_lines))
