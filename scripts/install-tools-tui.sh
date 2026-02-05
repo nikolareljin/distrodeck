@@ -451,21 +451,7 @@ install_lazydocker() {
     return
   fi
 
-  if ! command -v curl >/dev/null 2>&1; then
-    log_warn "Failed to install lazydocker from repos, and curl is missing for fallback install."
-    return
-  fi
-  if [[ "$(uname -s)" != "Linux" ]]; then
-    log_warn "Fallback lazydocker install is only supported on Linux."
-    return
-  fi
-  if [[ "${LAZYDOCKER_ALLOW_CURL_BASH:-0}" != "1" ]]; then
-    log_warn "Fallback lazydocker install via curl|bash is disabled. Set LAZYDOCKER_ALLOW_CURL_BASH=1 to enable."
-    return
-  fi
-  log_info "Installing lazydocker via upstream install script..."
-  curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | bash || \
-    log_warn "Fallback lazydocker install failed."
+  log_warn "Failed to install lazydocker from repos."
 }
 
 install_java() {

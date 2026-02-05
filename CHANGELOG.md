@@ -19,7 +19,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - CLI git-aliases now checks for conflicts with git commands and aborts with guidance to use the TUI.
 - `git dfp` now runs `fetch --all; pull --all` to match docs.
 - Debian upgrade validates target codename format; cdrom sources are detected more robustly.
-- LazyDocker fallback install via upstream script is opt-in via `LAZYDOCKER_ALLOW_CURL_BASH=1`.
+- Removed LazyDocker curl|bash fallback; only distro packages are used.
 
 ## [0.4.0]
 

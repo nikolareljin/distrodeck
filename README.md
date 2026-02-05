@@ -129,8 +129,6 @@ The `install-tools` command offers 64 tools organized by category:
 | `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
 | `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
-
-Note: lazydocker fallback install via upstream script is disabled by default. Set `LAZYDOCKER_ALLOW_CURL_BASH=1` to enable.
 | `[Util]` | flatpak, ntfs-3g, wine |
 | `[App]` | gimp, streamcontroller |
 

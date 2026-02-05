@@ -199,8 +199,6 @@ Install optional developer tools via a TUI checklist. Supports 64 tools organize
 ```
 distrodeck install-tools        # opens TUI checklist
 distrodeck install-tools --all  # installs all tools non-interactively
-
-Note: lazydocker fallback install via upstream script is disabled by default. Set `LAZYDOCKER_ALLOW_CURL_BASH=1` to enable.
 ```
 
 **Features:**
