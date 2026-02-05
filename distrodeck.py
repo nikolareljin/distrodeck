@@ -2251,10 +2251,8 @@ def build_upgrade_restore_args(
     )
 
 
-def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
+def run_upgrade(args: argparse.Namespace) -> None:
     log_action_start("upgrade")
-    if args is None:
-        args = argparse.Namespace(target_codename=None)
     os_id = get_os_id()
     old_codename = get_codename()
     if os_id not in {"ubuntu", "debian"}:
@@ -4364,7 +4362,7 @@ def run_tui() -> None:
                 continue
             run(["dialog", "--clear"], check=False)
             log("Starting distro upgrade. Follow any prompts in the terminal.")
-            run_upgrade()
+            run_upgrade(argparse.Namespace(target_codename=None))
             continue
         elif choice == "security":
             if not ensure_sudo():
