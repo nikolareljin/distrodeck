@@ -3602,6 +3602,7 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
 
 
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
+    # Tuple format: (alias_name, git_command, human_readable_description)
     entries = [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
