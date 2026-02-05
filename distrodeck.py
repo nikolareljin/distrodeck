@@ -1567,6 +1567,7 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
 
     Both arguments are treated as DNS hostnames (no ports) and are compared
     case-insensitively based on their label structure.
+    This is used for repository trust decisions; changes affect security.
 
     Examples:
       - host=archive.ubuntu.com, parent=ubuntu.com -> True
@@ -1594,8 +1595,8 @@ def is_official_apt_repo(uri: str, os_id: str) -> bool:
         return True
     if parsed.scheme == "file":
         return parsed.path.startswith("/cdrom")
-    if uri.startswith("/"):
-        return uri.startswith("/cdrom")
+    if not parsed.scheme and parsed.path.startswith("/cdrom"):
+        return True
     host = (parsed.hostname or "").lower()
     if not host:
         return False
