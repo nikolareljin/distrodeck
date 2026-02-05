@@ -3686,6 +3686,19 @@ def stored_git_alias_entries() -> List[Tuple[str, str]]:
 
 
 def run_git_aliases_set(args: argparse.Namespace) -> bool:
+    """Configure git aliases in the global git config.
+
+    This command sets aliases from ``args.entries`` (if provided) or from
+    :func:`git_alias_definitions`. When entries are not explicitly provided,
+    the CLI checks for conflicting alias names and asks users to resolve them
+    via the TUI.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        True when aliases were applied successfully; False otherwise.
+    """
     log_action_start("git-aliases set")
     if not cmd_exists("git"):
         warn("git not available; cannot set aliases.")
@@ -3693,7 +3706,16 @@ def run_git_aliases_set(args: argparse.Namespace) -> bool:
         return False
     entries = getattr(args, "entries", None) or git_alias_definitions()
     if getattr(args, "entries", None) is None:
-        entries = resolve_git_alias_conflicts(entries)
+        git_cmds = git_command_names()
+        conflicts = [name for name, _, _ in entries if name in git_cmds]
+        if conflicts:
+            warn(
+                "Alias names conflict with existing git commands: "
+                + ", ".join(sorted(conflicts))
+                + ". Use the TUI to resolve conflicts."
+            )
+            log_action_end("git-aliases set", "failed")
+            return False
     if apply_git_aliases(entries):
         log("Git aliases configured in global git config.")
         log_action_end("git-aliases set")
