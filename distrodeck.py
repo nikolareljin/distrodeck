@@ -57,6 +57,8 @@ OFFICIAL_APT_HOSTS = {
     },
 }
 DEBIAN_CODENAME_PATTERN = re.compile(r"[a-z]+")
+MAX_ALIAS_NAME_ATTEMPTS = 3
+MAX_ALIAS_GENERATION_ATTEMPTS = 1000
 
 
 def require_python_version() -> None:
@@ -292,6 +294,7 @@ def cmd_exists(name: str) -> bool:
     ) == 0
 
 
+@lru_cache(maxsize=1)
 def git_command_names() -> Set[str]:
     if not cmd_exists("git"):
         return set()
@@ -3756,12 +3759,19 @@ def run_git_aliases_show(_: argparse.Namespace) -> None:
 
 def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
     git_cmds = git_command_names()
-    def next_safe_name(seed: str, used: Set[str]) -> str:
+    def find_available_alias_name(seed: str, used: Set[str]) -> str:
         candidate = seed
         suffix = 1
+        attempts = 0
         while candidate in git_cmds or candidate in used:
+            if attempts >= MAX_ALIAS_GENERATION_ATTEMPTS:
+                raise RuntimeError(
+                    f"Unable to generate a safe alias name for seed '{seed}' "
+                    f"after {MAX_ALIAS_GENERATION_ATTEMPTS} attempts."
+                )
             candidate = f"{seed}{suffix}"
             suffix += 1
+            attempts += 1
         return candidate
 
     updated: List[Tuple[str, str, str]] = []
@@ -3773,7 +3783,10 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
                 f"Alias '{name}' conflicts with an existing git command.",
             )
             seed = f"d{name}"
-            default_name = next_safe_name(seed, used_names)
+            try:
+                default_name = find_available_alias_name(seed, used_names)
+            except RuntimeError as exc:
+                fail(str(exc))
             attempts = 0
             while True:
                 new_name = dialog_input(
@@ -3787,8 +3800,8 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
                 if new_name not in git_cmds and new_name not in used_names:
                     break
                 attempts += 1
-                if attempts >= 3:
-                    new_name = default_name
+                if attempts >= MAX_ALIAS_NAME_ATTEMPTS:
+                    new_name = find_available_alias_name(seed, used_names)
                     break
                 dialog_msgbox(
                     "Git Aliases",
