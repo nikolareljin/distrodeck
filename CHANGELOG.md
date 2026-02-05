@@ -18,7 +18,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - `apt_sources` exports now exclude official distribution repository hosts; only non-official/custom APT sources are included in exports.
 - CLI git-aliases now checks for conflicts with git commands and aborts with guidance to use the TUI.
 - `git dfp` now runs `fetch --all; pull --all` to match docs.
-- Debian upgrade validates target codename format; cdrom sources are detected more robustly.
+- Debian upgrade warns on unexpected codename formats; cdrom sources are detected more robustly.
 - Removed LazyDocker curl|bash fallback; only distro packages are used.
 
 ## [0.4.0]
