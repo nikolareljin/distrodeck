@@ -1457,6 +1457,7 @@ tool_desc() {
     gimp) echo "[App] GIMP - image editor";;
     image-view) echo "[App] image-view - terminal image viewer";;
     isoforge) echo "[App] Isoforge - ISO burner";;
+    nemo) echo "[App] Nemo - file manager";;
     streamcontroller) echo "[App] StreamController - Stream Deck";;
     *) echo "$1";;
   esac
@@ -1539,6 +1540,7 @@ is_installed_tool() {
     ntfs) command -v ntfs-3g >/dev/null 2>&1 || command -v mount.ntfs-3g >/dev/null 2>&1;;
     streamcontroller) command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.core447.StreamController";;
     gimp) command -v gimp >/dev/null 2>&1;;
+    nemo) command -v nemo >/dev/null 2>&1;;
     *) return 1;;
   esac
 }
@@ -1583,7 +1585,7 @@ main() {
     # ── Utilities ──
     adb dialog flatpak nala ntfs wine
     # ── Apps ──
-    gimp image-view isoforge streamcontroller
+    gimp image-view isoforge nemo streamcontroller
   )
 
   for tool in "${tools[@]}"; do
@@ -1620,7 +1622,7 @@ main() {
     # Clear the screen after dialog closes before showing installation output
     clear
   else
-    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge streamcontroller"
+    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
   fi
 
   # Build set of selected tools
@@ -1774,6 +1776,7 @@ main() {
       ntfs) install_ntfs "$mgr";;
       streamcontroller) install_streamcontroller "$mgr";;
       gimp) install_gimp "$mgr";;
+      nemo) install_pkg_simple "$mgr" nemo;;
     esac
     ); then
       # Installation command succeeded, verify tool is now installed
@@ -1873,6 +1876,7 @@ main() {
         ntfs) uninstall_ntfs "$mgr";;
         streamcontroller) uninstall_streamcontroller "$mgr";;
         gimp) uninstall_gimp "$mgr";;
+        nemo) uninstall_pkg_simple "$mgr" nemo;;
       esac
       ); then
         # Uninstallation succeeded

@@ -194,7 +194,7 @@ distrodeck net-tools
 
 ### install-tools
 
-Install optional developer tools via a TUI checklist. Supports 64 tools organized by category.
+Install optional developer tools via a TUI checklist. Supports 65 tools organized by category.
 
 ```
 distrodeck install-tools        # opens TUI checklist
@@ -220,7 +220,7 @@ distrodeck install-tools --all  # installs all tools non-interactively
 | Languages | go, java, node (20 LTS), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
-| Apps | gimp, image-view, isoforge, streamcontroller |
+| Apps | gimp, image-view, isoforge, nemo, streamcontroller |
 
 **Notable tools:**
 - `bfg` - BFG Repo-Cleaner for removing large files from git history

@@ -118,7 +118,7 @@ distrodeck install-tools --all
 
 ### Install-tools categories
 
-The `install-tools` command offers 64 tools organized by category:
+The `install-tools` command offers 65 tools organized by category:
 
 | Category | Examples |
 |----------|----------|
@@ -130,7 +130,7 @@ The `install-tools` command offers 64 tools organized by category:
 | `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
-| `[App]` | gimp, streamcontroller |
+| `[App]` | gimp, nemo, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 
