@@ -56,6 +56,9 @@ OFFICIAL_APT_HOSTS = {
         "snapshot.debian.org",
     },
 }
+DEBIAN_CODENAME_PATTERN = re.compile(r"[a-z]+")
+MAX_ALIAS_NAME_ATTEMPTS = 3
+MAX_ALIAS_GENERATION_ATTEMPTS = 100
 
 
 def require_python_version() -> None:
@@ -213,7 +216,11 @@ def run_warn(cmd, title: str) -> subprocess.CompletedProcess:
 
 def run_warn_live(cmd, title: str) -> subprocess.CompletedProcess:
     if in_dialog_mode():
-        return run(cmd, check=False)
+        write_log("info", f"{title}...")
+        result = run(cmd, check=False)
+        if result.returncode != 0:
+            write_log("warn", f"{title} failed.")
+        return result
     log(f"{title}...")
     try:
         import pty
@@ -324,6 +331,7 @@ def cmd_exists(name: str) -> bool:
     ) == 0
 
 
+@lru_cache(maxsize=1)
 def git_command_names() -> Set[str]:
     if not cmd_exists("git"):
         return set()
@@ -1539,7 +1547,8 @@ def deb822_to_deb_lines(lines: List[str]) -> List[str]:
     Convert deb822 stanzas to deb/deb-src lines.
 
     Supported options: Architectures, Signed-By.
-    Other deb822 fields are ignored during conversion.
+    Other deb822 fields are ignored during conversion, so conversion is lossy.
+    Stanzas missing URIs or Suites are skipped.
     """
     stanzas: List[Dict[str, str]] = []
     current: Dict[str, str] = {}
@@ -1599,6 +1608,7 @@ def _is_same_or_subdomain(host: str, parent: str) -> bool:
 
     Both arguments are treated as DNS hostnames (no ports) and are compared
     case-insensitively based on their label structure.
+    This is used for repository trust decisions; changes affect security.
 
     Examples:
       - host=archive.ubuntu.com, parent=ubuntu.com -> True
@@ -1626,8 +1636,8 @@ def is_official_apt_repo(uri: str, os_id: str) -> bool:
         return True
     if parsed.scheme == "file":
         return parsed.path.startswith("/cdrom")
-    if uri.startswith("/"):
-        return uri.startswith("/cdrom")
+    if not parsed.scheme and parsed.path.startswith("/cdrom"):
+        return True
     host = (parsed.hostname or "").lower()
     if not host:
         return False
@@ -2281,10 +2291,8 @@ def build_upgrade_restore_args(
     )
 
 
-def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
+def run_upgrade(args: argparse.Namespace) -> None:
     log_action_start("upgrade")
-    if args is None:
-        args = argparse.Namespace(target_codename=None)
     os_id = get_os_id()
     old_codename = get_codename()
     if os_id not in {"ubuntu", "debian"}:
@@ -2330,10 +2338,10 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
             fail(
                 "Debian upgrade requires --target-codename or DISTRODECK_TARGET_CODENAME."
             )
-        if not re.fullmatch(r"[a-z]+", target_codename):
-            fail(
-                "Invalid Debian target codename. Expected lowercase letters only, "
-                "for example 'bookworm' or 'trixie'."
+        if not DEBIAN_CODENAME_PATTERN.fullmatch(target_codename):
+            warn(
+                "Debian target codename does not match the expected lowercase format "
+                "(for example 'bookworm' or 'trixie'). Proceeding anyway."
             )
         if not old_codename:
             fail("Unable to detect current Debian codename for upgrade.")
@@ -2375,7 +2383,34 @@ def run_upgrade(args: Optional[argparse.Namespace] = None) -> None:
 def rewrite_codename(line: str, old_codename: str, new_codename: str) -> str:
     if not old_codename or not new_codename:
         return line
-    return line.replace(old_codename, new_codename)
+    stripped = line.lstrip()
+    prefix = line[: len(line) - len(stripped)]
+    match = re.match(
+        r"^(deb(?:-src)?\s+(?:\[[^\]]*\]\s+)?\S+\s+)(\S+)",
+        stripped,
+    )
+    if match:
+        suite = match.group(2)
+        if suite == old_codename:
+            tail = stripped[match.end(2) :]
+            return f"{prefix}{match.group(1)}{new_codename}{tail}"
+        return line
+    pattern = r"\b" + re.escape(old_codename) + r"\b"
+    return re.sub(pattern, new_codename, line)
+
+
+def replace_codename_tokens(value: str, old_codename: str, new_codename: str) -> Tuple[str, int]:
+    parts = re.split(r"(\s+)", value)
+    substitutions = 0
+    for idx in range(0, len(parts), 2):
+        token = parts[idx]
+        if token == old_codename:
+            parts[idx] = new_codename
+            substitutions += 1
+        elif token.startswith(f"{old_codename}-"):
+            parts[idx] = f"{new_codename}{token[len(old_codename):]}"
+            substitutions += 1
+    return "".join(parts), substitutions
 
 
 def write_root_file(path: Path, content: str) -> None:
@@ -2640,16 +2675,17 @@ def update_apt_sources_codename(old_codename: str, new_codename: str) -> None:
                 line,
                 flags=re.IGNORECASE,
             )
-            if match and old_codename in line:
+            if match:
                 prefix, value = match.groups()
-                pattern = r"\b" + re.escape(old_codename) + r"\b"
-                new_value, num_subs = re.subn(pattern, new_codename, value)
+                new_value, num_subs = replace_codename_tokens(
+                    value,
+                    old_codename,
+                    new_codename,
+                )
                 if num_subs > 0:
                     changed += 1
                     updated_lines.append(prefix + new_value)
-                else:
-                    updated_lines.append(line)
-                continue
+                    continue
             updated_lines.append(line)
         if updated_lines != lines:
             write_root_file(path, "\n".join(updated_lines))
@@ -3603,6 +3639,7 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
 
 
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
+    # Tuple format: (alias_name, git_command, human_readable_description)
     entries = [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
@@ -3687,6 +3724,19 @@ def stored_git_alias_entries() -> List[Tuple[str, str]]:
 
 
 def run_git_aliases_set(args: argparse.Namespace) -> bool:
+    """Configure git aliases in the global git config.
+
+    This command sets aliases from ``args.entries`` (if provided) or from
+    :func:`git_alias_definitions`. When entries are not explicitly provided,
+    the CLI checks for conflicting alias names and asks users to resolve them
+    via the TUI.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        True when aliases were applied successfully; False otherwise.
+    """
     log_action_start("git-aliases set")
     if not cmd_exists("git"):
         warn("git not available; cannot set aliases.")
@@ -3694,7 +3744,16 @@ def run_git_aliases_set(args: argparse.Namespace) -> bool:
         return False
     entries = getattr(args, "entries", None) or git_alias_definitions()
     if getattr(args, "entries", None) is None:
-        entries = resolve_git_alias_conflicts(entries)
+        git_cmds = git_command_names()
+        conflicts = [name for name, _, _ in entries if name in git_cmds]
+        if conflicts:
+            warn(
+                "Alias names conflict with existing git commands: "
+                + ", ".join(sorted(conflicts))
+                + ". Use the TUI to resolve conflicts."
+            )
+            log_action_end("git-aliases set", "failed")
+            return False
     if apply_git_aliases(entries):
         log("Git aliases configured in global git config.")
         log_action_end("git-aliases set")
@@ -3760,12 +3819,19 @@ def run_git_aliases_show(_: argparse.Namespace) -> None:
 
 def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
     git_cmds = git_command_names()
-    def next_safe_name(seed: str, used: Set[str]) -> str:
+    def find_available_alias_name(seed: str, used: Set[str]) -> str:
         candidate = seed
         suffix = 1
+        attempts = 0
         while candidate in git_cmds or candidate in used:
+            if attempts >= MAX_ALIAS_GENERATION_ATTEMPTS:
+                raise RuntimeError(
+                    f"Unable to generate a safe alias name for seed '{seed}' "
+                    f"after {MAX_ALIAS_GENERATION_ATTEMPTS} attempts."
+                )
             candidate = f"{seed}{suffix}"
             suffix += 1
+            attempts += 1
         return candidate
 
     updated: List[Tuple[str, str, str]] = []
@@ -3777,7 +3843,10 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
                 f"Alias '{name}' conflicts with an existing git command.",
             )
             seed = f"d{name}"
-            default_name = next_safe_name(seed, used_names)
+            try:
+                default_name = find_available_alias_name(seed, used_names)
+            except RuntimeError as exc:
+                fail(str(exc))
             attempts = 0
             while True:
                 new_name = dialog_input(
@@ -3791,8 +3860,8 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
                 if new_name not in git_cmds and new_name not in used_names:
                     break
                 attempts += 1
-                if attempts >= 3:
-                    new_name = default_name
+                if attempts >= MAX_ALIAS_NAME_ATTEMPTS:
+                    new_name = find_available_alias_name(seed, used_names)
                     break
                 dialog_msgbox(
                     "Git Aliases",
@@ -4366,7 +4435,7 @@ def run_tui() -> None:
                 continue
             run(["dialog", "--clear"], check=False)
             log("Starting distro upgrade. Follow any prompts in the terminal.")
-            run_upgrade()
+            run_upgrade(argparse.Namespace(target_codename=None))
             continue
         elif choice == "security":
             if not ensure_sudo():
