@@ -63,6 +63,7 @@ distrodeck import --input backup.txt --apply-config-files
 distrodeck update
 
 distrodeck upgrade
+(On Debian, pass `--target-codename` or set `DISTRODECK_TARGET_CODENAME`.)
 
 distrodeck security
 
@@ -82,9 +83,31 @@ distrodeck git-status set
 
 distrodeck git-status unset
 
+distrodeck git-aliases set
+
+distrodeck git-aliases unset
+
+distrodeck git-aliases show
+
+Recommended git aliases (prefixed with `d`):
+- `git df`  -> fetch
+- `git dp`  -> pull
+- `git dfp` -> fetch --all; pull --all
+- `git dl`  -> history (graph, oneline, all, colored)
+- `git dpr` -> create PR (requires `gh`)
+- `git ds`  -> short status
+- `git db`  -> verbose branches
+- `git dbr` -> all branches (local + remote)
+- `git dd`  -> diff
+- `git dds` -> diff staged
+- `git dco` -> checkout
+- `git dcb` -> create branch
+- `git dhelp` -> list distrodeck aliases
+
 distrodeck sysinfo
 
 distrodeck config-edit
+Includes distrodeck config files if present (user and system).
 
 distrodeck net-tools
 
@@ -95,7 +118,7 @@ distrodeck install-tools --all
 
 ### Install-tools categories
 
-The `install-tools` command offers 64 tools organized by category:
+The `install-tools` command offers 65 tools organized by category:
 
 | Category | Examples |
 |----------|----------|
@@ -107,7 +130,7 @@ The `install-tools` command offers 64 tools organized by category:
 | `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
-| `[App]` | gimp, streamcontroller |
+| `[App]` | gimp, nemo, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 
@@ -142,6 +165,8 @@ This repo includes the `nikolareljin/script-helpers` git submodule under `script
 ```bash
 git submodule update --init --recursive
 ```
+
+When building Debian packages, `scripts/install-tools-tui.sh` and `scripts/script-helpers` are bundled so `distrodeck install-tools` works on fresh installs without initializing submodules.
 
 ## Export file format
 
@@ -188,14 +213,40 @@ git
 
 - `export` prefers manually installed apt packages and captures held packages.
 - PPAs are captured as `ppa:user/name` entries and re-added on import.
-- `apt_sources` captures non-PPA entries under `/etc/apt/sources.list.d`.
+- `apt_sources` captures non-PPA entries from `/etc/apt/sources.list` and `/etc/apt/sources.list.d`, excluding official repos.
 - `--update-sources` replaces the old distro codename with the current one for `apt_sources` entries.
 - AppImages are discovered in `~/Applications`, `~/AppImage`, `~/AppImages`, or `DISTRODECK_APPIMAGE_DIRS`.
 - Import is dry-run by default. Use `--apply` to install.
 
+## Configuration
+
+Optional config file: `~/.config/distrodeck/config.ini` (or `/etc/distrodeck/config.ini`).
+
+Example:
+
+```
+[apt]
+official_hosts_common = mirrors.example.org
+official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
+official_hosts_debian = deb.debian.org, security.debian.org
+# To fully override defaults:
+# official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
+```
+
+Sample file: `examples/config.ini`.
+
+## Development
+
+Enable lightweight pre-commit checks:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Compatibility
 
 - Ubuntu: full support (apt, PPA, do-release-upgrade, snap, flatpak)
+- Debian: apt + snap/flatpak, upgrade via `apt-get full-upgrade` with target codename
 - Other Debian-based distros: apt + flatpak + snap (no `do-release-upgrade`)
 - Fedora/RHEL: export/import via `dnf` (no distro-upgrade automation)
 - Arch: export/import via `pacman` (no distro-upgrade automation)

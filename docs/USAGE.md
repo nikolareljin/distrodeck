@@ -18,6 +18,8 @@ Export installed packages and sources to a file.
 
 ```
 distrodeck export --output backup.txt
+
+Note: deb822 `.sources` conversion preserves Architectures and Signed-By options only; other deb822 fields are ignored.
 ```
 
 Options:
@@ -84,10 +86,14 @@ distrodeck update
 ### upgrade
 
 Run a distro upgrade. On Ubuntu this uses `do-release-upgrade`.
+On Debian you must specify the target codename (or set `DISTRODECK_TARGET_CODENAME`).
 
 ```
 distrodeck upgrade
 ```
+
+Options:
+- `--target-codename CODE`: target codename for Debian upgrades
 
 ### security
 
@@ -164,6 +170,9 @@ Edit common system config files or repository sources in a TUI editor (nginx/apa
 ```
 distrodeck config-edit
 ```
+Includes git config files when present.
+
+Includes distrodeck config files if present (user and system).
 
 ### automate (TUI)
 
@@ -185,7 +194,7 @@ distrodeck net-tools
 
 ### install-tools
 
-Install optional developer tools via a TUI checklist. Supports 64 tools organized by category.
+Install optional developer tools via a TUI checklist. Supports 65 tools organized by category.
 
 ```
 distrodeck install-tools        # opens TUI checklist
@@ -211,7 +220,7 @@ distrodeck install-tools --all  # installs all tools non-interactively
 | Languages | go, java, node (20 LTS), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
-| Apps | gimp, image-view, isoforge, streamcontroller |
+| Apps | gimp, image-view, isoforge, nemo, streamcontroller |
 
 **Notable tools:**
 - `bfg` - BFG Repo-Cleaner for removing large files from git history
@@ -223,6 +232,23 @@ distrodeck install-tools --all  # installs all tools non-interactively
 - `gimp` - GNU Image Manipulation Program with web export plugins
 - `wine` - Windows compatibility layer for running Windows applications
 - `tor` - Anonymous communication network with Tor Browser
+
+## Configuration
+
+Optional config file: `~/.config/distrodeck/config.ini` (or `/etc/distrodeck/config.ini`).
+
+Example:
+
+```
+[apt]
+official_hosts_common = mirrors.example.org
+official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
+official_hosts_debian = deb.debian.org, security.debian.org
+# To fully override defaults:
+# official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
+```
+
+Sample file: `examples/config.ini`.
 
 ### git-status
 
@@ -240,6 +266,31 @@ distrodeck git-status set
 distrodeck git-status unset
 ```
 
+### git-aliases
+
+Manage recommended git aliases in your global git config.
+
+```
+distrodeck git-aliases set
+distrodeck git-aliases unset
+distrodeck git-aliases show
+```
+
+Recommended aliases (all prefixed with `d`):
+- `git df`  -> `fetch`
+- `git dp`  -> `pull`
+- `git dfp` -> `fetch --all; pull --all`
+- `git dl`  -> history (graph, oneline, all, colored)
+- `git dpr` -> create PR (requires `gh`)
+- `git ds`  -> short status
+- `git db`  -> verbose branches
+- `git dbr` -> all branches (local + remote)
+- `git dd`  -> diff
+- `git dds` -> diff staged
+- `git dco` -> checkout
+- `git dcb` -> create branch
+- `git dhelp` -> list distrodeck aliases
+
 Example prompt segment:
 
 ```
@@ -256,7 +307,7 @@ user@host ~/repo(main * 2↑)$
 [apt_manual]   # manually installed apt packages
 [apt_hold]     # held apt packages
 [ppas]         # Launchpad PPAs (ppa:user/name)
-[apt_sources]  # non-PPA apt sources
+[apt_sources]  # non-PPA apt sources (excluding official repos)
 [snap]         # snap packages with channel/classic info
 [flatpak]      # flatpak apps with remote info
 [pacman]       # pacman packages (Arch)

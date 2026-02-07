@@ -2,6 +2,25 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [0.5.0]
+
+### Added
+- New `git-aliases` command (and TUI action) to set/unset/show recommended git aliases.
+- Git aliases now include simplified `d*` shortcuts for common git operations, plus `dhelp` to list them.
+- Config editor now includes git config files when present.
+- Debian upgrade support via `apt-get full-upgrade` with a target codename parameter.
+- Support for apt deb822 `.sources` files, including handling and conversion alongside traditional `deb` entries.
+- New config system for customizing official repository hosts and related behavior.
+
+### Changed
+- TUI git-aliases flow now validates alias names against existing git commands.
+- Debian packages now bundle the install-tools TUI and script-helpers so `distrodeck install-tools` works without git submodules on first run.
+- `apt_sources` exports now exclude official distribution repository hosts; only non-official/custom APT sources are included in exports.
+- CLI git-aliases now checks for conflicts with git commands and aborts with guidance to use the TUI.
+- `git dfp` now runs `fetch --all; pull --all` to match docs.
+- Debian upgrade warns on unexpected codename formats; cdrom sources are detected more robustly.
+- Removed LazyDocker curl|bash fallback; only distro packages are used.
+
 ## [0.4.0]
 
 ### Added

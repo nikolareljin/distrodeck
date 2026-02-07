@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-01-22" "distrodeck 0.4.0" "User Commands"
+.TH DISTRODECK 1 "2026-01-23" "distrodeck 0.5.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -6,6 +6,20 @@ distrodeck \- Export and restore packages before distro upgrades.
 \fIcommand\fR [options]
 .SH DESCRIPTION
 distrodeck exports installed packages and sources, then re-installs them after a distro upgrade.
+.SH CONFIGURATION
+Optional config file: \fI~/.config/distrodeck/config.ini\fR or \fI/etc/distrodeck/config.ini\fR.
+.PP
+Sample file: \fIexamples/config.ini\fR.
+.PP
+Example:
+.PP
+.nf
+[apt]
+official_hosts_common = mirrors.example.org
+official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
+official_hosts_debian = deb.debian.org, security.debian.org
+# official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
+.fi
 .SH COMMANDS
 .TP
 .B export
@@ -35,6 +49,9 @@ Install optional tools via a TUI checklist
 .B git-status
 Enable or disable git status in the shell prompt
 .TP
+.B git-aliases
+Manage recommended git aliases
+.TP
 .B preflight
 Run preflight checks
 .TP
@@ -48,7 +65,7 @@ Delete all logs
 Show full system info
 .TP
 .B config-edit
-Edit common system config files (TUI)
+Edit common system config files (TUI, includes distrodeck config files when present)
 .TP
 .B net-tools
 Run installed network tools (TUI)
@@ -117,10 +134,12 @@ options:
 .fi
 .SS upgrade
 .nf
-usage: distrodeck upgrade [-h]
+usage: distrodeck upgrade [-h] [--target-codename TARGET_CODENAME]
 
 options:
   -h, --help  show this help message and exit
+  --target-codename TARGET_CODENAME
+                Target codename for Debian upgrades (or set DISTRODECK_TARGET_CODENAME)
 .fi
 .SS security
 .nf
@@ -163,6 +182,21 @@ positional arguments:
 options:
   -h, --help   show this help message and exit
 .fi
+.SS git-aliases
+.nf
+usage: distrodeck git-aliases [-h] {set,unset,show} ...
+
+positional arguments:
+  {set,unset,show}
+    set        Set recommended git aliases
+    unset      Remove recommended git aliases
+    show       Show recommended git aliases
+
+options:
+  -h, --help   show this help message and exit
+.fi
+.PP
+Recommended aliases are prefixed with \fBd\fR (e.g., \fBgit df\fR, \fBgit dp\fR, \fBgit dl\fR, \fBgit dbr\fR, \fBgit dhelp\fR).
 .SS preflight
 .nf
 usage: distrodeck preflight [-h]
