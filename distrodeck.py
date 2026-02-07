@@ -3787,14 +3787,14 @@ def resolve_git_alias_conflicts(entries: List[Tuple[str, str, str]]) -> List[Tup
         suffix = 1
         attempts = 0
         while candidate in git_cmds or candidate in used:
-            if attempts >= MAX_ALIAS_GENERATION_ATTEMPTS:
+            attempts += 1
+            if attempts > MAX_ALIAS_GENERATION_ATTEMPTS:
                 raise RuntimeError(
                     f"Unable to generate a safe alias name for seed '{seed}' "
                     f"after {MAX_ALIAS_GENERATION_ATTEMPTS} attempts."
                 )
             candidate = f"{seed}{suffix}"
             suffix += 1
-            attempts += 1
         return candidate
 
     updated: List[Tuple[str, str, str]] = []
