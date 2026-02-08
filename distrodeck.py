@@ -23,8 +23,11 @@ from urllib.parse import urlparse
 
 VERSION = "0.5.0"
 VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
-SHARE_VERSION_FILE = Path("/usr/share/distrodeck/VERSION")
-for path in (VERSION_FILE, SHARE_VERSION_FILE):
+SHARE_VERSION_FILES = [
+    Path("/usr/local/share/distrodeck/VERSION"),
+    Path("/usr/share/distrodeck/VERSION"),
+]
+for path in (VERSION_FILE, *SHARE_VERSION_FILES):
     if path.exists():
         try:
             file_version = path.read_text(encoding="utf-8").strip()
@@ -3232,6 +3235,7 @@ def run_install_tools(args: argparse.Namespace) -> None:
     log_action_start("install-tools")
     script_candidates = [
         Path(__file__).resolve().parent / "scripts" / "install-tools-tui.sh",
+        Path("/usr/local/share/distrodeck/scripts/install-tools-tui.sh"),
         Path("/usr/share/distrodeck/scripts/install-tools-tui.sh"),
         Path("/usr/lib/distrodeck/scripts/install-tools-tui.sh"),
     ]

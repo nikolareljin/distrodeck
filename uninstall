@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PREFIX="${PREFIX:-/usr/local}"
+
+echo "Uninstalling distrodeck from ${PREFIX} ..."
+
+rm -f  "${PREFIX}/bin/distrodeck"
+rm -f  "${PREFIX}/bin/distrodeck.py"
+rm -rf "${PREFIX}/share/distrodeck"
+rm -f  "${PREFIX}/share/man/man1/distrodeck.1"
+
+echo "distrodeck uninstalled."

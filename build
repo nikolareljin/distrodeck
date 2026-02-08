@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+VERSION="$(cat VERSION)"
+BUILD_DIR="dist/distrodeck-${VERSION}"
+
+echo "Building distrodeck ${VERSION} ..."
+
+rm -rf dist/
+mkdir -p "${BUILD_DIR}/bin"
+mkdir -p "${BUILD_DIR}/share/distrodeck/scripts"
+mkdir -p "${BUILD_DIR}/share/man/man1"
+
+# Core binaries
+cp distrodeck         "${BUILD_DIR}/bin/"
+cp distrodeck.py      "${BUILD_DIR}/bin/"
+
+# Data files
+cp VERSION            "${BUILD_DIR}/share/distrodeck/"
+cp scripts/install-tools-tui.sh "${BUILD_DIR}/share/distrodeck/scripts/"
+if [[ -d scripts/script-helpers ]]; then
+  cp -r scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/"
+fi
+
+# Man page
+if [[ -f docs/man/distrodeck.1 ]]; then
+  cp docs/man/distrodeck.1 "${BUILD_DIR}/share/man/man1/"
+fi
+
+echo "Build complete: ${BUILD_DIR}/"
