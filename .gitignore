@@ -52,3 +52,5 @@ debian/distrodeck/
 *.tar.gz
 *.tar.xz
 *.tar.zst
+
+/ignore/
