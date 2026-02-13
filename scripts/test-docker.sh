@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: test-docker.sh
+# DESCRIPTION: Run docker-compose based integration tests for distrodeck.
+# USAGE: ./scripts/test-docker.sh
+# PARAMETERS: No required parameters.
+# EXAMPLE: ./scripts/test-docker.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

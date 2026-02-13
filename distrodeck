@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: distrodeck
+# DESCRIPTION: Launcher wrapper for distrodeck.py with Python compatibility checks.
+# USAGE: ./distrodeck [args]
+# PARAMETERS: Arguments are passed through to distrodeck.py.
+# EXAMPLE: ./distrodeck --help
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
