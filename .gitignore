@@ -53,4 +53,6 @@ debian/distrodeck/
 *.tar.xz
 *.tar.zst
 
+# Ignored files and dirs.
 /ignore/
+TODO.txt
