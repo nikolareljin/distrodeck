@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: install
+# DESCRIPTION: Install distrodeck binaries and shared files from dist/ into a prefix.
+# USAGE: ./install
+# PARAMETERS: PREFIX (optional, default: /usr/local)
+# EXAMPLE: PREFIX=/usr/local ./install
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -6,6 +11,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 VERSION="$(cat VERSION)"
 BUILD_DIR="dist/distrodeck-${VERSION}"
 PREFIX="${PREFIX:-/usr/local}"
+
+if [[ "${PREFIX}" != /* ]]; then
+  echo "PREFIX must be an absolute path: ${PREFIX}" >&2
+  exit 1
+fi
 
 if [[ ! -d "$BUILD_DIR" ]]; then
   echo "Build directory not found. Running ./build first ..."

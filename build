@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: build
+# DESCRIPTION: Assemble distributable files into dist/distrodeck-<version>.
+# USAGE: ./build
+# PARAMETERS: No required parameters.
+# EXAMPLE: ./build
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"

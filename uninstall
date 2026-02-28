@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
+# SCRIPT: uninstall
+# DESCRIPTION: Remove distrodeck binaries and shared files from a prefix.
+# USAGE: ./uninstall
+# PARAMETERS: PREFIX (optional, default: /usr/local)
+# EXAMPLE: PREFIX=/usr/local ./uninstall
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
+
+if [[ "${PREFIX}" != /* || "${PREFIX}" == "/" ]]; then
+  echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX}" >&2
+  exit 1
+fi
 
 echo "Uninstalling distrodeck from ${PREFIX} ..."
 
