@@ -17,6 +17,11 @@ if [[ "${PREFIX}" != /* ]]; then
   exit 1
 fi
 
+if [[ "${PREFIX}" == "/" ]]; then
+  echo "Refusing to install into /. Please set PREFIX to a safer path (for example, /usr/local)." >&2
+  exit 1
+fi
+
 if [[ ! -d "$BUILD_DIR" ]]; then
   echo "Build directory not found. Running ./build first ..."
   ./build
