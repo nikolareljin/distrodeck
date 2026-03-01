@@ -8,12 +8,31 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+REPO_ROOT="$(pwd)"
 VERSION="$(cat VERSION)"
-BUILD_DIR="dist/distrodeck-${VERSION}"
+DIST_DIR="${REPO_ROOT}/dist"
+BUILD_DIR="${DIST_DIR}/distrodeck-${VERSION}"
 
 echo "Building distrodeck ${VERSION} ..."
 
-rm -rf dist/
+# Safety: never remove dist if it is a symlink or resolves outside this repo.
+if [[ -L "${DIST_DIR}" ]]; then
+  echo "Error: ${DIST_DIR} is a symlink; refusing to remove it." >&2
+  exit 1
+fi
+if command -v realpath >/dev/null 2>&1; then
+  RESOLVED_DIST_DIR="$(realpath -m "${DIST_DIR}" 2>/dev/null || true)"
+elif command -v readlink >/dev/null 2>&1; then
+  RESOLVED_DIST_DIR="$(readlink -f "${DIST_DIR}" 2>/dev/null || true)"
+else
+  RESOLVED_DIST_DIR=""
+fi
+if [[ -n "${RESOLVED_DIST_DIR}" && "${RESOLVED_DIST_DIR}" != "${REPO_ROOT}" && "${RESOLVED_DIST_DIR}" != "${REPO_ROOT}/"* ]]; then
+  echo "Error: Resolved dist directory (${RESOLVED_DIST_DIR}) is outside repository root (${REPO_ROOT}); refusing to remove it." >&2
+  exit 1
+fi
+
+rm -rf "${DIST_DIR}"
 mkdir -p "${BUILD_DIR}/bin"
 mkdir -p "${BUILD_DIR}/share/distrodeck/scripts"
 mkdir -p "${BUILD_DIR}/share/man/man1"

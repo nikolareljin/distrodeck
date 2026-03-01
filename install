@@ -17,10 +17,30 @@ if [[ "${PREFIX}" != /* ]]; then
   exit 1
 fi
 
-# Normalize PREFIX to avoid aliases like /usr/local/.. resolving unexpectedly.
-if ! PREFIX_REAL="$(readlink -f -- "${PREFIX}")"; then
-  echo "Failed to resolve PREFIX: ${PREFIX}" >&2
-  exit 1
+# Normalize PREFIX without requiring it to already exist.
+if command -v realpath >/dev/null 2>&1; then
+  if PREFIX_REAL="$(realpath -m -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  elif PREFIX_REAL="$(realpath -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  else
+    echo "Failed to resolve PREFIX with realpath: ${PREFIX}" >&2
+    exit 1
+  fi
+elif command -v python3 >/dev/null 2>&1; then
+  if ! PREFIX_REAL="$(
+    python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+  )"; then
+    echo "Failed to resolve PREFIX with python3: ${PREFIX}" >&2
+    exit 1
+  fi
+else
+  PREFIX_REAL="${PREFIX}"
 fi
 
 if [[ "${PREFIX_REAL}" == "/" ]]; then
@@ -47,8 +67,11 @@ install -m 755 "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh" \
   "${PREFIX_REAL}/share/distrodeck/scripts/install-tools-tui.sh"
 
 if [[ -f "${BUILD_DIR}/share/distrodeck/scripts/script-helpers/helpers.sh" ]]; then
+  rm -rf "${PREFIX_REAL}/share/distrodeck/scripts/script-helpers"
   cp -r "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
     "${PREFIX_REAL}/share/distrodeck/scripts/"
+else
+  rm -rf "${PREFIX_REAL}/share/distrodeck/scripts/script-helpers"
 fi
 
 if [[ -f "${BUILD_DIR}/share/man/man1/distrodeck.1" ]]; then

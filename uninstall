@@ -8,13 +8,10 @@ set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 
-# Normalize PREFIX to avoid aliases like /usr/local/.. resolving unexpectedly.
-if ! PREFIX_REAL="$(readlink -f -- "${PREFIX}")"; then
-  echo "Failed to resolve PREFIX: ${PREFIX}" >&2
-  exit 1
-fi
+# Keep uninstall safe without requiring PREFIX to exist.
+PREFIX_REAL="${PREFIX}"
 
-if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" ]]; then
+if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
   echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX_REAL}" >&2
   exit 1
 fi
