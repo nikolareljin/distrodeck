@@ -3252,9 +3252,13 @@ def run_doctor() -> None:
 
 def run_install_tools(args: argparse.Namespace) -> None:
     log_action_start("install-tools")
-    script_candidates = [SCRIPT_FILE.parent / "scripts" / "install-tools-tui.sh"]
+    script_candidates: List[Path] = []
     if runtime_share_root is not None:
+        # Installed/dist layout should prefer the share-root script path.
         script_candidates.append(runtime_share_root / "scripts" / "install-tools-tui.sh")
+    else:
+        # Source-tree layout uses scripts/ next to distrodeck.py.
+        script_candidates.append(SCRIPT_FILE.parent / "scripts" / "install-tools-tui.sh")
     script_candidates.extend(
         [
             Path("/usr/local/share/distrodeck/scripts/install-tools-tui.sh"),
