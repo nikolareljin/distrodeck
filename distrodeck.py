@@ -33,9 +33,13 @@ def _runtime_share_root(script_path: Path) -> Optional[Path]:
 
 
 runtime_share_root = _runtime_share_root(SCRIPT_FILE)
-version_candidates = [SCRIPT_FILE.with_name("VERSION")]
+version_candidates = []
 if runtime_share_root is not None:
+    # Installed/dist layout should prefer the share-root VERSION.
     version_candidates.append(runtime_share_root / "VERSION")
+else:
+    # Source-tree layout uses VERSION adjacent to distrodeck.py.
+    version_candidates.append(SCRIPT_FILE.with_name("VERSION"))
 version_candidates.extend(
     [
         Path("/usr/local/share/distrodeck/VERSION"),

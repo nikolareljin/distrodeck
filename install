@@ -56,8 +56,8 @@ else
   PREFIX_REAL="${PREFIX}"
 fi
 
-if [[ "${PREFIX_REAL}" == "/" ]]; then
-  echo "Refusing to install into /. Please set PREFIX to a safer path (for example, /usr/local)." >&2
+if [[ "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
+  echo "Refusing to install with unsafe PREFIX: ${PREFIX_REAL}" >&2
   exit 1
 fi
 
@@ -96,6 +96,8 @@ if [[ -f "${BUILD_DIR}/share/man/man1/distrodeck.1" ]]; then
   install -d "${PREFIX_REAL}/share/man/man1"
   install -m 644 "${BUILD_DIR}/share/man/man1/distrodeck.1" \
     "${PREFIX_REAL}/share/man/man1/distrodeck.1"
+else
+  rm -f "${PREFIX_REAL}/share/man/man1/distrodeck.1"
 fi
 
 echo "distrodeck ${VERSION} installed to ${PREFIX_REAL}/bin/distrodeck"
