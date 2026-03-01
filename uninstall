@@ -7,6 +7,7 @@
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
+resolution_fallback=false
 
 # Normalize PREFIX without requiring it to already exist.
 if command -v realpath >/dev/null 2>&1; then
@@ -26,9 +27,11 @@ PY
       )"; then
         echo "Failed to resolve PREFIX with python3: ${PREFIX}" >&2
         PREFIX_REAL="${PREFIX}"
+        resolution_fallback=true
       fi
     else
       PREFIX_REAL="${PREFIX}"
+      resolution_fallback=true
     fi
   fi
 elif command -v python3 >/dev/null 2>&1; then
@@ -45,6 +48,12 @@ PY
   fi
 else
   PREFIX_REAL="${PREFIX}"
+  resolution_fallback=true
+fi
+
+if [[ "${resolution_fallback}" == "true" && -e "${PREFIX}" && -L "${PREFIX}" ]]; then
+  echo "Refusing to uninstall from symlinked PREFIX without canonicalization: ${PREFIX}" >&2
+  exit 1
 fi
 
 if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
