@@ -8,8 +8,31 @@ set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 
-# Keep uninstall safe without requiring PREFIX to exist.
-PREFIX_REAL="${PREFIX}"
+# Normalize PREFIX without requiring it to already exist.
+if command -v realpath >/dev/null 2>&1; then
+  if PREFIX_REAL="$(realpath -m -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  elif PREFIX_REAL="$(realpath -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  else
+    echo "Failed to resolve PREFIX with realpath: ${PREFIX}" >&2
+    exit 1
+  fi
+elif command -v python3 >/dev/null 2>&1; then
+  if ! PREFIX_REAL="$(
+    python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+  )"; then
+    echo "Failed to resolve PREFIX with python3: ${PREFIX}" >&2
+    exit 1
+  fi
+else
+  PREFIX_REAL="${PREFIX}"
+fi
 
 if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
   echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX_REAL}" >&2

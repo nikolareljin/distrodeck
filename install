@@ -68,8 +68,13 @@ install -m 755 "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh" \
 
 if [[ -f "${BUILD_DIR}/share/distrodeck/scripts/script-helpers/helpers.sh" ]]; then
   rm -rf "${PREFIX_REAL}/share/distrodeck/scripts/script-helpers"
-  cp -a "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
-    "${PREFIX_REAL}/share/distrodeck/scripts/"
+  if cp -a --no-preserve=ownership "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
+    "${PREFIX_REAL}/share/distrodeck/scripts/" 2>/dev/null; then
+    :
+  else
+    cp -R "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
+      "${PREFIX_REAL}/share/distrodeck/scripts/"
+  fi
 else
   rm -rf "${PREFIX_REAL}/share/distrodeck/scripts/script-helpers"
 fi

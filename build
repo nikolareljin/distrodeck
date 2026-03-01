@@ -8,7 +8,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-REPO_ROOT="$(pwd)"
+REPO_ROOT="$(pwd -P)"
 VERSION="$(cat VERSION)"
 DIST_DIR="${REPO_ROOT}/dist"
 BUILD_DIR="${DIST_DIR}/distrodeck-${VERSION}"
@@ -46,7 +46,11 @@ install -m 0644 VERSION "${BUILD_DIR}/share/distrodeck/VERSION"
 install -m 0755 scripts/install-tools-tui.sh \
   "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh"
 if [[ -d scripts/script-helpers && -f scripts/script-helpers/helpers.sh ]]; then
-  cp -a scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/"
+  if cp -a --no-preserve=ownership scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/" 2>/dev/null; then
+    :
+  else
+    cp -R scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/"
+  fi
 else
   echo "Warning: scripts/script-helpers is missing or uninitialized; skipping helper scripts." >&2
 fi
