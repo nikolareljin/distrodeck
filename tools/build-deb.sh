@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: build-deb.sh
+# DESCRIPTION: Build Debian artifacts using distrodeck build wrapper and generated man page.
+# USAGE: ./tools/build-deb.sh
+# PARAMETERS: No required parameters. Optional env: SCRIPT_HELPERS_DIR.
+# EXAMPLE: ./tools/build-deb.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

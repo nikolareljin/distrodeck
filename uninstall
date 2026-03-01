@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# SCRIPT: uninstall
+# DESCRIPTION: Remove distrodeck binaries and shared files from a prefix.
+# USAGE: ./uninstall
+# PARAMETERS: PREFIX (optional, default: /usr/local)
+# EXAMPLE: PREFIX=/usr/local ./uninstall
+set -euo pipefail
+
+PREFIX="${PREFIX:-/usr/local}"
+resolution_fallback=false
+
+# Normalize PREFIX without requiring it to already exist.
+if command -v realpath >/dev/null 2>&1; then
+  if PREFIX_REAL="$(realpath -m -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  elif PREFIX_REAL="$(realpath -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  else
+    if command -v python3 >/dev/null 2>&1; then
+      if ! PREFIX_REAL="$(
+        python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+      )"; then
+        echo "Failed to resolve PREFIX with python3: ${PREFIX}" >&2
+        PREFIX_REAL="${PREFIX}"
+        resolution_fallback=true
+      fi
+    else
+      PREFIX_REAL="${PREFIX}"
+      resolution_fallback=true
+    fi
+  fi
+elif command -v python3 >/dev/null 2>&1; then
+  if ! PREFIX_REAL="$(
+    python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+  )"; then
+    echo "Failed to resolve PREFIX with python3: ${PREFIX}" >&2
+    exit 1
+  fi
+else
+  PREFIX_REAL="${PREFIX}"
+  resolution_fallback=true
+fi
+
+if [[ "${resolution_fallback}" == "true" && -e "${PREFIX}" && -L "${PREFIX}" ]]; then
+  echo "Refusing to uninstall from symlinked PREFIX without canonicalization: ${PREFIX}" >&2
+  exit 1
+fi
+
+if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
+  echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX_REAL}" >&2
+  exit 1
+fi
+
+echo "Uninstalling distrodeck from ${PREFIX_REAL} ..."
+
+rm -f  "${PREFIX_REAL}/bin/distrodeck"
+rm -f  "${PREFIX_REAL}/bin/distrodeck.py"
+rm -rf "${PREFIX_REAL}/share/distrodeck"
+rm -f  "${PREFIX_REAL}/share/man/man1/distrodeck.1"
+
+echo "distrodeck uninstalled."

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: publish-homebrew.sh
+# DESCRIPTION: Publish/update Homebrew tap formula via script-helpers publish_homebrew helper.
+# USAGE: ./tools/publish-homebrew.sh
+# PARAMETERS: Required env: HOMEBREW_TAP_REPO. Optional env: HOMEBREW_FORMULA_PATH, HOMEBREW_TAP_BRANCH, SCRIPT_HELPERS_DIR.
+# EXAMPLE: HOMEBREW_TAP_REPO=owner/homebrew-tap ./tools/publish-homebrew.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

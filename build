@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# SCRIPT: build
+# DESCRIPTION: Assemble distributable files into dist/distrodeck-<version>.
+# USAGE: ./build
+# PARAMETERS: No required parameters.
+# EXAMPLE: ./build
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+REPO_ROOT="$(pwd -P)"
+VERSION="$(cat VERSION)"
+DIST_DIR="${REPO_ROOT}/dist"
+BUILD_DIR="${DIST_DIR}/distrodeck-${VERSION}"
+
+echo "Building distrodeck ${VERSION} ..."
+
+# Safety: never remove dist if it is a symlink or resolves outside this repo.
+if [[ -L "${DIST_DIR}" ]]; then
+  echo "Error: ${DIST_DIR} is a symlink; refusing to remove it." >&2
+  exit 1
+fi
+if command -v realpath >/dev/null 2>&1; then
+  RESOLVED_DIST_DIR="$(realpath -m "${DIST_DIR}" 2>/dev/null || true)"
+elif command -v readlink >/dev/null 2>&1; then
+  RESOLVED_DIST_DIR="$(readlink -f "${DIST_DIR}" 2>/dev/null || true)"
+else
+  RESOLVED_DIST_DIR=""
+fi
+if [[ -n "${RESOLVED_DIST_DIR}" && "${RESOLVED_DIST_DIR}" != "${REPO_ROOT}" && "${RESOLVED_DIST_DIR}" != "${REPO_ROOT}/"* ]]; then
+  echo "Error: Resolved dist directory (${RESOLVED_DIST_DIR}) is outside repository root (${REPO_ROOT}); refusing to remove it." >&2
+  exit 1
+fi
+
+rm -rf "${DIST_DIR}"
+mkdir -p "${BUILD_DIR}/bin"
+mkdir -p "${BUILD_DIR}/share/distrodeck/scripts"
+mkdir -p "${BUILD_DIR}/share/man/man1"
+
+# Core binaries
+install -m 0755 distrodeck    "${BUILD_DIR}/bin/distrodeck"
+install -m 0755 distrodeck.py "${BUILD_DIR}/bin/distrodeck.py"
+
+# Data files
+install -m 0644 VERSION "${BUILD_DIR}/share/distrodeck/VERSION"
+install -m 0755 scripts/install-tools-tui.sh \
+  "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh"
+if [[ -d scripts/script-helpers && -f scripts/script-helpers/helpers.sh ]]; then
+  if cp -a --no-preserve=ownership scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/" 2>/dev/null; then
+    :
+  else
+    cp -R scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/"
+  fi
+else
+  echo "Warning: scripts/script-helpers is missing or uninitialized; skipping helper scripts." >&2
+fi
+
+# Man page
+if [[ -f docs/man/distrodeck.1 ]]; then
+  install -m 0644 docs/man/distrodeck.1 "${BUILD_DIR}/share/man/man1/distrodeck.1"
+fi
+
+echo "Build complete: ${BUILD_DIR}/"

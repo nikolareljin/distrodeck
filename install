@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# SCRIPT: install
+# DESCRIPTION: Install distrodeck binaries and shared files from dist/ into a prefix.
+# USAGE: ./install
+# PARAMETERS: PREFIX (optional, default: /usr/local)
+# EXAMPLE: PREFIX=/usr/local ./install
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+VERSION="$(cat VERSION)"
+BUILD_DIR="dist/distrodeck-${VERSION}"
+PREFIX="${PREFIX:-/usr/local}"
+
+if [[ "${PREFIX}" != /* ]]; then
+  echo "PREFIX must be an absolute path: ${PREFIX}" >&2
+  exit 1
+fi
+
+# Normalize PREFIX without requiring it to already exist.
+if command -v realpath >/dev/null 2>&1; then
+  if PREFIX_REAL="$(realpath -m -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  elif PREFIX_REAL="$(realpath -- "${PREFIX}" 2>/dev/null)"; then
+    :
+  else
+    if command -v python3 >/dev/null 2>&1; then
+      if ! PREFIX_REAL="$(
+        python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+      )"; then
+        echo "Failed to resolve PREFIX with realpath or python3: ${PREFIX}" >&2
+        exit 1
+      fi
+    else
+      PREFIX_REAL="${PREFIX}"
+    fi
+  fi
+elif command -v python3 >/dev/null 2>&1; then
+  if ! PREFIX_REAL="$(
+    python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+  )"; then
+    echo "Failed to resolve PREFIX with python3: ${PREFIX}" >&2
+    exit 1
+  fi
+else
+  PREFIX_REAL="${PREFIX}"
+fi
+
+if [[ "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
+  echo "Refusing to install with unsafe PREFIX: ${PREFIX_REAL}" >&2
+  exit 1
+fi
+
+if [[ ! -d "$BUILD_DIR" ]]; then
+  echo "Build directory not found. Running ./build first ..."
+  ./build
+fi
+
+echo "Installing distrodeck ${VERSION} to ${PREFIX_REAL} ..."
+
+install -d "${PREFIX_REAL}/bin"
+install -m 755 "${BUILD_DIR}/bin/distrodeck"    "${PREFIX_REAL}/bin/distrodeck"
+install -m 755 "${BUILD_DIR}/bin/distrodeck.py" "${PREFIX_REAL}/bin/distrodeck.py"
+
+install -d "${PREFIX_REAL}/share/distrodeck"
+install -m 644 "${BUILD_DIR}/share/distrodeck/VERSION" "${PREFIX_REAL}/share/distrodeck/VERSION"
+
+install -d "${PREFIX_REAL}/share/distrodeck/scripts"
+install -m 755 "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh" \
+  "${PREFIX_REAL}/share/distrodeck/scripts/install-tools-tui.sh"
+
+if [[ -f "${BUILD_DIR}/share/distrodeck/scripts/script-helpers/helpers.sh" ]]; then
+  rm -rf "${PREFIX_REAL}/share/distrodeck/scripts/script-helpers"
+  if cp -a --no-preserve=ownership "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
+    "${PREFIX_REAL}/share/distrodeck/scripts/" 2>/dev/null; then
+    :
+  else
+    cp -R "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
+      "${PREFIX_REAL}/share/distrodeck/scripts/"
+  fi
+else
+  rm -rf "${PREFIX_REAL}/share/distrodeck/scripts/script-helpers"
+fi
+
+if [[ -f "${BUILD_DIR}/share/man/man1/distrodeck.1" ]]; then
+  install -d "${PREFIX_REAL}/share/man/man1"
+  install -m 644 "${BUILD_DIR}/share/man/man1/distrodeck.1" \
+    "${PREFIX_REAL}/share/man/man1/distrodeck.1"
+else
+  rm -f "${PREFIX_REAL}/share/man/man1/distrodeck.1"
+fi
+
+echo "distrodeck ${VERSION} installed to ${PREFIX_REAL}/bin/distrodeck"

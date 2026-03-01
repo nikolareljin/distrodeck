@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: build-brew-tarball.sh
+# DESCRIPTION: Build Homebrew release tarball via script-helpers helper.
+# USAGE: ./tools/build-brew-tarball.sh
+# PARAMETERS: No required parameters. Optional env: SCRIPT_HELPERS_DIR.
+# EXAMPLE: ./tools/build-brew-tarball.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

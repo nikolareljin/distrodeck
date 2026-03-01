@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: gen-brew-formula.sh
+# DESCRIPTION: Generate Homebrew formula from release tarball via script-helpers.
+# USAGE: ./tools/gen-brew-formula.sh
+# PARAMETERS: No required flags. Optional env: TARBALL_PATH, TARBALL_URL, SCRIPT_HELPERS_DIR.
+# EXAMPLE: ./tools/gen-brew-formula.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

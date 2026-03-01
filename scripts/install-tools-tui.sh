@@ -2,6 +2,7 @@
 # SCRIPT: install-tools-tui.sh
 # DESCRIPTION: TUI installer for common developer tools.
 # USAGE: ./install-tools-tui.sh [--all]
+# PARAMETERS: Optional flag --all installs all tools without interactive selection.
 # EXAMPLE: ./install-tools-tui.sh --all
 # ----------------------------------------------------
 set -euo pipefail

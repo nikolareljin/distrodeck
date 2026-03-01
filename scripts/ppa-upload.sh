@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: ppa-upload.sh
+# DESCRIPTION: Upload source package to Launchpad PPA via script-helpers.
+# USAGE: ./scripts/ppa-upload.sh --ppa <ppa:owner/name> --key-id <gpg_key_id> [--series SERIES] [--dry-run]
+# PARAMETERS: Required flags: --ppa and --key-id.
+# EXAMPLE: ./scripts/ppa-upload.sh --ppa ppa:owner/name --key-id ABCDEF12
 set -euo pipefail
 
 usage() {

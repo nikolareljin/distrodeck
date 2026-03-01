@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SCRIPT: build-rpm.sh
+# DESCRIPTION: Build RPM artifacts via script-helpers build_rpm_artifacts helper.
+# USAGE: ./tools/build-rpm.sh
+# PARAMETERS: No required parameters. Optional env: SCRIPT_HELPERS_DIR.
+# EXAMPLE: ./tools/build-rpm.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

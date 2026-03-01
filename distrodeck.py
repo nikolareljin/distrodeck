@@ -22,9 +22,31 @@ from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 VERSION = "0.5.0"
-VERSION_FILE = Path(__file__).resolve().with_name("VERSION")
-SHARE_VERSION_FILE = Path("/usr/share/distrodeck/VERSION")
-for path in (VERSION_FILE, SHARE_VERSION_FILE):
+SCRIPT_FILE = Path(__file__).resolve()
+
+
+def _runtime_share_root(script_path: Path) -> Optional[Path]:
+    # Installed and dist layouts place distrodeck.py under <prefix>/bin.
+    if script_path.parent.name == "bin":
+        return script_path.parent.parent / "share" / "distrodeck"
+    return None
+
+
+runtime_share_root = _runtime_share_root(SCRIPT_FILE)
+version_candidates = []
+if runtime_share_root is not None:
+    # Installed/dist layout should prefer the share-root VERSION.
+    version_candidates.append(runtime_share_root / "VERSION")
+else:
+    # Source-tree layout uses VERSION adjacent to distrodeck.py.
+    version_candidates.append(SCRIPT_FILE.with_name("VERSION"))
+version_candidates.extend(
+    [
+        Path("/usr/local/share/distrodeck/VERSION"),
+        Path("/usr/share/distrodeck/VERSION"),
+    ]
+)
+for path in version_candidates:
     if path.exists():
         try:
             file_version = path.read_text(encoding="utf-8").strip()
@@ -3230,11 +3252,20 @@ def run_doctor() -> None:
 
 def run_install_tools(args: argparse.Namespace) -> None:
     log_action_start("install-tools")
-    script_candidates = [
-        Path(__file__).resolve().parent / "scripts" / "install-tools-tui.sh",
-        Path("/usr/share/distrodeck/scripts/install-tools-tui.sh"),
-        Path("/usr/lib/distrodeck/scripts/install-tools-tui.sh"),
-    ]
+    script_candidates: List[Path] = []
+    if runtime_share_root is not None:
+        # Installed/dist layout should prefer the share-root script path.
+        script_candidates.append(runtime_share_root / "scripts" / "install-tools-tui.sh")
+    else:
+        # Source-tree layout uses scripts/ next to distrodeck.py.
+        script_candidates.append(SCRIPT_FILE.parent / "scripts" / "install-tools-tui.sh")
+    script_candidates.extend(
+        [
+            Path("/usr/local/share/distrodeck/scripts/install-tools-tui.sh"),
+            Path("/usr/share/distrodeck/scripts/install-tools-tui.sh"),
+            Path("/usr/lib/distrodeck/scripts/install-tools-tui.sh"),
+        ]
+    )
     script = next((path for path in script_candidates if path.exists()), None)
     if script is None:
         locations = ", ".join(str(path) for path in script_candidates)
