@@ -8,16 +8,22 @@ set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 
-if [[ "${PREFIX}" != /* || "${PREFIX}" == "/" ]]; then
-  echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX}" >&2
+# Normalize PREFIX to avoid aliases like /usr/local/.. resolving unexpectedly.
+if ! PREFIX_REAL="$(readlink -f -- "${PREFIX}")"; then
+  echo "Failed to resolve PREFIX: ${PREFIX}" >&2
   exit 1
 fi
 
-echo "Uninstalling distrodeck from ${PREFIX} ..."
+if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" ]]; then
+  echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX_REAL}" >&2
+  exit 1
+fi
 
-rm -f  "${PREFIX}/bin/distrodeck"
-rm -f  "${PREFIX}/bin/distrodeck.py"
-rm -rf "${PREFIX}/share/distrodeck"
-rm -f  "${PREFIX}/share/man/man1/distrodeck.1"
+echo "Uninstalling distrodeck from ${PREFIX_REAL} ..."
+
+rm -f  "${PREFIX_REAL}/bin/distrodeck"
+rm -f  "${PREFIX_REAL}/bin/distrodeck.py"
+rm -rf "${PREFIX_REAL}/share/distrodeck"
+rm -f  "${PREFIX_REAL}/share/man/man1/distrodeck.1"
 
 echo "distrodeck uninstalled."

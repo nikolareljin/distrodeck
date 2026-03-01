@@ -17,7 +17,13 @@ if [[ "${PREFIX}" != /* ]]; then
   exit 1
 fi
 
-if [[ "${PREFIX}" == "/" ]]; then
+# Normalize PREFIX to avoid aliases like /usr/local/.. resolving unexpectedly.
+if ! PREFIX_REAL="$(readlink -f -- "${PREFIX}")"; then
+  echo "Failed to resolve PREFIX: ${PREFIX}" >&2
+  exit 1
+fi
+
+if [[ "${PREFIX_REAL}" == "/" ]]; then
   echo "Refusing to install into /. Please set PREFIX to a safer path (for example, /usr/local)." >&2
   exit 1
 fi
@@ -27,28 +33,28 @@ if [[ ! -d "$BUILD_DIR" ]]; then
   ./build
 fi
 
-echo "Installing distrodeck ${VERSION} to ${PREFIX} ..."
+echo "Installing distrodeck ${VERSION} to ${PREFIX_REAL} ..."
 
-install -d "${PREFIX}/bin"
-install -m 755 "${BUILD_DIR}/bin/distrodeck"    "${PREFIX}/bin/distrodeck"
-install -m 755 "${BUILD_DIR}/bin/distrodeck.py" "${PREFIX}/bin/distrodeck.py"
+install -d "${PREFIX_REAL}/bin"
+install -m 755 "${BUILD_DIR}/bin/distrodeck"    "${PREFIX_REAL}/bin/distrodeck"
+install -m 755 "${BUILD_DIR}/bin/distrodeck.py" "${PREFIX_REAL}/bin/distrodeck.py"
 
-install -d "${PREFIX}/share/distrodeck"
-install -m 644 "${BUILD_DIR}/share/distrodeck/VERSION" "${PREFIX}/share/distrodeck/VERSION"
+install -d "${PREFIX_REAL}/share/distrodeck"
+install -m 644 "${BUILD_DIR}/share/distrodeck/VERSION" "${PREFIX_REAL}/share/distrodeck/VERSION"
 
-install -d "${PREFIX}/share/distrodeck/scripts"
+install -d "${PREFIX_REAL}/share/distrodeck/scripts"
 install -m 755 "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh" \
-  "${PREFIX}/share/distrodeck/scripts/install-tools-tui.sh"
+  "${PREFIX_REAL}/share/distrodeck/scripts/install-tools-tui.sh"
 
-if [[ -d "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" ]]; then
+if [[ -f "${BUILD_DIR}/share/distrodeck/scripts/script-helpers/helpers.sh" ]]; then
   cp -r "${BUILD_DIR}/share/distrodeck/scripts/script-helpers" \
-    "${PREFIX}/share/distrodeck/scripts/"
+    "${PREFIX_REAL}/share/distrodeck/scripts/"
 fi
 
 if [[ -f "${BUILD_DIR}/share/man/man1/distrodeck.1" ]]; then
-  install -d "${PREFIX}/share/man/man1"
+  install -d "${PREFIX_REAL}/share/man/man1"
   install -m 644 "${BUILD_DIR}/share/man/man1/distrodeck.1" \
-    "${PREFIX}/share/man/man1/distrodeck.1"
+    "${PREFIX_REAL}/share/man/man1/distrodeck.1"
 fi
 
-echo "distrodeck ${VERSION} installed to ${PREFIX}/bin/distrodeck"
+echo "distrodeck ${VERSION} installed to ${PREFIX_REAL}/bin/distrodeck"
