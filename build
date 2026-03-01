@@ -38,21 +38,22 @@ mkdir -p "${BUILD_DIR}/share/distrodeck/scripts"
 mkdir -p "${BUILD_DIR}/share/man/man1"
 
 # Core binaries
-cp distrodeck         "${BUILD_DIR}/bin/"
-cp distrodeck.py      "${BUILD_DIR}/bin/"
+install -m 0755 distrodeck    "${BUILD_DIR}/bin/distrodeck"
+install -m 0755 distrodeck.py "${BUILD_DIR}/bin/distrodeck.py"
 
 # Data files
-cp VERSION            "${BUILD_DIR}/share/distrodeck/"
-cp scripts/install-tools-tui.sh "${BUILD_DIR}/share/distrodeck/scripts/"
+install -m 0644 VERSION "${BUILD_DIR}/share/distrodeck/VERSION"
+install -m 0755 scripts/install-tools-tui.sh \
+  "${BUILD_DIR}/share/distrodeck/scripts/install-tools-tui.sh"
 if [[ -d scripts/script-helpers && -f scripts/script-helpers/helpers.sh ]]; then
-  cp -r scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/"
+  cp -a scripts/script-helpers "${BUILD_DIR}/share/distrodeck/scripts/"
 else
   echo "Warning: scripts/script-helpers is missing or uninitialized; skipping helper scripts." >&2
 fi
 
 # Man page
 if [[ -f docs/man/distrodeck.1 ]]; then
-  cp docs/man/distrodeck.1 "${BUILD_DIR}/share/man/man1/"
+  install -m 0644 docs/man/distrodeck.1 "${BUILD_DIR}/share/man/man1/distrodeck.1"
 fi
 
 echo "Build complete: ${BUILD_DIR}/"
