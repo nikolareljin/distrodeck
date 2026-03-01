@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SCRIPT: update.sh
-# DESCRIPTION: Update submodules and pin scripts/script-helpers to production.
+# DESCRIPTION: Sync and initialize pinned submodule revisions from this repository.
 # USAGE: ./scripts/update.sh
 # PARAMETERS: No required parameters.
 # EXAMPLE: ./scripts/update.sh
@@ -11,7 +11,3 @@ submodule_path="scripts/script-helpers"
 
 git -C "$repo_root" submodule sync --recursive
 git -C "$repo_root" submodule update --init --recursive "$submodule_path"
-
-# Ensure script-helpers tracks production and update it from origin.
-git -C "$repo_root" submodule set-branch --branch production "$submodule_path"
-git -C "$repo_root" submodule update --init --recursive --remote "$submodule_path"

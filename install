@@ -24,8 +24,21 @@ if command -v realpath >/dev/null 2>&1; then
   elif PREFIX_REAL="$(realpath -- "${PREFIX}" 2>/dev/null)"; then
     :
   else
-    echo "Failed to resolve PREFIX with realpath: ${PREFIX}" >&2
-    exit 1
+    if command -v python3 >/dev/null 2>&1; then
+      if ! PREFIX_REAL="$(
+        python3 - "$PREFIX" <<'PY'
+import os
+import sys
+p = sys.argv[1]
+print(os.path.realpath(os.path.abspath(p)))
+PY
+      )"; then
+        echo "Failed to resolve PREFIX with realpath or python3: ${PREFIX}" >&2
+        exit 1
+      fi
+    else
+      PREFIX_REAL="${PREFIX}"
+    fi
   fi
 elif command -v python3 >/dev/null 2>&1; then
   if ! PREFIX_REAL="$(
