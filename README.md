@@ -95,6 +95,9 @@ Recommended git aliases (prefixed with `d`):
 - `git dfp` -> fetch --all; pull --all
 - `git dl`  -> history (graph, oneline, all, colored)
 - `git dpr` -> create PR (requires `gh`)
+- `git dis` -> list repository issues (number/title/state, requires `gh`)
+- `git dprs` -> list repository pull requests (number/title/state, requires `gh`)
+- `git dup` -> push current branch and set upstream to `origin/<branch>`
 - `git ds`  -> short status
 - `git db`  -> verbose branches
 - `git dbr` -> all branches (local + remote)
