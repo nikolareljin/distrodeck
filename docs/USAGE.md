@@ -113,11 +113,12 @@ distrodeck repo-repair
 
 ### doctor
 
-Check availability of package managers and upgrade tools.
+Run system and repository health diagnostics with severity levels and remediation hints.
 
 ```
 distrodeck doctor
 distrodeck doctor --verbose
+distrodeck doctor --json
 ```
 
 ### preflight

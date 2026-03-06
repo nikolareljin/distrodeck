@@ -2,6 +2,7 @@
 import argparse
 import base64
 import configparser
+import json
 import os
 import re
 import shlex
@@ -1237,6 +1238,93 @@ def run_preflight_cmd(_: argparse.Namespace) -> None:
     for line in results:
         log(line)
     log_action_end("preflight")
+
+
+DOCTOR_SEVERITY_ORDER = {"ok": 0, "warn": 1, "blocker": 2}
+
+
+def _doctor_add_check(
+    checks: List[Dict[str, object]],
+    name: str,
+    severity: str,
+    message: str,
+    remediation: str = "",
+    details: Optional[Dict[str, object]] = None,
+) -> None:
+    item: Dict[str, object] = {
+        "name": name,
+        "severity": severity,
+        "message": message,
+    }
+    if remediation:
+        item["remediation"] = remediation
+    if details:
+        item["details"] = details
+    checks.append(item)
+
+
+def _doctor_status(checks: List[Dict[str, object]]) -> str:
+    worst = "ok"
+    for check in checks:
+        sev = str(check.get("severity", "ok"))
+        if DOCTOR_SEVERITY_ORDER.get(sev, 0) > DOCTOR_SEVERITY_ORDER[worst]:
+            worst = sev
+    return worst
+
+
+def _doctor_summary(checks: List[Dict[str, object]]) -> Dict[str, int]:
+    summary = {"ok": 0, "warn": 0, "blocker": 0}
+    for check in checks:
+        sev = str(check.get("severity", "ok"))
+        if sev in summary:
+            summary[sev] += 1
+    return summary
+
+
+def _doctor_apt_repo_hosts() -> List[str]:
+    hosts: Set[str] = set()
+    for line in active_apt_sources():
+        parsed = parse_apt_source_line(line)
+        if not parsed:
+            continue
+        uri = parsed.get("uri", "")
+        parsed_uri = urlparse(uri)
+        if parsed_uri.scheme in {"cdrom", "file"}:
+            continue
+        host = (parsed_uri.hostname or "").strip().lower()
+        if host:
+            hosts.add(host)
+    return sorted(hosts)
+
+
+def _doctor_check_host_resolution(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    return True
+
+
+def _doctor_probe_apt_metadata() -> Tuple[int, str]:
+    with tempfile.TemporaryDirectory(prefix="distrodeck-doctor-apt-") as temp_dir:
+        lists_dir = Path(temp_dir) / "lists"
+        partial_dir = lists_dir / "partial"
+        partial_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "apt-get",
+            "update",
+            "-o",
+            "Debug::NoLocking=true",
+            "-o",
+            f"Dir::State::Lists={lists_dir}",
+            "-o",
+            "Acquire::Retries=0",
+            "-o",
+            "APT::Get::List-Cleanup=0",
+        ]
+        result = run(cmd, check=False, capture_output=True)
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        return result.returncode, output
 
 
 def get_latest_log_path() -> Optional[Path]:
@@ -3202,52 +3290,281 @@ def import_from_file(args: argparse.Namespace) -> None:
         log_action_end("import")
 
 
-def run_doctor() -> None:
+def run_doctor(args: argparse.Namespace) -> None:
     log_action_start("doctor")
+    checks: List[Dict[str, object]] = []
     os_id = get_os_id()
     codename = get_codename()
-    log(f"os_id={os_id}")
-    if codename:
-        log(f"codename={codename}")
-    checks = [
-        ("apt-get", "Debian/Ubuntu package manager (base system updates)"),
-        ("nala", "Apt UI/formatter (faster output)"),
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    native_pm = {
+        "ubuntu": "apt-get",
+        "debian": "apt-get",
+        "fedora": "dnf",
+        "rhel": "dnf",
+        "centos": "dnf",
+        "arch": "pacman",
+        "manjaro": "pacman",
+        "opensuse": "zypper",
+        "opensuse-leap": "zypper",
+        "opensuse-tumbleweed": "zypper",
+    }
+    required_pm = native_pm.get(os_id)
+    if required_pm:
+        if cmd_exists(required_pm):
+            _doctor_add_check(
+                checks,
+                "package_manager",
+                "ok",
+                f"Detected required package manager: {required_pm}",
+            )
+        else:
+            _doctor_add_check(
+                checks,
+                "package_manager",
+                "blocker",
+                f"Required package manager not found: {required_pm}",
+                remediation=f"Install {required_pm} or run distrodeck on a supported system for {os_id}.",
+            )
+    else:
+        _doctor_add_check(
+            checks,
+            "os_support",
+            "warn",
+            f"OS '{os_id}' is not in the supported list.",
+            remediation="Use Ubuntu/Debian/Fedora/RHEL/CentOS/Arch/Manjaro/openSUSE where possible.",
+        )
+
+    optional_tools: List[Tuple[str, str]] = [
+        ("nala", "Apt UI/formatter"),
         ("snap", "Snap package manager"),
         ("flatpak", "Flatpak package manager"),
         ("add-apt-repository", "Manage PPAs and apt repositories"),
         ("do-release-upgrade", "Ubuntu distro upgrade tool"),
-        ("dnf", "Fedora/RHEL package manager"),
-        ("zypper", "openSUSE package manager"),
-        ("pacman", "Arch package manager"),
     ]
-
-    def command_path(name: str) -> str:
-        path = shutil.which(name)
-        return path or ""
-
-    def command_version(name: str) -> str:
-        for flag in ("--version", "-V", "-v"):
-            result = run([name, flag], check=False, capture_output=True)
-            output = (result.stdout or result.stderr or "").strip()
-            if result.returncode == 0 and output:
-                return output.splitlines()[0]
-        return ""
-
-    for name, desc in checks:
-        status = "ok" if cmd_exists(name) else "missing"
-        if VERBOSE:
-            path = command_path(name)
-            version = command_version(name) if status == "ok" else ""
-            details = []
-            if path:
-                details.append(f"path={path}")
-            if version:
-                details.append(f"version={version}")
-            detail_str = f" ({', '.join(details)})" if details else ""
-            log(f"{name}: {status} - {desc}{detail_str}")
+    for name, desc in optional_tools:
+        if cmd_exists(name):
+            _doctor_add_check(checks, f"tool:{name}", "ok", f"{name} available ({desc})")
         else:
-            log(f"{name}: {status}")
-    log_action_end("doctor")
+            _doctor_add_check(
+                checks,
+                f"tool:{name}",
+                "warn",
+                f"{name} not found ({desc})",
+                remediation=f"Install {name} if you need workflows that depend on it.",
+            )
+
+    try:
+        usage = shutil.disk_usage("/")
+        free_gb = usage.free / (1024**3)
+        if free_gb < 1.0:
+            _doctor_add_check(
+                checks,
+                "disk_space",
+                "blocker",
+                f"Low disk space on / ({free_gb:.1f} GB free)",
+                remediation="Free disk space before export/import operations.",
+                details={"free_gb": round(free_gb, 2)},
+            )
+        elif free_gb < 5.0:
+            _doctor_add_check(
+                checks,
+                "disk_space",
+                "warn",
+                f"Disk space on / is limited ({free_gb:.1f} GB free)",
+                remediation="Recommended free space is at least 5 GB for safer operations.",
+                details={"free_gb": round(free_gb, 2)},
+            )
+        else:
+            _doctor_add_check(
+                checks,
+                "disk_space",
+                "ok",
+                f"Disk space check passed on / ({free_gb:.1f} GB free)",
+                details={"free_gb": round(free_gb, 2)},
+            )
+    except OSError as exc:
+        _doctor_add_check(
+            checks,
+            "disk_space",
+            "warn",
+            f"Disk space check failed: {exc}",
+            remediation="Verify available disk space manually with 'df -h'.",
+        )
+
+    try:
+        with socket.create_connection(("1.1.1.1", 53), timeout=2):
+            _doctor_add_check(checks, "network", "ok", "Network connectivity check passed")
+    except OSError:
+        _doctor_add_check(
+            checks,
+            "network",
+            "warn",
+            "Network connectivity check failed",
+            remediation="Verify internet/DNS access before import or upgrade operations.",
+        )
+
+    reboot_required = Path("/var/run/reboot-required")
+    if reboot_required.exists():
+        _doctor_add_check(
+            checks,
+            "reboot_required",
+            "warn",
+            "System indicates a reboot is required",
+            remediation="Reboot before running risky update/import workflows.",
+        )
+    elif cmd_exists("needs-restarting"):
+        result = run(["needs-restarting", "-r"], check=False, capture_output=True)
+        if result.returncode != 0:
+            _doctor_add_check(
+                checks,
+                "reboot_required",
+                "warn",
+                "needs-restarting indicates reboot is required",
+                remediation="Reboot before running risky update/import workflows.",
+            )
+        else:
+            _doctor_add_check(checks, "reboot_required", "ok", "No reboot required")
+    else:
+        _doctor_add_check(checks, "reboot_required", "ok", "No reboot requirement detected")
+
+    if cmd_exists("apt-get"):
+        hosts = _doctor_apt_repo_hosts()
+        if hosts:
+            unresolved = [host for host in hosts if not _doctor_check_host_resolution(host)]
+            if unresolved:
+                _doctor_add_check(
+                    checks,
+                    "apt_repo_host_resolution",
+                    "blocker",
+                    "One or more APT repository hosts could not be resolved",
+                    remediation="Fix DNS/network or remove broken apt sources before import/upgrade.",
+                    details={"unresolved_hosts": unresolved},
+                )
+            else:
+                _doctor_add_check(
+                    checks,
+                    "apt_repo_host_resolution",
+                    "ok",
+                    "All configured APT repository hosts resolved successfully",
+                    details={"hosts_checked": len(hosts)},
+                )
+        else:
+            _doctor_add_check(
+                checks,
+                "apt_repo_host_resolution",
+                "warn",
+                "No active APT repository hosts detected",
+                remediation="Verify /etc/apt/sources.list and /etc/apt/sources.list.d/*.sources.",
+            )
+
+        apt_rc, apt_output = _doctor_probe_apt_metadata()
+        bad_urls, missing_keys = parse_apt_update_issues(apt_output)
+        if missing_keys:
+            _doctor_add_check(
+                checks,
+                "apt_metadata",
+                "blocker",
+                "APT metadata/key validation found missing public keys",
+                remediation="Run 'distrodeck repo-repair' or refresh missing apt keys.",
+                details={"missing_keys": missing_keys},
+            )
+        if bad_urls:
+            _doctor_add_check(
+                checks,
+                "apt_metadata",
+                "blocker",
+                "APT metadata validation found broken repositories",
+                remediation="Run 'distrodeck repo-repair' and disable/fix broken repositories.",
+                details={"broken_repos": bad_urls},
+            )
+        if not missing_keys and not bad_urls:
+            if apt_rc == 0:
+                _doctor_add_check(
+                    checks,
+                    "apt_metadata",
+                    "ok",
+                    "APT repository metadata validation passed",
+                )
+            else:
+                tail = [line for line in apt_output.splitlines() if line.strip()][-3:]
+                _doctor_add_check(
+                    checks,
+                    "apt_metadata",
+                    "warn",
+                    "APT metadata probe failed with a non-zero exit code",
+                    remediation="Run 'apt-get update' manually and inspect output.",
+                    details={"exit_code": apt_rc, "tail": tail},
+                )
+    elif cmd_exists("dnf"):
+        result = run(["dnf", "repolist", "--enabled"], check=False, capture_output=True)
+        if result.returncode == 0:
+            _doctor_add_check(checks, "repo_metadata", "ok", "DNF repository listing succeeded")
+        else:
+            _doctor_add_check(
+                checks,
+                "repo_metadata",
+                "warn",
+                "DNF repository listing failed",
+                remediation="Run 'dnf repolist --enabled' and resolve repository issues.",
+            )
+    elif cmd_exists("zypper"):
+        result = run(["zypper", "repos"], check=False, capture_output=True)
+        if result.returncode == 0:
+            _doctor_add_check(checks, "repo_metadata", "ok", "Zypper repository listing succeeded")
+        else:
+            _doctor_add_check(
+                checks,
+                "repo_metadata",
+                "warn",
+                "Zypper repository listing failed",
+                remediation="Run 'zypper repos' and resolve repository issues.",
+            )
+    elif cmd_exists("pacman"):
+        result = run(["pacman", "-Syy", "--print-format", "%n"], check=False, capture_output=True)
+        if result.returncode == 0:
+            _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository sync probe succeeded")
+        else:
+            _doctor_add_check(
+                checks,
+                "repo_metadata",
+                "warn",
+                "Pacman repository sync probe failed",
+                remediation="Run 'sudo pacman -Syy' and resolve repository issues.",
+            )
+
+    overall = _doctor_status(checks)
+    summary = _doctor_summary(checks)
+    payload = {
+        "status": overall,
+        "timestamp": now,
+        "os": {"id": os_id, "codename": codename or ""},
+        "summary": summary,
+        "checks": checks,
+    }
+
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"Doctor report for os_id={os_id}" + (f", codename={codename}" if codename else ""))
+        for check in checks:
+            sev = str(check["severity"]).upper()
+            print(f"[{sev}] {check['name']}: {check['message']}")
+            remediation = check.get("remediation")
+            if remediation:
+                print(f"  hint: {remediation}")
+            if VERBOSE and check.get("details"):
+                print(f"  details: {check['details']}")
+        print(
+            "Summary: "
+            f"ok={summary['ok']} warn={summary['warn']} blocker={summary['blocker']} "
+            f"status={overall}"
+        )
+
+    if overall == "blocker":
+        log_action_end("doctor", "failed")
+        sys.exit(1)
+    log_action_end("doctor", "warn" if overall == "warn" else "ok")
 
 
 def run_install_tools(args: argparse.Namespace) -> None:
@@ -4659,7 +4976,12 @@ def build_parser() -> argparse.ArgumentParser:
     repair_cmd.set_defaults(func=lambda _: run_repo_repair())
 
     doctor_cmd = sub.add_parser("doctor", help="Check system prerequisites")
-    doctor_cmd.set_defaults(func=lambda _: run_doctor())
+    doctor_cmd.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON report",
+    )
+    doctor_cmd.set_defaults(func=run_doctor)
 
     install_cmd = sub.add_parser(
         "install-tools",
