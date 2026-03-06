@@ -2,6 +2,13 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [0.6.0]
+
+### Added
+- New `git dis` alias to list repository issues via `gh` with number, title, and state.
+- New `git dprs` alias to list repository pull requests via `gh` with number, title, and state.
+- New `git dup` alias to push the current branch and set upstream to `origin/<current-branch>`.
+
 ## [0.5.0]
 
 ### Added
