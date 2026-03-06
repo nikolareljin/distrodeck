@@ -21,7 +21,7 @@ from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
@@ -3643,17 +3643,17 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         (
             "dis",
             "!gh issue list --state all --limit 1000 --json number,title,state --template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow (printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'",
-            "list repository issues (requires gh)",
+            "list repository issues (number, title, state; requires gh)",
         ),
         (
             "dprs",
             "!gh pr list --state all --limit 1000 --json number,title,state --template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow (printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'",
-            "list repository pull requests (requires gh)",
+            "list repository pull requests (number, title, state; requires gh)",
         ),
         (
             "dup",
             "!branch=$(git symbolic-ref --quiet --short HEAD) && git push -u origin \"$branch\"",
-            "push current branch and set upstream to origin",
+            "push current branch and set upstream to origin/<current-branch>",
         ),
         ("ds", "status -sb", "short status"),
         ("db", "branch -vv", "verbose branches"),
