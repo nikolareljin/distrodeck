@@ -3642,12 +3642,12 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dpr", "!gh pr create --fill", "create PR (requires gh)"),
         (
             "dis",
-            "!gh issue list --json number,title,state --template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow (printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'",
+            "!gh issue list --state all --limit 1000 --json number,title,state --template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow (printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'",
             "list repository issues (requires gh)",
         ),
         (
             "dprs",
-            "!gh pr list --json number,title,state --template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow (printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'",
+            "!gh pr list --state all --limit 1000 --json number,title,state --template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow (printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'",
             "list repository pull requests (requires gh)",
         ),
         (
