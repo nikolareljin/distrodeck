@@ -5,11 +5,11 @@ This project follows Keep a Changelog and Semantic Versioning.
 ## [0.7.0]
 
 ### Added
-- Upgraded `doctor` command to emit structured severity checks (`ok`, `warn`, `blocker`) with remediation hints.
 - Added `distrodeck doctor --json` for machine-readable diagnostics in automation workflows.
 - Added repository health checks to `doctor`, including APT host resolution and metadata/key validation probes.
 
 ### Changed
+- `doctor` now emits structured severity checks (`ok`, `warn`, `blocker`) with remediation hints.
 - `doctor` now exits non-zero when blocker-level issues are detected.
 - `doctor` now reports disk, network, package-manager, reboot, and repository checks in a consolidated summary.
 

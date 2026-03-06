@@ -1281,20 +1281,25 @@ def _doctor_summary(checks: List[Dict[str, object]]) -> Dict[str, int]:
     return summary
 
 
-def _doctor_apt_repo_hosts() -> List[str]:
+def _doctor_apt_repo_hosts() -> Tuple[List[str], List[str]]:
     hosts: Set[str] = set()
+    malformed_uris: Set[str] = set()
     for line in active_apt_sources():
         parsed = parse_apt_source_line(line)
         if not parsed:
             continue
         uri = parsed.get("uri", "")
-        parsed_uri = urlparse(uri)
+        try:
+            parsed_uri = urlparse(uri)
+            host = (parsed_uri.hostname or "").strip().lower()
+        except ValueError:
+            malformed_uris.add(uri)
+            continue
         if parsed_uri.scheme in {"cdrom", "file"}:
             continue
-        host = (parsed_uri.hostname or "").strip().lower()
         if host:
             hosts.add(host)
-    return sorted(hosts)
+    return sorted(hosts), sorted(malformed_uris)
 
 
 def _doctor_check_host_resolution(host: str) -> bool:
@@ -1322,7 +1327,13 @@ def _doctor_probe_apt_metadata() -> Tuple[int, str]:
             "-o",
             "APT::Get::List-Cleanup=0",
         ]
-        result = run(cmd, check=False, capture_output=True)
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         return result.returncode, output
 
@@ -1651,6 +1662,9 @@ def deb822_to_deb_lines(lines: List[str]) -> List[str]:
 
     output: List[str] = []
     for stanza in stanzas:
+        enabled_value = stanza.get("enabled", "").strip().lower()
+        if enabled_value in {"no", "false", "0", "off"}:
+            continue
         types = _split_deb822_field(stanza.get("types", "deb"))
         uris = _split_deb822_field(stanza.get("uris", "") or stanza.get("uri", ""))
         suites = _split_deb822_field(stanza.get("suites", "") or stanza.get("suite", ""))
@@ -3336,12 +3350,17 @@ def run_doctor(args: argparse.Namespace) -> None:
         )
 
     optional_tools: List[Tuple[str, str]] = [
-        ("nala", "Apt UI/formatter"),
         ("snap", "Snap package manager"),
         ("flatpak", "Flatpak package manager"),
-        ("add-apt-repository", "Manage PPAs and apt repositories"),
-        ("do-release-upgrade", "Ubuntu distro upgrade tool"),
     ]
+    if required_pm == "apt-get" or cmd_exists("apt-get"):
+        optional_tools.extend(
+            [
+                ("nala", "Apt UI/formatter"),
+                ("add-apt-repository", "Manage PPAs and apt repositories"),
+                ("do-release-upgrade", "Ubuntu distro upgrade tool"),
+            ]
+        )
     for name, desc in optional_tools:
         if cmd_exists(name):
             _doctor_add_check(checks, f"tool:{name}", "ok", f"{name} available ({desc})")
@@ -3429,7 +3448,16 @@ def run_doctor(args: argparse.Namespace) -> None:
         _doctor_add_check(checks, "reboot_required", "ok", "No reboot requirement detected")
 
     if cmd_exists("apt-get"):
-        hosts = _doctor_apt_repo_hosts()
+        hosts, malformed_uris = _doctor_apt_repo_hosts()
+        if malformed_uris:
+            _doctor_add_check(
+                checks,
+                "apt_repo_uri_format",
+                "warn",
+                "Some APT source URIs are malformed and were skipped",
+                remediation="Fix malformed APT source lines before running upgrades/imports.",
+                details={"malformed_uris": malformed_uris},
+            )
         if hosts:
             unresolved = [host for host in hosts if not _doctor_check_host_resolution(host)]
             if unresolved:
@@ -3458,27 +3486,47 @@ def run_doctor(args: argparse.Namespace) -> None:
                 remediation="Verify /etc/apt/sources.list and /etc/apt/sources.list.d/*.sources.",
             )
 
-        apt_rc, apt_output = _doctor_probe_apt_metadata()
+        try:
+            apt_rc, apt_output = _doctor_probe_apt_metadata()
+        except subprocess.TimeoutExpired:
+            _doctor_add_check(
+                checks,
+                "apt_metadata",
+                "warn",
+                "APT metadata probe timed out",
+                remediation="Run 'apt-get update' manually and resolve slow/unresponsive repositories.",
+            )
+            apt_rc = -1
+            apt_output = ""
         bad_urls, missing_keys = parse_apt_update_issues(apt_output)
+        issue_details: Dict[str, object] = {}
+        issue_summaries: List[str] = []
+        remediations: List[str] = []
         if missing_keys:
-            _doctor_add_check(
-                checks,
-                "apt_metadata",
-                "blocker",
-                "APT metadata/key validation found missing public keys",
-                remediation="Run 'distrodeck repo-repair' or refresh missing apt keys.",
-                details={"missing_keys": missing_keys},
-            )
+            issue_details["missing_keys"] = missing_keys
+            issue_summaries.append("missing public keys")
+            remediations.append("Run 'distrodeck repo-repair' or refresh missing apt keys.")
         if bad_urls:
+            issue_details["broken_repos"] = bad_urls
+            issue_summaries.append("broken repositories")
+            remediations.append("Run 'distrodeck repo-repair' and disable/fix broken repositories.")
+        if issue_details:
+            seen_remediations: Set[str] = set()
+            unique_remediations: List[str] = []
+            for rem in remediations:
+                if rem in seen_remediations:
+                    continue
+                seen_remediations.add(rem)
+                unique_remediations.append(rem)
             _doctor_add_check(
                 checks,
                 "apt_metadata",
                 "blocker",
-                "APT metadata validation found broken repositories",
-                remediation="Run 'distrodeck repo-repair' and disable/fix broken repositories.",
-                details={"broken_repos": bad_urls},
+                f"APT metadata validation found {' and '.join(issue_summaries)}",
+                remediation=" ".join(unique_remediations),
+                details=issue_details,
             )
-        if not missing_keys and not bad_urls:
+        if not issue_details:
             if apt_rc == 0:
                 _doctor_add_check(
                     checks,
@@ -3521,16 +3569,16 @@ def run_doctor(args: argparse.Namespace) -> None:
                 remediation="Run 'zypper repos' and resolve repository issues.",
             )
     elif cmd_exists("pacman"):
-        result = run(["pacman", "-Syy", "--print-format", "%n"], check=False, capture_output=True)
+        result = run(["pacman", "-Sl"], check=False, capture_output=True)
         if result.returncode == 0:
-            _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository sync probe succeeded")
+            _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository listing succeeded")
         else:
             _doctor_add_check(
                 checks,
                 "repo_metadata",
                 "warn",
-                "Pacman repository sync probe failed",
-                remediation="Run 'sudo pacman -Syy' and resolve repository issues.",
+                "Pacman repository listing failed",
+                remediation="Run 'pacman -Sl' and resolve repository issues.",
             )
 
     overall = _doctor_status(checks)
