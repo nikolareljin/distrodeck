@@ -3497,8 +3497,6 @@ def run_doctor(args: argparse.Namespace) -> None:
                 "APT metadata probe timed out",
                 remediation="Run 'apt-get update' manually and resolve slow/unresponsive repositories.",
             )
-            apt_rc = -1
-            apt_output = ""
         except OSError as exc:
             _doctor_add_check(
                 checks,
@@ -3508,8 +3506,6 @@ def run_doctor(args: argparse.Namespace) -> None:
                 remediation="Check disk space, permissions, and APT configuration; then re-run 'distrodeck doctor'.",
                 details={"error": str(exc)},
             )
-            apt_rc = -1
-            apt_output = ""
         else:
             bad_urls, missing_keys = parse_apt_update_issues(apt_output)
             issue_details: Dict[str, object] = {}
@@ -3539,7 +3535,7 @@ def run_doctor(args: argparse.Namespace) -> None:
                     remediation=" ".join(unique_remediations),
                     details=issue_details,
                 )
-            if not issue_details:
+            else:
                 if apt_rc == 0:
                     _doctor_add_check(
                         checks,

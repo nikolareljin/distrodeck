@@ -114,6 +114,7 @@ distrodeck repo-repair
 ### doctor
 
 Run system and repository health diagnostics with severity levels and remediation hints.
+On apt-based systems with many repositories, `doctor` can take longer because it performs a repository metadata probe.
 
 ```
 distrodeck doctor

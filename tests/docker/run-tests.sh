@@ -35,6 +35,10 @@ if [[ "$doctor_status" == "blocker" && "$doctor_json_rc" -eq 0 ]]; then
   echo "doctor --json should exit non-zero when status is blocker" >&2
   exit 1
 fi
+if [[ "$doctor_status" != "blocker" && "$doctor_json_rc" -ne 0 ]]; then
+  echo "doctor --json should exit zero for non-blocker status" >&2
+  exit 1
+fi
 
 log_section "Preflight"
 $DC preflight

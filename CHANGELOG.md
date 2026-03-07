@@ -12,7 +12,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 - `doctor` now emits structured severity checks (`ok`, `warn`, `blocker`) with remediation hints.
 - `doctor` now exits non-zero when blocker-level issues are detected.
 - `doctor` now reports disk, network, package-manager, reboot, and repository checks in a consolidated summary.
-- APT deb822 `.sources` handling now skips stanzas with `Enabled: no`, affecting `doctor` repository checks and `export_apt_sources` / `active_apt_sources` flows.
+- APT deb822 `.sources` handling now skips stanzas with `Enabled: no|false|0|off`, affecting `doctor` repository checks and `export_apt_sources` / `active_apt_sources` flows.
 
 ## [0.6.1]
 
