@@ -82,6 +82,8 @@ OFFICIAL_APT_HOSTS = {
 DEBIAN_CODENAME_PATTERN = re.compile(r"[a-z]+")
 MAX_ALIAS_NAME_ATTEMPTS = 3
 MAX_ALIAS_GENERATION_ATTEMPTS = 100
+DOCTOR_DNS_TIMEOUT_SECONDS = 5
+DOCTOR_REPO_METADATA_TIMEOUT_SECONDS = 120
 
 
 def require_python_version() -> None:
@@ -180,7 +182,7 @@ def get_official_apt_hosts(os_id: str) -> Set[str]:
 
 
 def run(
-    cmd, check=True, capture_output=False, text=True, input_text=None, env=None
+    cmd, check=True, capture_output=False, text=True, input_text=None, env=None, **kwargs
 ):
     return subprocess.run(
         cmd,
@@ -189,6 +191,7 @@ def run(
         text=text,
         input=input_text,
         env=env,
+        **kwargs,
     )
 
 
@@ -1303,11 +1306,21 @@ def _doctor_apt_repo_hosts() -> Tuple[List[str], List[str]]:
 
 
 def _doctor_check_host_resolution(host: str) -> bool:
-    try:
-        socket.getaddrinfo(host, None)
-    except OSError:
+    state = {"resolved": False}
+
+    def _resolve_host() -> None:
+        try:
+            socket.getaddrinfo(host, None)
+            state["resolved"] = True
+        except OSError:
+            state["resolved"] = False
+
+    thread = threading.Thread(target=_resolve_host, daemon=True)
+    thread.start()
+    thread.join(timeout=DOCTOR_DNS_TIMEOUT_SECONDS)
+    if thread.is_alive():
         return False
-    return True
+    return bool(state["resolved"])
 
 
 def _doctor_probe_apt_metadata() -> Tuple[int, str]:
@@ -3554,41 +3567,86 @@ def run_doctor(args: argparse.Namespace) -> None:
                         details={"exit_code": apt_rc, "tail": tail},
                     )
     elif cmd_exists("dnf"):
-        result = run(["dnf", "repolist", "--enabled"], check=False, capture_output=True)
-        if result.returncode == 0:
-            _doctor_add_check(checks, "repo_metadata", "ok", "DNF repository listing succeeded")
-        else:
+        try:
+            result = run(
+                ["dnf", "repolist", "--enabled"],
+                check=False,
+                capture_output=True,
+                timeout=DOCTOR_REPO_METADATA_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
             _doctor_add_check(
                 checks,
                 "repo_metadata",
                 "warn",
-                "DNF repository listing failed",
-                remediation="Run 'dnf repolist --enabled' and resolve repository issues.",
+                f"DNF repository listing timed out after {DOCTOR_REPO_METADATA_TIMEOUT_SECONDS}s",
+                remediation="Check network/repository health, then re-run 'dnf repolist --enabled'.",
             )
+        else:
+            if result.returncode == 0:
+                _doctor_add_check(checks, "repo_metadata", "ok", "DNF repository listing succeeded")
+            else:
+                _doctor_add_check(
+                    checks,
+                    "repo_metadata",
+                    "warn",
+                    "DNF repository listing failed",
+                    remediation="Run 'dnf repolist --enabled' and resolve repository issues.",
+                )
     elif cmd_exists("zypper"):
-        result = run(["zypper", "repos"], check=False, capture_output=True)
-        if result.returncode == 0:
-            _doctor_add_check(checks, "repo_metadata", "ok", "Zypper repository listing succeeded")
-        else:
+        try:
+            result = run(
+                ["zypper", "repos"],
+                check=False,
+                capture_output=True,
+                timeout=DOCTOR_REPO_METADATA_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
             _doctor_add_check(
                 checks,
                 "repo_metadata",
                 "warn",
-                "Zypper repository listing failed",
-                remediation="Run 'zypper repos' and resolve repository issues.",
+                f"Zypper repository listing timed out after {DOCTOR_REPO_METADATA_TIMEOUT_SECONDS}s",
+                remediation="Check network/repository health, then re-run 'zypper repos'.",
             )
+        else:
+            if result.returncode == 0:
+                _doctor_add_check(checks, "repo_metadata", "ok", "Zypper repository listing succeeded")
+            else:
+                _doctor_add_check(
+                    checks,
+                    "repo_metadata",
+                    "warn",
+                    "Zypper repository listing failed",
+                    remediation="Run 'zypper repos' and resolve repository issues.",
+                )
     elif cmd_exists("pacman"):
-        result = run(["pacman", "-Si", "pacman"], check=False, capture_output=True)
-        if result.returncode == 0:
-            _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository metadata query succeeded")
-        else:
+        try:
+            result = run(
+                ["pacman", "-Si", "pacman"],
+                check=False,
+                capture_output=True,
+                timeout=DOCTOR_REPO_METADATA_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
             _doctor_add_check(
                 checks,
                 "repo_metadata",
                 "warn",
-                "Pacman repository metadata query failed",
-                remediation="Run 'pacman -Si pacman' and resolve repository issues.",
+                f"Pacman repository metadata query timed out after {DOCTOR_REPO_METADATA_TIMEOUT_SECONDS}s",
+                remediation="Check network/repository health, then re-run 'pacman -Si pacman'.",
             )
+        else:
+            if result.returncode == 0:
+                _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository metadata query succeeded")
+            else:
+                _doctor_add_check(
+                    checks,
+                    "repo_metadata",
+                    "warn",
+                    "Pacman repository metadata query failed",
+                    remediation="Run 'pacman -Si pacman' and resolve repository issues.",
+                )
 
     overall = _doctor_status(checks)
     summary = _doctor_summary(checks)
