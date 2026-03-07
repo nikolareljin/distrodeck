@@ -3646,10 +3646,12 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         " *) echo 'Origin URL is not HTTP(S); not opening.' >&2; echo \"$url\"; return 1;; esac;"
         " safe_url=$(printf '%s\\n' \"$url\""
         " | sed 's#^\\(https\\?://\\)[^/@]*@#\\1#');"
-        " xdg-open \"$safe_url\" 2>/dev/null"
-        " || open \"$safe_url\" 2>/dev/null"
-        " || start \"$safe_url\" 2>/dev/null"
-        " || echo \"$safe_url\";"
+        " if command -v xdg-open >/dev/null 2>&1; then xdg-open \"$safe_url\" 2>/dev/null;"
+        " elif command -v open >/dev/null 2>&1; then open \"$safe_url\" 2>/dev/null;"
+        " elif command -v python3 >/dev/null 2>&1; then python3 -m webbrowser \"$safe_url\" 2>/dev/null;"
+        " elif command -v python >/dev/null 2>&1; then python -m webbrowser \"$safe_url\" 2>/dev/null;"
+        " elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start \"\" \"$safe_url\" >/dev/null 2>&1;"
+        " else echo \"$safe_url\"; fi;"
         " }; f"
     )
     # fmt: on
