@@ -2,6 +2,11 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [0.6.1]
+
+### Added
+- New `git do` alias to open the remote origin URL in the default browser; converts SSH remote URLs to HTTPS and strips `.git` suffix automatically.
+
 ## [0.6.0]
 
 ### Added

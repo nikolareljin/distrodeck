@@ -3662,6 +3662,11 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dds", "diff --staged", "diff staged"),
         ("dco", "checkout", "checkout"),
         ("dcb", "checkout -b", "create branch"),
+        (
+            "do",
+            "!f() { url=$(git remote get-url origin 2>/dev/null) || { echo 'No remote origin found.' >&2; return 1; }; url=${url%.git}; url=$(echo \"$url\" | sed 's|git@\\([^:]*\\):|https://\\1/|'); xdg-open \"$url\" 2>/dev/null || open \"$url\" 2>/dev/null || start \"$url\" 2>/dev/null || echo \"$url\"; }; f",
+            "open remote origin URL in browser",
+        ),
     ]
     alias_names = [name for name, _, _ in entries] + ["dhelp"]
     alias_pattern = "|".join(re.escape(name) for name in alias_names)
