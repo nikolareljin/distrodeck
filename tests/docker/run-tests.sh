@@ -19,7 +19,9 @@ log_section "Clear logs"
 $DC clear-logs
 
 log_section "Doctor"
+set +e
 $DC doctor --verbose
+set -e
 
 log_section "Doctor JSON"
 set +e
@@ -27,8 +29,8 @@ $DC doctor --json > /workspace/.state/doctor.json
 doctor_json_rc=$?
 set -e
 
-jq . /workspace/.state/doctor.json >/dev/null
-doctor_status=$(jq -r '.status' /workspace/.state/doctor.json)
+python3 -c "import json; json.load(open('/workspace/.state/doctor.json'))" >/dev/null
+doctor_status=$(python3 -c "import json; print(json.load(open('/workspace/.state/doctor.json'))['status'])")
 if [[ "$doctor_status" == "blocker" && "$doctor_json_rc" -eq 0 ]]; then
   echo "doctor --json should exit non-zero when status is blocker" >&2
   exit 1
