@@ -3486,6 +3486,7 @@ def run_doctor(args: argparse.Namespace) -> None:
                 remediation="Verify /etc/apt/sources.list and /etc/apt/sources.list.d/*.sources.",
             )
 
+        apt_probe_timed_out = False
         try:
             apt_rc, apt_output = _doctor_probe_apt_metadata()
         except subprocess.TimeoutExpired:
@@ -3498,52 +3499,54 @@ def run_doctor(args: argparse.Namespace) -> None:
             )
             apt_rc = -1
             apt_output = ""
-        bad_urls, missing_keys = parse_apt_update_issues(apt_output)
-        issue_details: Dict[str, object] = {}
-        issue_summaries: List[str] = []
-        remediations: List[str] = []
-        if missing_keys:
-            issue_details["missing_keys"] = missing_keys
-            issue_summaries.append("missing public keys")
-            remediations.append("Run 'distrodeck repo-repair' or refresh missing apt keys.")
-        if bad_urls:
-            issue_details["broken_repos"] = bad_urls
-            issue_summaries.append("broken repositories")
-            remediations.append("Run 'distrodeck repo-repair' and disable/fix broken repositories.")
-        if issue_details:
-            seen_remediations: Set[str] = set()
-            unique_remediations: List[str] = []
-            for rem in remediations:
-                if rem in seen_remediations:
-                    continue
-                seen_remediations.add(rem)
-                unique_remediations.append(rem)
-            _doctor_add_check(
-                checks,
-                "apt_metadata",
-                "blocker",
-                f"APT metadata validation found {' and '.join(issue_summaries)}",
-                remediation=" ".join(unique_remediations),
-                details=issue_details,
-            )
-        if not issue_details:
-            if apt_rc == 0:
+            apt_probe_timed_out = True
+        if not apt_probe_timed_out:
+            bad_urls, missing_keys = parse_apt_update_issues(apt_output)
+            issue_details: Dict[str, object] = {}
+            issue_summaries: List[str] = []
+            remediations: List[str] = []
+            if missing_keys:
+                issue_details["missing_keys"] = missing_keys
+                issue_summaries.append("missing public keys")
+                remediations.append("Run 'distrodeck repo-repair' or refresh missing apt keys.")
+            if bad_urls:
+                issue_details["broken_repos"] = bad_urls
+                issue_summaries.append("broken repositories")
+                remediations.append("Run 'distrodeck repo-repair' and disable/fix broken repositories.")
+            if issue_details:
+                seen_remediations: Set[str] = set()
+                unique_remediations: List[str] = []
+                for rem in remediations:
+                    if rem in seen_remediations:
+                        continue
+                    seen_remediations.add(rem)
+                    unique_remediations.append(rem)
                 _doctor_add_check(
                     checks,
                     "apt_metadata",
-                    "ok",
-                    "APT repository metadata validation passed",
+                    "blocker",
+                    f"APT metadata validation found {' and '.join(issue_summaries)}",
+                    remediation=" ".join(unique_remediations),
+                    details=issue_details,
                 )
-            else:
-                tail = [line for line in apt_output.splitlines() if line.strip()][-3:]
-                _doctor_add_check(
-                    checks,
-                    "apt_metadata",
-                    "warn",
-                    "APT metadata probe failed with a non-zero exit code",
-                    remediation="Run 'apt-get update' manually and inspect output.",
-                    details={"exit_code": apt_rc, "tail": tail},
-                )
+            if not issue_details:
+                if apt_rc == 0:
+                    _doctor_add_check(
+                        checks,
+                        "apt_metadata",
+                        "ok",
+                        "APT repository metadata validation passed",
+                    )
+                else:
+                    tail = [line for line in apt_output.splitlines() if line.strip()][-3:]
+                    _doctor_add_check(
+                        checks,
+                        "apt_metadata",
+                        "warn",
+                        "APT metadata probe failed with a non-zero exit code",
+                        remediation="Run 'apt-get update' manually and inspect output.",
+                        details={"exit_code": apt_rc, "tail": tail},
+                    )
     elif cmd_exists("dnf"):
         result = run(["dnf", "repolist", "--enabled"], check=False, capture_output=True)
         if result.returncode == 0:
@@ -3569,16 +3572,16 @@ def run_doctor(args: argparse.Namespace) -> None:
                 remediation="Run 'zypper repos' and resolve repository issues.",
             )
     elif cmd_exists("pacman"):
-        result = run(["pacman", "-Sl"], check=False, capture_output=True)
+        result = run(["pacman", "-Si", "pacman"], check=False, capture_output=True)
         if result.returncode == 0:
-            _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository listing succeeded")
+            _doctor_add_check(checks, "repo_metadata", "ok", "Pacman repository metadata query succeeded")
         else:
             _doctor_add_check(
                 checks,
                 "repo_metadata",
                 "warn",
-                "Pacman repository listing failed",
-                remediation="Run 'pacman -Sl' and resolve repository issues.",
+                "Pacman repository metadata query failed",
+                remediation="Run 'pacman -Si pacman' and resolve repository issues.",
             )
 
     overall = _doctor_status(checks)
