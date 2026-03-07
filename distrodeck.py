@@ -1632,6 +1632,7 @@ def deb822_to_deb_lines(lines: List[str]) -> List[str]:
 
     Supported options: Architectures, Signed-By.
     Other deb822 fields are ignored during conversion, so conversion is lossy.
+    Stanzas with `Enabled: no|false|0|off` are skipped.
     Stanzas missing URIs or Suites are skipped.
     """
     stanzas: List[Dict[str, str]] = []
@@ -3486,7 +3487,6 @@ def run_doctor(args: argparse.Namespace) -> None:
                 remediation="Verify /etc/apt/sources.list and /etc/apt/sources.list.d/*.sources.",
             )
 
-        apt_probe_timed_out = False
         try:
             apt_rc, apt_output = _doctor_probe_apt_metadata()
         except subprocess.TimeoutExpired:
@@ -3499,8 +3499,18 @@ def run_doctor(args: argparse.Namespace) -> None:
             )
             apt_rc = -1
             apt_output = ""
-            apt_probe_timed_out = True
-        if not apt_probe_timed_out:
+        except OSError as exc:
+            _doctor_add_check(
+                checks,
+                "apt_metadata",
+                "warn",
+                "APT metadata probe failed due to an OS error",
+                remediation="Check disk space, permissions, and APT configuration; then re-run 'distrodeck doctor'.",
+                details={"error": str(exc)},
+            )
+            apt_rc = -1
+            apt_output = ""
+        else:
             bad_urls, missing_keys = parse_apt_update_issues(apt_output)
             issue_details: Dict[str, object] = {}
             issue_summaries: List[str] = []

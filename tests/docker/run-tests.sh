@@ -21,6 +21,19 @@ $DC clear-logs
 log_section "Doctor"
 $DC doctor --verbose
 
+log_section "Doctor JSON"
+set +e
+$DC doctor --json > /workspace/.state/doctor.json
+doctor_json_rc=$?
+set -e
+
+jq . /workspace/.state/doctor.json >/dev/null
+doctor_status=$(jq -r '.status' /workspace/.state/doctor.json)
+if [[ "$doctor_status" == "blocker" && "$doctor_json_rc" -eq 0 ]]; then
+  echo "doctor --json should exit non-zero when status is blocker" >&2
+  exit 1
+fi
+
 log_section "Preflight"
 $DC preflight
 
