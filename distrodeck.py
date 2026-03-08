@@ -3640,7 +3640,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         " if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1;"
         " then echo 'Not a git repository (or any of the parent directories).' >&2; return 1; fi;"
         " url=$(git remote get-url origin 2>/dev/null)"
-        " || { echo 'Failed to get URL for remote \"origin\"; does it exist?' >&2; return 1; };"
+        " || { echo 'No remote origin found.' >&2; return 1; };"
         " url=${url%.git};"
         " url=$(printf '%s\\n' \"$url\""
         " | sed 's|git@\\([^:]*\\):|https://\\1/|;s|^ssh://git@\\([^/]*\\)/|https://\\1/|');"
