@@ -21,7 +21,7 @@ from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
@@ -3634,6 +3634,29 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
 
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
     # Tuple format: (alias_name, git_command, human_readable_description)
+    # fmt: off
+    _do_cmd = (
+        "!f() {"
+        " if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1;"
+        " then echo 'Not a git repository (or any of the parent directories).' >&2; return 1; fi;"
+        " url=$(git remote get-url origin 2>/dev/null)"
+        " || { echo 'No remote origin found.' >&2; return 1; };"
+        " url=${url%.git};"
+        " url=$(printf '%s\\n' \"$url\""
+        " | sed 's|git@\\([^:]*\\):|https://\\1/|;s|^ssh://git@\\([^/]*\\)/|https://\\1/|');"
+        " case \"$url\" in http://*|https://*) ;;"
+        " *) echo 'Origin URL is not HTTP(S); not opening.' >&2; echo \"$url\"; return 1;; esac;"
+        " safe_url=$(printf '%s\\n' \"$url\""
+        " | sed 's#^\\(https\\?://\\)[^/@]*@#\\1#');"
+        " if command -v xdg-open >/dev/null 2>&1; then xdg-open \"$safe_url\" 2>/dev/null || { echo \"$safe_url\"; return 1; };"
+        " elif command -v open >/dev/null 2>&1; then open \"$safe_url\" 2>/dev/null || { echo \"$safe_url\"; return 1; };"
+        " elif command -v python3 >/dev/null 2>&1; then python3 -m webbrowser \"$safe_url\" 2>/dev/null || { echo \"$safe_url\"; return 1; };"
+        " elif command -v python >/dev/null 2>&1; then python -m webbrowser \"$safe_url\" 2>/dev/null || { echo \"$safe_url\"; return 1; };"
+        " elif command -v cmd.exe >/dev/null 2>&1; then cmd.exe /c start \"\" \"$safe_url\" >/dev/null 2>&1 || { echo \"$safe_url\"; return 1; };"
+        " else echo \"$safe_url\"; fi;"
+        " }; f"
+    )
+    # fmt: on
     entries = [
         ("df", "fetch", "fetch"),
         ("dp", "pull", "pull"),
@@ -3662,6 +3685,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dds", "diff --staged", "diff staged"),
         ("dco", "checkout", "checkout"),
         ("dcb", "checkout -b", "create branch"),
+        ("do", _do_cmd, "open remote origin URL in browser"),
     ]
     alias_names = [name for name, _, _ in entries] + ["dhelp"]
     alias_pattern = "|".join(re.escape(name) for name in alias_names)
