@@ -1345,7 +1345,7 @@ def _doctor_probe_apt_metadata() -> Tuple[int, str]:
             check=False,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=DOCTOR_REPO_METADATA_TIMEOUT_SECONDS,
         )
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         return result.returncode, output
@@ -3473,7 +3473,25 @@ def run_doctor(args: argparse.Namespace) -> None:
                 details={"malformed_uris": malformed_uris},
             )
         if hosts:
-            unresolved = [host for host in hosts if not _doctor_check_host_resolution(host)]
+            # Resolve repository hosts concurrently to avoid cumulative DNS timeouts.
+            resolution_results: Dict[str, bool] = {}
+            resolution_lock = threading.Lock()
+
+            def _resolve_host_for_doctor(hostname: str) -> None:
+                result = _doctor_check_host_resolution(hostname)
+                with resolution_lock:
+                    resolution_results[hostname] = result
+
+            threads: List[threading.Thread] = []
+            for host in hosts:
+                t = threading.Thread(target=_resolve_host_for_doctor, args=(host,), daemon=True)
+                threads.append(t)
+                t.start()
+
+            for t in threads:
+                t.join()
+
+            unresolved = [host for host in hosts if not resolution_results.get(host, False)]
             if unresolved:
                 _doctor_add_check(
                     checks,
