@@ -21,7 +21,7 @@ from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
@@ -3637,8 +3637,10 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
     # fmt: off
     _do_cmd = (
         "!f() {"
+        " if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1;"
+        " then echo 'Not a git repository (or any of the parent directories).' >&2; return 1; fi;"
         " url=$(git remote get-url origin 2>/dev/null)"
-        " || { echo 'No remote origin found.' >&2; return 1; };"
+        " || { echo 'Failed to get URL for remote \"origin\"; does it exist?' >&2; return 1; };"
         " url=${url%.git};"
         " url=$(printf '%s\\n' \"$url\""
         " | sed 's|git@\\([^:]*\\):|https://\\1/|;s|^ssh://git@\\([^/]*\\)/|https://\\1/|');"
