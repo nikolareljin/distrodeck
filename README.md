@@ -71,6 +71,8 @@ distrodeck repo-repair
 
 distrodeck doctor
 
+distrodeck doctor --json
+
 distrodeck preflight
 
 distrodeck logs
