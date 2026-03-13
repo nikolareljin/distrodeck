@@ -2,6 +2,11 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+- Added an `About` entry to the TUI with GitHub and LinkedIn profile links.
+
 ## [0.7.0]
 
 ### Added

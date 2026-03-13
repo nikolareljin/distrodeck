@@ -551,6 +551,16 @@ def dialog_textbox(title: str, content: str) -> None:
         pass
 
 
+def show_about_dialog() -> None:
+    dialog_msgbox(
+        "About distrodeck",
+        "distrodeck snapshots and restores package selections, sources, and related system state before distro maintenance.\n\n"
+        "Author profiles\n"
+        "GitHub: https://github.com/nikolareljin\n"
+        "LinkedIn: https://www.linkedin.com/in/nikolareljin",
+    )
+
+
 def confirm_risky_extract(archive: str) -> bool:
     message = (
         "About to extract a config snapshot to the root filesystem (/).\n"
@@ -4636,6 +4646,7 @@ def run_tui() -> None:
         ("sysinfo", "Diagnostics: Full system info"),
         ("logs", "Diagnostics: View logs"),
         ("clear-logs", "Diagnostics: Clear all logs"),
+        ("about", "About"),
         ("quit", "Exit"),
     ]
     while True:
@@ -4645,6 +4656,9 @@ def run_tui() -> None:
             if cmd_exists("dialog"):
                 run(["dialog", "--clear"], check=False)
             break
+        if choice == "about":
+            show_about_dialog()
+            continue
         if choice == "export":
             output = dialog_input(
                 "Export", "Output file:", default_export_filename()

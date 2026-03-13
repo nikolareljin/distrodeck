@@ -19,6 +19,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 - Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
 - Install 56+ developer tools via TUI with uninstall support
+- Includes an `About` entry in the TUI with GitHub and LinkedIn profile links
 
 ## Install
 
