@@ -56,3 +56,7 @@ debian/distrodeck/
 # Ignored files and dirs.
 /ignore/
 TODO.txt
+
+# Ignore Claude memory files outside the repo root
+CLAUDE.md
+!/CLAUDE.md
