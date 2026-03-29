@@ -4,8 +4,10 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
-### Added
-- Added an `About` entry to the TUI with GitHub and LinkedIn profile links.
+## [0.7.1]
+
+### Fixed
+- `install-tools` now resolves `script-helpers` from installed package locations (`/usr/local/share`, `/usr/share`, `/usr/lib`) and a parent-relative fallback, so running from an installed directory no longer incorrectly requires `./scripts/update.sh`.
 
 ## [0.7.0]
 

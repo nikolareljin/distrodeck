@@ -22,7 +22,7 @@ from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.6.1"
+VERSION = "0.7.1"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
