@@ -10,14 +10,53 @@ set -euo pipefail
 # while preserving -e for the rest of the script to catch unexpected errors.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_HELPERS_DIR="${SCRIPT_HELPERS_DIR:-${SCRIPT_DIR}/script-helpers}"
+SCRIPT_HELPERS_DIR="${SCRIPT_HELPERS_DIR:-}"
+LOOKED_IN=()
+
+helper_candidates=(
+  "${SCRIPT_DIR}/script-helpers"
+  "${SCRIPT_DIR}/../script-helpers"
+  "/usr/local/share/distrodeck/scripts/script-helpers"
+  "/usr/share/distrodeck/scripts/script-helpers"
+  "/usr/lib/distrodeck/scripts/script-helpers"
+)
+
+if [[ -n "$SCRIPT_HELPERS_DIR" ]]; then
+  LOOKED_IN+=("$SCRIPT_HELPERS_DIR")
+fi
+
+for candidate in "${helper_candidates[@]}"; do
+  if [[ " ${LOOKED_IN[*]} " != *" ${candidate} "* ]]; then
+    LOOKED_IN+=("$candidate")
+  fi
+done
+
+if [[ -n "$SCRIPT_HELPERS_DIR" && -d "$SCRIPT_HELPERS_DIR" ]]; then
+  :
+else
+  SCRIPT_HELPERS_DIR=""
+  for candidate in "${helper_candidates[@]}"; do
+    if [[ -d "$candidate" ]]; then
+      SCRIPT_HELPERS_DIR="$candidate"
+      break
+    fi
+  done
+fi
 
 # Check if script-helpers directory exists
-if [[ ! -d "$SCRIPT_HELPERS_DIR" ]]; then
-  # Prompt to run update.sh to fetch submodules
+if [[ -z "$SCRIPT_HELPERS_DIR" || ! -d "$SCRIPT_HELPERS_DIR" ]]; then
   echo "The script-helpers directory is missing."
-  echo "Please run the update.sh script to initialize submodules:"
-  echo "  ./scripts/update.sh"
+  echo "Looked in:"
+  for candidate in "${LOOKED_IN[@]}"; do
+    echo "  ${candidate}"
+  done
+  if [[ -e "${SCRIPT_DIR}/../.git" || -e "${SCRIPT_DIR}/../scripts/.git" ]]; then
+    # Source checkout likely missing submodules.
+    echo "Please run the update.sh script to initialize submodules:"
+    echo "  ./scripts/update.sh"
+  else
+    echo "If running from an installed package, please reinstall distrodeck to restore helper files."
+  fi
   exit 1
 fi
 
