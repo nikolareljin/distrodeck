@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
@@ -45,7 +45,7 @@ def main() -> None:
     version = run([str(script), "--version"], env=env).stdout.strip()
     commands = parse_commands(help_text)
 
-    date = datetime.utcnow().strftime("%Y-%m-%d")
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     lines = [
         f'.TH DISTRODECK 1 "{date}" "distrodeck {version}" "User Commands"',
         ".SH NAME",

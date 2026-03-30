@@ -1,5 +1,5 @@
 PACKAGE_NAME = distrodeck
-VERSION = 0.3.0
+VERSION = 0.7.1
 
 .PHONY: deb fpm man
 
