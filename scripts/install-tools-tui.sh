@@ -1282,28 +1282,17 @@ install_antigravity() {
       sudo apt install -y antigravity
       ;;
     dnf)
-      sudo tee /etc/yum.repos.d/antigravity.repo > /dev/null << 'REPO'
-[antigravity-rpm]
-name=Antigravity RPM Repository
-baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/antigravity-rpm
-enabled=1
-gpgcheck=0
-REPO
-      sudo dnf install -y antigravity
+      log_warn "Antigravity RPM install is disabled because the upstream RPM repository does not publish a package signing key."
+      log_warn "Use https://antigravity.google/download/linux for manual RPM installation guidance."
+      return 1
       ;;
     zypper)
-      sudo tee /etc/zypp/repos.d/antigravity.repo > /dev/null << 'REPO'
-[antigravity-rpm]
-name=Antigravity RPM Repository
-baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/antigravity-rpm
-enabled=1
-gpgcheck=0
-REPO
-      sudo zypper refresh
-      sudo zypper install -y antigravity
+      log_warn "Antigravity RPM install is disabled because the upstream RPM repository does not publish a package signing key."
+      log_warn "Use https://antigravity.google/download/linux for manual RPM installation guidance."
+      return 1
       ;;
     *)
-      log_warn "Antigravity install is supported by distrodeck on apt, dnf, and zypper systems."
+      log_warn "Antigravity install is supported by distrodeck on apt systems."
       return 1
       ;;
   esac
