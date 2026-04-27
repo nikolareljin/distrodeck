@@ -341,7 +341,18 @@ install_node_major_version() {
       # Fall back to NodeSource repository (manual setup, no piped scripts)
       log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
       if ! command -v curl >/dev/null 2>&1; then
-        install_pkg "$mgr" curl ca-certificates gnupg || true
+        install_pkg "$mgr" curl ca-certificates || true
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        install_pkg "$mgr" gnupg || true
+      fi
+      if ! command -v curl >/dev/null 2>&1; then
+        log_warn "curl is required to download the NodeSource GPG key."
+        return 1
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        log_warn "gpg is required to install the NodeSource apt repository key."
+        return 1
       fi
       sudo mkdir -p /etc/apt/keyrings
       local keyring="/etc/apt/keyrings/nodesource.gpg"
@@ -370,10 +381,18 @@ install_node_major_version() {
       fi
       # Fall back to NodeSource repository (manual setup)
       log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
+      if ! command -v curl >/dev/null 2>&1; then
+        install_pkg "$mgr" curl ca-certificates || true
+      fi
+      if ! command -v curl >/dev/null 2>&1; then
+        log_warn "curl is required to download the NodeSource GPG key."
+        return 1
+      fi
       local keyring="/etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL"
       local tmp_key
       tmp_key="$(mktemp)"
       if curl -fsSL https://rpm.nodesource.com/gpgkey/ns-operations-public.key -o "$tmp_key"; then
+        sudo mkdir -p /etc/pki/rpm-gpg
         sudo cp "$tmp_key" "$keyring"
         rm -f "$tmp_key"
         cat << REPO | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
