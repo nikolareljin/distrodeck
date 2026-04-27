@@ -2336,30 +2336,30 @@ def select_old_kernel_packages(
         base_to_packages.setdefault(_kernel_base(abi), set()).add(package)
 
     running_base = _kernel_base(running_kernel)
+    running_sort_key = _kernel_sort_key(running_base)
     sorted_bases = sorted(base_to_packages, key=_kernel_sort_key, reverse=True)
     keep_bases: Set[str] = {running_base}
+    newer_bases = [
+        base
+        for base in sorted_bases
+        if base != running_base and _kernel_sort_key(base) > running_sort_key
+    ]
+    keep_bases.update(newer_bases)
     if running_base in base_to_packages:
-        running_sort_key = _kernel_sort_key(running_base)
-        newer_bases = [
-            base
-            for base in sorted_bases
-            if base != running_base and _kernel_sort_key(base) > running_sort_key
-        ]
         older_bases = [
             base
             for base in sorted_bases
             if base != running_base and _kernel_sort_key(base) <= running_sort_key
         ]
-        keep_bases.update(newer_bases)
         for base in older_bases:
             if len(keep_bases) >= len(newer_bases) + keep_previous + 1:
                 break
             keep_bases.add(base)
     else:
         for base in sorted_bases:
-            if base == running_base:
+            if base == running_base or _kernel_sort_key(base) > running_sort_key:
                 continue
-            if len(keep_bases) >= keep_previous + 1:
+            if len(keep_bases) >= len(newer_bases) + keep_previous + 1:
                 break
             keep_bases.add(base)
 
