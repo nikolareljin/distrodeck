@@ -332,7 +332,7 @@ install_node_major_version() {
   case "$mgr" in
     apt)
       # Try system repo first (Ubuntu 22.04+ has Node 18+)
-      if [[ "$node_major" -le 20 ]] && install_pkg "$mgr" nodejs npm 2>/dev/null; then
+      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
         if [[ "$(node_major_version)" -ge "$node_major" ]]; then
           return
         fi
@@ -362,7 +362,7 @@ install_node_major_version() {
       ;;
     dnf)
       # Try system repo first (Fedora has recent Node.js)
-      if [[ "$node_major" -le 20 ]] && install_pkg "$mgr" nodejs npm 2>/dev/null; then
+      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
         if [[ "$(node_major_version)" -ge "$node_major" ]]; then
           return
         fi
@@ -1225,9 +1225,7 @@ install_codex() {
 }
 
 install_copilot() {
-  local mgr="$1"
-  ensure_node_major "$mgr" 22 || return 1
-  install_npm_global "$mgr" "@github/copilot" 22
+  install_npm_global "$1" "@github/copilot" 22
 }
 
 install_claude_code() {

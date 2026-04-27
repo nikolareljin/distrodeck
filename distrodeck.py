@@ -2338,12 +2338,22 @@ def select_old_kernel_packages(
     running_base = _kernel_base(running_kernel)
     sorted_bases = sorted(base_to_packages, key=_kernel_sort_key, reverse=True)
     keep_bases: Set[str] = {running_base}
-    for base in sorted_bases:
-        if base == running_base:
-            continue
-        if len(keep_bases) >= keep_previous + 1:
-            break
-        keep_bases.add(base)
+    if running_base in base_to_packages:
+        sorted_bases_asc = list(reversed(sorted_bases))
+        running_index = sorted_bases_asc.index(running_base)
+        older_bases = list(reversed(sorted_bases_asc[:running_index]))
+        newer_bases = sorted_bases_asc[running_index + 1 :]
+        for base in [*older_bases, *newer_bases]:
+            if len(keep_bases) >= keep_previous + 1:
+                break
+            keep_bases.add(base)
+    else:
+        for base in sorted_bases:
+            if base == running_base:
+                continue
+            if len(keep_bases) >= keep_previous + 1:
+                break
+            keep_bases.add(base)
 
     removable_bases = [base for base in sorted_bases if base not in keep_bases]
     packages: List[str] = []
