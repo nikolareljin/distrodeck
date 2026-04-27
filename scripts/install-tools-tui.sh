@@ -333,7 +333,10 @@ install_node_major_version() {
     apt)
       # Try system repo first (Ubuntu 22.04+ has Node 18+)
       if [[ "$node_major" -le 20 ]] && install_pkg "$mgr" nodejs npm 2>/dev/null; then
-        return
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return
+        fi
+        log_warn "System repository Node.js is older than ${node_major}; using NodeSource fallback."
       fi
       # Fall back to NodeSource repository (manual setup, no piped scripts)
       log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
@@ -360,7 +363,10 @@ install_node_major_version() {
     dnf)
       # Try system repo first (Fedora has recent Node.js)
       if [[ "$node_major" -le 20 ]] && install_pkg "$mgr" nodejs npm 2>/dev/null; then
-        return
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return
+        fi
+        log_warn "System repository Node.js is older than ${node_major}; using NodeSource fallback."
       fi
       # Fall back to NodeSource repository (manual setup)
       log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
@@ -1160,14 +1166,23 @@ ensure_node_major() {
 
 install_npm_global() {
   local mgr="$1" package="$2" required="${3:-20}"
+  ensure_node_major "$mgr" "$required" || return 1
   if ! command -v npm >/dev/null 2>&1; then
-    ensure_node_major "$mgr" "$required" || true
+    install_node_major_version "$mgr" "$required" || true
+    ensure_node_major "$mgr" "$required" || return 1
   fi
   if ! command -v npm >/dev/null 2>&1; then
     log_warn "npm is required to install $package."
     return 1
   fi
   sudo npm install -g "$package"
+}
+
+show_downloaded_script_preview() {
+  local url="$1" path="$2"
+  log_info "Downloaded installer from $url to $path"
+  log_info "Installer preview, first 20 lines:"
+  sed -n '1,20p' "$path" >&2 || true
 }
 
 confirm_remote_script_execution() {
@@ -1194,6 +1209,7 @@ run_downloaded_script() {
     log_warn "Failed to download installer: $url"
     return 1
   fi
+  show_downloaded_script_preview "$url" "$tmp_file"
   if ! confirm_remote_script_execution "$url"; then
     rm -f "$tmp_file"
     return 1
