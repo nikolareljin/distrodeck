@@ -1206,6 +1206,10 @@ show_downloaded_script_preview() {
 
 confirm_remote_script_execution() {
   local url="$1"
+  if [[ "${DISTRODECK_NONINTERACTIVE:-false}" == "true" ]]; then
+    log_warn "Skipping downloaded installer in noninteractive mode: $url"
+    return 1
+  fi
   if [[ ! -t 0 ]]; then
     log_warn "Refusing to execute downloaded installer without an interactive terminal: $url"
     return 1
@@ -2003,7 +2007,12 @@ main() {
     # Clear the screen after dialog closes before showing installation output
     clear
   else
-    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei aider antigravity claude-code codex copilot cursor gemini kiro ollama go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
+    export DISTRODECK_NONINTERACTIVE=true
+    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
+    remote_script_tools="aider antigravity claude-code codex copilot cursor gemini kiro ollama"
+    if [[ "${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}" == "true" ]]; then
+      selected+=" ${remote_script_tools}"
+    fi
   fi
 
   # Build set of selected tools

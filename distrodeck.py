@@ -2452,6 +2452,9 @@ def maybe_cleanup_kernels(keep: int) -> None:
 
 
 def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
+    if not cleanup_kernels_supported():
+        warn("Old kernel cleanup is only supported on apt-based systems; skipping.")
+        return
     if not run_cleanup_kernels(args):
         sys.exit(1)
 
