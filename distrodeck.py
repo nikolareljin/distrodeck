@@ -2296,7 +2296,7 @@ def _kernel_package_abi(package: str) -> Optional[str]:
     for prefix in sorted(KERNEL_PACKAGE_PREFIXES, key=len, reverse=True):
         if package.startswith(prefix):
             abi = package[len(prefix) :]
-            if abi and re.search(r"\d", abi):
+            if abi and re.match(r"^\d", abi):
                 return abi
     return None
 
@@ -2359,14 +2359,22 @@ def installed_apt_packages() -> List[str]:
         capture_output=True,
     )
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout or "").strip()
+        message = "Failed to list installed apt packages with dpkg-query."
+        if detail:
+            message = f"{message} {detail}"
+        raise RuntimeError(message)
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
 
 
 def apt_auto_packages() -> List[str]:
     result = run(["apt-mark", "showauto"], check=False, capture_output=True)
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout or "").strip()
+        message = "Failed to list auto-installed apt packages with apt-mark."
+        if detail:
+            message = f"{message} {detail}"
+        raise RuntimeError(message)
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
 
 
@@ -2378,9 +2386,16 @@ def run_cleanup_kernels(args: argparse.Namespace) -> bool:
         return False
     keep_previous = max(0, int(getattr(args, "keep", 1)))
     running_kernel = run(["uname", "-r"], capture_output=True).stdout.strip()
+    try:
+        installed_packages = installed_apt_packages()
+        auto_packages = apt_auto_packages()
+    except RuntimeError as exc:
+        warn(str(exc))
+        log_action_end("cleanup-kernels", "failed")
+        return False
     packages, bases = select_old_kernel_packages(
-        installed_apt_packages(),
-        apt_auto_packages(),
+        installed_packages,
+        auto_packages,
         running_kernel,
         keep_previous,
     )

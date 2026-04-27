@@ -327,16 +327,16 @@ install_micro() {
   install_pkg "$1" micro || log_warn "Failed to install micro from repos."
 }
 
-install_node() {
-  local mgr="$1"
+install_node_major_version() {
+  local mgr="$1" node_major="${2:-20}"
   case "$mgr" in
     apt)
       # Try system repo first (Ubuntu 22.04+ has Node 18+)
-      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
+      if [[ "$node_major" -le 20 ]] && install_pkg "$mgr" nodejs npm 2>/dev/null; then
         return
       fi
       # Fall back to NodeSource repository (manual setup, no piped scripts)
-      log_info "Adding NodeSource repository for Node.js 20.x..."
+      log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
       if ! command -v curl >/dev/null 2>&1; then
         install_pkg "$mgr" curl ca-certificates gnupg || true
       fi
@@ -348,7 +348,7 @@ install_node() {
         sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null || \
           cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"
         rm -f "$tmp_key"
-        echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_20.x nodistro main" | \
+        echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_${node_major}.x nodistro main" | \
           sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
         sudo apt-get update || true
         install_pkg "$mgr" nodejs
@@ -359,21 +359,21 @@ install_node() {
       ;;
     dnf)
       # Try system repo first (Fedora has recent Node.js)
-      if install_pkg "$mgr" nodejs npm 2>/dev/null; then
+      if [[ "$node_major" -le 20 ]] && install_pkg "$mgr" nodejs npm 2>/dev/null; then
         return
       fi
       # Fall back to NodeSource repository (manual setup)
-      log_info "Adding NodeSource repository for Node.js 20.x..."
+      log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
       local keyring="/etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL"
       local tmp_key
       tmp_key="$(mktemp)"
       if curl -fsSL https://rpm.nodesource.com/gpgkey/ns-operations-public.key -o "$tmp_key"; then
         sudo cp "$tmp_key" "$keyring"
         rm -f "$tmp_key"
-        cat << 'REPO' | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
+        cat << REPO | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
 [nodesource-nodistro]
 name=Node.js Packages for Linux RPM based distros - x86_64
-baseurl=https://rpm.nodesource.com/pub_20.x/nodistro/x86_64
+baseurl=https://rpm.nodesource.com/pub_${node_major}.x/nodistro/x86_64
 priority=1
 enabled=1
 gpgcheck=1
@@ -386,9 +386,19 @@ REPO
       fi
       ;;
     pacman) install_pkg "$mgr" nodejs npm;;
-    zypper) install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm;;
+    zypper)
+      if [[ "$node_major" -ge 22 ]]; then
+        install_pkg "$mgr" nodejs22 npm22 || install_pkg "$mgr" nodejs npm
+      else
+        install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm
+      fi
+      ;;
     *) log_warn "Node install not supported for this distro.";;
   esac
+}
+
+install_node() {
+  install_node_major_version "$1" 20
 }
 
 install_lazygit() {
@@ -1140,7 +1150,7 @@ ensure_node_major() {
   else
     log_warn "Node.js $required+ is required; detected Node.js $major."
   fi
-  install_node "$mgr" || true
+  install_node_major_version "$mgr" "$required" || true
   major="$(node_major_version)"
   if [[ "$major" -lt "$required" ]]; then
     log_warn "Node.js $required+ is still unavailable; cannot install this tool."
@@ -1160,6 +1170,21 @@ install_npm_global() {
   sudo npm install -g "$package"
 }
 
+confirm_remote_script_execution() {
+  local url="$1"
+  if [[ ! -t 0 ]]; then
+    log_warn "Refusing to execute downloaded installer without an interactive terminal: $url"
+    return 1
+  fi
+  printf "Run installer downloaded from %s? [y/N] " "$url" >&2
+  local answer
+  IFS= read -r answer
+  case "$answer" in
+    y|Y|yes|YES) return 0;;
+    *) log_warn "Skipped downloaded installer: $url"; return 1;;
+  esac
+}
+
 run_downloaded_script() {
   local url="$1"
   local tmp_file
@@ -1167,6 +1192,10 @@ run_downloaded_script() {
   if ! download_file "$url" "$tmp_file"; then
     rm -f "$tmp_file"
     log_warn "Failed to download installer: $url"
+    return 1
+  fi
+  if ! confirm_remote_script_execution "$url"; then
+    rm -f "$tmp_file"
     return 1
   fi
   bash "$tmp_file"

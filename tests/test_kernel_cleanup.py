@@ -82,6 +82,25 @@ def test_select_old_kernel_packages_ignores_manual_kernel_packages():
     assert packages == []
 
 
+def test_select_old_kernel_packages_ignores_non_kernel_module_packages():
+    installed = [
+        "linux-image-6.8.0-47-generic",
+        "linux-image-6.8.0-46-generic",
+        "linux-modules-nvidia-550-6.8.0-45-generic",
+        "linux-modules-ipu6-6.8.0-45-generic",
+    ]
+
+    packages, bases = distrodeck.select_old_kernel_packages(
+        installed,
+        installed,
+        "6.8.0-47-generic",
+        keep_previous=1,
+    )
+
+    assert bases == []
+    assert packages == []
+
+
 def test_select_old_kernel_packages_noop_when_only_current_and_previous():
     installed = [
         "linux-image-6.8.0-47-generic",
