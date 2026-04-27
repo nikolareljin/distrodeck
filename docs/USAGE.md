@@ -78,9 +78,11 @@ Options:
 ### update
 
 Update and upgrade installed packages across apt/nala, snap, and flatpak.
+Old kernel cleanup is opt-in and keeps the running kernel plus one previous kernel by default.
 
 ```
 distrodeck update
+distrodeck update --cleanup-kernels
 ```
 
 ### upgrade
@@ -90,10 +92,26 @@ On Debian you must specify the target codename (or set `DISTRODECK_TARGET_CODENA
 
 ```
 distrodeck upgrade
+distrodeck upgrade --cleanup-kernels
 ```
 
 Options:
 - `--target-codename CODE`: target codename for Debian upgrades
+- `--cleanup-kernels`: clean old auto-installed kernels after a successful distro upgrade
+- `--keep-kernels N`: previous kernel versions to keep when cleanup is enabled
+
+### cleanup-kernels
+
+Preview or remove old auto-installed apt kernels. The running kernel is never removed.
+
+```
+distrodeck cleanup-kernels --dry-run
+distrodeck cleanup-kernels
+```
+
+Options:
+- `--dry-run`: show packages that would be purged
+- `--keep N`: previous kernel versions to keep in addition to the running kernel
 
 ### security
 
@@ -196,7 +214,7 @@ distrodeck net-tools
 
 ### install-tools
 
-Install optional developer tools via a TUI checklist. Supports 65 tools organized by category.
+Install optional developer tools via a TUI checklist. Supports 74 tools organized by category.
 
 ```
 distrodeck install-tools        # opens TUI checklist
@@ -204,7 +222,7 @@ distrodeck install-tools --all  # installs all tools non-interactively
 ```
 
 **Features:**
-- Tools are grouped by category with prefixes: `[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Backup]`, `[Dev]`, `[Lang]`, `[DevOps]`, `[Util]`, `[App]`
+- Tools are grouped by category with prefixes: `[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Backup]`, `[Dev]`, `[AI]`, `[Lang]`, `[DevOps]`, `[Util]`, `[App]`
 - Already installed tools are pre-checked and marked "(installed)"
 - **Uninstall support**: Unchecking a tool prompts to uninstall it
 - State tracking: Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`
@@ -219,6 +237,7 @@ distrodeck install-tools --all  # installs all tools non-interactively
 | Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
 | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
 | Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
+| AI | aider, antigravity, claude-code, codex, copilot, cursor, gemini, kiro, ollama |
 | Languages | go, java, node (20 LTS), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |

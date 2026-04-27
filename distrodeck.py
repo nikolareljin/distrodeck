@@ -22,7 +22,7 @@ from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
@@ -84,6 +84,13 @@ MAX_ALIAS_NAME_ATTEMPTS = 3
 MAX_ALIAS_GENERATION_ATTEMPTS = 100
 DOCTOR_DNS_TIMEOUT_SECONDS = 5
 DOCTOR_REPO_METADATA_TIMEOUT_SECONDS = 120
+KERNEL_PACKAGE_PREFIXES = (
+    "linux-image-",
+    "linux-image-unsigned-",
+    "linux-headers-",
+    "linux-modules-",
+    "linux-modules-extra-",
+)
 
 
 def require_python_version() -> None:
@@ -2285,7 +2292,134 @@ def ensure_nala() -> bool:
     return True
 
 
-def run_update() -> bool:
+def _kernel_package_abi(package: str) -> Optional[str]:
+    for prefix in sorted(KERNEL_PACKAGE_PREFIXES, key=len, reverse=True):
+        if package.startswith(prefix):
+            abi = package[len(prefix) :]
+            if abi and re.search(r"\d", abi):
+                return abi
+    return None
+
+
+def _kernel_base(abi: str) -> str:
+    match = re.match(r"^(.+-\d+)(?:-[A-Za-z].*)?$", abi)
+    if match:
+        return match.group(1)
+    return abi
+
+
+def _kernel_sort_key(base: str) -> List[object]:
+    parts: List[object] = []
+    for part in re.split(r"([0-9]+)", base):
+        if part.isdigit():
+            parts.append((0, int(part)))
+        elif part:
+            parts.append((1, part))
+    return parts
+
+
+def select_old_kernel_packages(
+    installed_packages: List[str],
+    auto_packages: List[str],
+    running_kernel: str,
+    keep_previous: int = 1,
+) -> Tuple[List[str], List[str]]:
+    keep_previous = max(0, keep_previous)
+    auto_set = set(auto_packages)
+    base_to_packages: Dict[str, Set[str]] = {}
+    for package in installed_packages:
+        if package not in auto_set:
+            continue
+        abi = _kernel_package_abi(package)
+        if not abi:
+            continue
+        base_to_packages.setdefault(_kernel_base(abi), set()).add(package)
+
+    running_base = _kernel_base(running_kernel)
+    sorted_bases = sorted(base_to_packages, key=_kernel_sort_key, reverse=True)
+    keep_bases: Set[str] = {running_base}
+    for base in sorted_bases:
+        if base == running_base:
+            continue
+        if len(keep_bases) >= keep_previous + 1:
+            break
+        keep_bases.add(base)
+
+    removable_bases = [base for base in sorted_bases if base not in keep_bases]
+    packages: List[str] = []
+    for base in removable_bases:
+        packages.extend(sorted(base_to_packages[base]))
+    return packages, removable_bases
+
+
+def installed_apt_packages() -> List[str]:
+    result = run(
+        ["dpkg-query", "-W", "-f=${binary:Package}\n"],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def apt_auto_packages() -> List[str]:
+    result = run(["apt-mark", "showauto"], check=False, capture_output=True)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def run_cleanup_kernels(args: argparse.Namespace) -> bool:
+    log_action_start("cleanup-kernels")
+    if not cmd_exists("apt-get") or not cmd_exists("dpkg-query") or not cmd_exists("apt-mark"):
+        warn("Kernel cleanup is only supported on apt-based systems.")
+        log_action_end("cleanup-kernels", "unsupported")
+        return False
+    keep_previous = max(0, int(getattr(args, "keep", 1)))
+    running_kernel = run(["uname", "-r"], capture_output=True).stdout.strip()
+    packages, bases = select_old_kernel_packages(
+        installed_apt_packages(),
+        apt_auto_packages(),
+        running_kernel,
+        keep_previous,
+    )
+    if not packages:
+        log("No old auto-installed kernels found for cleanup.")
+        log_action_end("cleanup-kernels")
+        return True
+    log(
+        "Old kernel groups eligible for cleanup: "
+        + ", ".join(bases)
+        + f" ({len(packages)} packages)"
+    )
+    if getattr(args, "dry_run", False):
+        for package in packages:
+            log(f"would purge: {package}")
+        log_action_end("cleanup-kernels", "dry-run")
+        return True
+    purge = run_warn_live(
+        ["sudo", "apt-get", "purge", "-y", *packages],
+        "apt-get purge old kernels",
+    )
+    if purge.returncode != 0:
+        log_action_end("cleanup-kernels", "failed")
+        return False
+    autoremove = run_warn_live(
+        ["sudo", "apt-get", "autoremove", "-y"],
+        "apt-get autoremove",
+    )
+    ok = autoremove.returncode == 0
+    log_action_end("cleanup-kernels", "ok" if ok else "failed")
+    return ok
+
+
+def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
+    if not run_cleanup_kernels(args):
+        sys.exit(1)
+
+
+def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     log_action_start("update")
     had_errors = False
     if allow_nala() and ensure_nala():
@@ -2333,6 +2467,11 @@ def run_update() -> bool:
     if cmd_exists("flatpak"):
         if run(["flatpak", "update", "-y"], check=False).returncode != 0:
             had_errors = True
+    if cleanup_kernels and not had_errors:
+        if not run_cleanup_kernels(
+            argparse.Namespace(dry_run=False, keep=keep_kernels)
+        ):
+            warn("Old kernel cleanup reported errors.")
     log_action_end("update", "errors" if had_errors else "ok")
     return not had_errors
 
@@ -2440,6 +2579,14 @@ def run_upgrade(args: argparse.Namespace) -> None:
             export_path, skip_existing_source_update=True
         )
         import_from_file(restore_args)
+        if getattr(args, "cleanup_kernels", False):
+            if not run_cleanup_kernels(
+                argparse.Namespace(
+                    dry_run=False,
+                    keep=getattr(args, "keep_kernels", 1),
+                )
+            ):
+                warn("Old kernel cleanup reported errors.")
         log_action_end("upgrade")
         return
 
@@ -2472,6 +2619,14 @@ def run_upgrade(args: argparse.Namespace) -> None:
                 export_path, skip_existing_source_update=True
             )
             import_from_file(restore_args)
+            if getattr(args, "cleanup_kernels", False):
+                if not run_cleanup_kernels(
+                    argparse.Namespace(
+                        dry_run=False,
+                        keep=getattr(args, "keep_kernels", 1),
+                    )
+                ):
+                    warn("Old kernel cleanup reported errors.")
             log_action_end("upgrade")
             return
         except (subprocess.CalledProcessError, OSError) as exc:
@@ -4634,6 +4789,7 @@ def run_tui() -> None:
         ("import", "Packages: Import from export file"),
         ("update", "System: Update packages"),
         ("upgrade", "System: Upgrade distro"),
+        ("cleanup-kernels", "System: Cleanup old kernels"),
         ("security", "Security: Apply security updates"),
         ("repo-repair", "Packages: Repo repair (apt issues)"),
         ("install-tools", "Tools: Install optional tools"),
@@ -4905,6 +5061,9 @@ def run_tui() -> None:
         elif choice == "update":
             if not ensure_sudo():
                 continue
+            cleanup_kernels = dialog_yesno(
+                "Update", "Clean up old auto-installed kernels after successful update?"
+            )
             if cmd_exists("nala"):
                 run(["dialog", "--clear"], check=False)
                 log(
@@ -4912,7 +5071,7 @@ def run_tui() -> None:
                 )
                 previous_dialog = os.environ.get("DISTRODECK_DIALOG")
                 os.environ["DISTRODECK_DIALOG"] = "1"
-                if not run_update():
+                if not run_update(cleanup_kernels=cleanup_kernels):
                     if dialog_yesno("Update Issues", "Updates reported errors. Run repo repair?"):
                         run_repo_repair()
                 if previous_dialog is None:
@@ -4925,14 +5084,33 @@ def run_tui() -> None:
             env["DISTRODECK_DIALOG"] = "1"
             env["DISTRODECK_NO_NALA"] = "1"
             log("Starting system update (refresh package lists, then upgrade packages).")
-            run([self_cmd, "update"], check=False, env=env)
+            cmd = [self_cmd, "update"]
+            if cleanup_kernels:
+                cmd.append("--cleanup-kernels")
+            run(cmd, check=False, env=env)
             continue
         elif choice == "upgrade":
             if not ensure_sudo():
                 continue
+            cleanup_kernels = dialog_yesno(
+                "Upgrade", "Clean up old auto-installed kernels after successful distro upgrade?"
+            )
             run(["dialog", "--clear"], check=False)
             log("Starting distro upgrade. Follow any prompts in the terminal.")
-            run_upgrade(argparse.Namespace(target_codename=None))
+            run_upgrade(
+                argparse.Namespace(
+                    target_codename=None,
+                    cleanup_kernels=cleanup_kernels,
+                    keep_kernels=1,
+                )
+            )
+            continue
+        elif choice == "cleanup-kernels":
+            dry_run = dialog_yesno("Kernel Cleanup", "Preview old kernel cleanup without removing packages?")
+            if not dry_run and not ensure_sudo():
+                continue
+            run(["dialog", "--clear"], check=False)
+            run_cleanup_kernels(argparse.Namespace(dry_run=dry_run, keep=1))
             continue
         elif choice == "security":
             if not ensure_sudo():
@@ -5106,7 +5284,23 @@ def build_parser() -> argparse.ArgumentParser:
     import_cmd.set_defaults(func=import_from_file)
 
     update_cmd = sub.add_parser("update", help="Update system packages")
-    update_cmd.set_defaults(func=lambda _: run_update())
+    update_cmd.add_argument(
+        "--cleanup-kernels",
+        action="store_true",
+        help="Clean up old auto-installed kernels after a successful update",
+    )
+    update_cmd.add_argument(
+        "--keep-kernels",
+        type=int,
+        default=1,
+        help="Previous kernel versions to keep when --cleanup-kernels is used",
+    )
+    update_cmd.set_defaults(
+        func=lambda args: run_update(
+            cleanup_kernels=args.cleanup_kernels,
+            keep_kernels=args.keep_kernels,
+        )
+    )
 
     upgrade_cmd = sub.add_parser("upgrade", help="Run distro upgrade")
     upgrade_cmd.add_argument(
@@ -5114,7 +5308,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Target codename for Debian upgrades (or set DISTRODECK_TARGET_CODENAME)",
     )
+    upgrade_cmd.add_argument(
+        "--cleanup-kernels",
+        action="store_true",
+        help="Clean up old auto-installed kernels after a successful distro upgrade",
+    )
+    upgrade_cmd.add_argument(
+        "--keep-kernels",
+        type=int,
+        default=1,
+        help="Previous kernel versions to keep when --cleanup-kernels is used",
+    )
     upgrade_cmd.set_defaults(func=run_upgrade)
+
+    cleanup_cmd = sub.add_parser(
+        "cleanup-kernels",
+        help="Clean up old auto-installed kernels",
+    )
+    cleanup_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview kernel packages that would be removed",
+    )
+    cleanup_cmd.add_argument(
+        "--keep",
+        type=int,
+        default=1,
+        help="Previous kernel versions to keep in addition to the running kernel",
+    )
+    cleanup_cmd.set_defaults(func=run_cleanup_kernels_cmd)
 
     security_cmd = sub.add_parser("security", help="Apply security upgrades")
     security_cmd.set_defaults(func=lambda _: run_security())

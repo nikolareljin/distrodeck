@@ -4,8 +4,17 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.0]
+
 ### Added
 - Added an `About` entry to the TUI with GitHub and LinkedIn profile links.
+- Added `cleanup-kernels` to preview or purge old auto-installed apt kernels while keeping the running kernel plus one previous version by default.
+- Added opt-in old-kernel cleanup after successful `update` and `upgrade` runs in both CLI and TUI flows.
+- Added install-tools options for aider, OpenAI Codex CLI, GitHub Copilot CLI, Claude Code, Gemini CLI, Ollama, Antigravity, Cursor, and Kiro.
+
+### Changed
+- `install-tools` now includes a dedicated AI tools category and shared helpers for npm/script/zip based installers.
+- `image-view` installation now fails visibly when its required Cargo install command fails.
 
 ## [0.7.1]
 

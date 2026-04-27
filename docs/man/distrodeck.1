@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-03-30" "distrodeck 0.7.1" "User Commands"
+.TH DISTRODECK 1 "2026-04-27" "distrodeck 0.8.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -19,6 +19,9 @@ Update system packages
 .TP
 .B upgrade
 Run distro upgrade
+.TP
+.B cleanup-kernels
+Clean up old auto-installed kernels
 .TP
 .B security
 Apply security upgrades
@@ -113,20 +116,42 @@ options:
 .fi
 .SS update
 .nf
-usage: distrodeck update [-h]
+usage: distrodeck update [-h] [--cleanup-kernels]
+                         [--keep-kernels KEEP_KERNELS]
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help            show this help message and exit
+  --cleanup-kernels     Clean up old auto-installed kernels after a successful
+                        update
+  --keep-kernels KEEP_KERNELS
+                        Previous kernel versions to keep when --cleanup-
+                        kernels is used
 .fi
 .SS upgrade
 .nf
 usage: distrodeck upgrade [-h] [--target-codename TARGET_CODENAME]
+                          [--cleanup-kernels] [--keep-kernels KEEP_KERNELS]
 
 options:
   -h, --help            show this help message and exit
   --target-codename TARGET_CODENAME
                         Target codename for Debian upgrades (or set
                         DISTRODECK_TARGET_CODENAME)
+  --cleanup-kernels     Clean up old auto-installed kernels after a successful
+                        distro upgrade
+  --keep-kernels KEEP_KERNELS
+                        Previous kernel versions to keep when --cleanup-
+                        kernels is used
+.fi
+.SS cleanup-kernels
+.nf
+usage: distrodeck cleanup-kernels [-h] [--dry-run] [--keep KEEP]
+
+options:
+  -h, --help   show this help message and exit
+  --dry-run    Preview kernel packages that would be removed
+  --keep KEEP  Previous kernel versions to keep in addition to the running
+               kernel
 .fi
 .SS security
 .nf

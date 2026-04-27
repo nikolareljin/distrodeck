@@ -544,6 +544,14 @@ install_pkg_simple() {
 
 install_image_view() {
   local mgr="$1"
+  if ! command -v git >/dev/null 2>&1; then
+    log_warn "git is required to install image-view; installing git..."
+    install_git "$mgr" || true
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    log_warn "git still missing; cannot install image-view."
+    return 1
+  fi
   if ! command -v cargo >/dev/null 2>&1; then
     log_warn "cargo is required to install image-view; installing Rust..."
     install_rust "$mgr" || true
@@ -552,8 +560,7 @@ install_image_view() {
     log_warn "cargo still missing; cannot install image-view."
     return 1
   fi
-  cargo install --git https://github.com/nikolareljin/image-view --bin image-view || \
-    log_warn "Failed to install image-view via cargo."
+  cargo install --git https://github.com/nikolareljin/image-view --bin image-view
 }
 
 download_file() {
@@ -1107,6 +1114,183 @@ WRAPPER
   rm -rf "$tmp_dir"
 }
 
+node_major_version() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo 0
+    return
+  fi
+  local major
+  major="$(node --version | sed 's/^v//' | cut -d. -f1)"
+  if [[ "$major" =~ ^[0-9]+$ ]]; then
+    echo "$major"
+  else
+    echo 0
+  fi
+}
+
+ensure_node_major() {
+  local mgr="$1" required="$2"
+  local major
+  major="$(node_major_version)"
+  if [[ "$major" -ge "$required" ]]; then
+    return 0
+  fi
+  if [[ "$major" -eq 0 ]]; then
+    log_warn "Node.js is required; installing distrodeck's Node.js package first..."
+  else
+    log_warn "Node.js $required+ is required; detected Node.js $major."
+  fi
+  install_node "$mgr" || true
+  major="$(node_major_version)"
+  if [[ "$major" -lt "$required" ]]; then
+    log_warn "Node.js $required+ is still unavailable; cannot install this tool."
+    return 1
+  fi
+}
+
+install_npm_global() {
+  local mgr="$1" package="$2"
+  if ! command -v npm >/dev/null 2>&1; then
+    install_node "$mgr" || true
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    log_warn "npm is required to install $package."
+    return 1
+  fi
+  sudo npm install -g "$package"
+}
+
+run_downloaded_script() {
+  local url="$1"
+  local tmp_file
+  tmp_file="$(mktemp)"
+  if ! download_file "$url" "$tmp_file"; then
+    rm -f "$tmp_file"
+    log_warn "Failed to download installer: $url"
+    return 1
+  fi
+  bash "$tmp_file"
+  local rc=$?
+  rm -f "$tmp_file"
+  return "$rc"
+}
+
+install_codex() {
+  install_npm_global "$1" "@openai/codex"
+}
+
+install_copilot() {
+  local mgr="$1"
+  ensure_node_major "$mgr" 22 || return 1
+  install_npm_global "$mgr" "@github/copilot"
+}
+
+install_claude_code() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://claude.ai/install.sh"
+}
+
+install_gemini() {
+  local mgr="$1"
+  ensure_node_major "$mgr" 20 || return 1
+  install_npm_global "$mgr" "@google/gemini-cli"
+}
+
+install_ollama() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://ollama.com/install.sh"
+}
+
+install_cursor() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://cursor.com/install"
+}
+
+install_kiro() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://cli.kiro.dev/install"
+}
+
+install_antigravity() {
+  if command -v antigravity >/dev/null 2>&1; then
+    return 0
+  fi
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        install_curl "$mgr" || true
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        install_pkg "$mgr" gnupg || true
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        log_warn "gpg is required to install the Antigravity apt repository key."
+        return 1
+      fi
+      sudo mkdir -p /etc/apt/keyrings
+      local tmp_key
+      tmp_key="$(mktemp)"
+      if download_file "https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg" "$tmp_key"; then
+        sudo gpg --dearmor --yes -o /etc/apt/keyrings/antigravity-repo-key.gpg "$tmp_key"
+        rm -f "$tmp_key"
+      else
+        rm -f "$tmp_key"
+        log_warn "Failed to download Antigravity apt repository key."
+        return 1
+      fi
+      echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" | \
+        sudo tee /etc/apt/sources.list.d/antigravity.list > /dev/null
+      sudo apt update
+      sudo apt install -y antigravity
+      ;;
+    dnf)
+      sudo tee /etc/yum.repos.d/antigravity.repo > /dev/null << 'REPO'
+[antigravity-rpm]
+name=Antigravity RPM Repository
+baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/antigravity-rpm
+enabled=1
+gpgcheck=0
+REPO
+      sudo dnf install -y antigravity
+      ;;
+    zypper)
+      sudo tee /etc/zypp/repos.d/antigravity.repo > /dev/null << 'REPO'
+[antigravity-rpm]
+name=Antigravity RPM Repository
+baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/antigravity-rpm
+enabled=1
+gpgcheck=0
+REPO
+      sudo zypper refresh
+      sudo zypper install -y antigravity
+      ;;
+    *)
+      log_warn "Antigravity install is supported by distrodeck on apt, dnf, and zypper systems."
+      return 1
+      ;;
+  esac
+}
+
+install_aider() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    log_warn "curl or wget is required to install aider."
+    return 1
+  fi
+  run_downloaded_script "https://aider.chat/install.sh"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Uninstall functions for tools that need special handling
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1411,6 +1595,88 @@ uninstall_cron() {
   esac
 }
 
+uninstall_npm_global() {
+  local package="$1"
+  if command -v npm >/dev/null 2>&1; then
+    sudo npm uninstall -g "$package" || true
+  else
+    log_warn "npm not found; cannot uninstall $package automatically."
+  fi
+}
+
+uninstall_codex() {
+  uninstall_npm_global "@openai/codex"
+}
+
+uninstall_copilot() {
+  uninstall_npm_global "@github/copilot"
+}
+
+uninstall_gemini() {
+  uninstall_npm_global "@google/gemini-cli"
+}
+
+uninstall_claude_code() {
+  log_warn "Claude Code does not expose a stable distrodeck uninstall flow yet; remove it using Claude Code's official uninstall instructions."
+  return 1
+}
+
+uninstall_ollama() {
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl stop ollama 2>/dev/null || true
+    sudo systemctl disable ollama 2>/dev/null || true
+  fi
+  sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+  if command -v ollama >/dev/null 2>&1; then
+    sudo rm -f "$(command -v ollama)" 2>/dev/null || true
+  fi
+  sudo rm -rf /usr/share/ollama /usr/local/lib/ollama /usr/lib/ollama /lib/ollama 2>/dev/null || true
+  sudo userdel ollama 2>/dev/null || true
+  sudo groupdel ollama 2>/dev/null || true
+}
+
+uninstall_cursor() {
+  rm -f "$HOME/.local/bin/cursor-agent" 2>/dev/null || true
+}
+
+uninstall_kiro() {
+  rm -f "$HOME/.local/bin/kiro" "$HOME/.local/bin/kiro-cli" 2>/dev/null || true
+}
+
+uninstall_antigravity() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      uninstall_pkg "$mgr" antigravity || true
+      sudo rm -f /etc/apt/sources.list.d/antigravity.list 2>/dev/null || true
+      sudo rm -f /etc/apt/keyrings/antigravity-repo-key.gpg 2>/dev/null || true
+      ;;
+    dnf)
+      uninstall_pkg "$mgr" antigravity || true
+      sudo rm -f /etc/yum.repos.d/antigravity.repo 2>/dev/null || true
+      ;;
+    zypper)
+      uninstall_pkg "$mgr" antigravity || true
+      sudo rm -f /etc/zypp/repos.d/antigravity.repo 2>/dev/null || true
+      ;;
+    *)
+      log_warn "Antigravity uninstall is supported by distrodeck on apt, dnf, and zypper systems."
+      return 1
+      ;;
+  esac
+}
+
+uninstall_aider() {
+  if command -v uv >/dev/null 2>&1; then
+    uv tool uninstall aider-chat 2>/dev/null || true
+    uv tool uninstall aider 2>/dev/null || true
+  fi
+  if command -v pipx >/dev/null 2>&1; then
+    pipx uninstall aider-chat 2>/dev/null || true
+  fi
+  rm -f "$HOME/.local/bin/aider" 2>/dev/null || true
+}
+
 tool_desc() {
   case "$1" in
     # ── Shell & CLI ──
@@ -1471,6 +1737,16 @@ tool_desc() {
     git-lfs) echo "[Dev] git-lfs - large file storage";;
     lazygit) echo "[Dev] LazyGit - git TUI";;
     tokei) echo "[Dev] tokei - code statistics";;
+    # ── AI tools ──
+    aider) echo "[AI] aider - AI pair programming";;
+    antigravity) echo "[AI] Antigravity - AI development environment";;
+    claude-code) echo "[AI] Claude Code";;
+    codex) echo "[AI] OpenAI Codex CLI";;
+    copilot) echo "[AI] GitHub Copilot CLI";;
+    cursor) echo "[AI] Cursor IDE / Agent";;
+    gemini) echo "[AI] Gemini CLI";;
+    kiro) echo "[AI] Kiro IDE / CLI";;
+    ollama) echo "[AI] Ollama local models";;
     # ── Languages & Runtimes ──
     go) echo "[Lang] Go";;
     java) echo "[Lang] Java (JDK)";;
@@ -1565,6 +1841,15 @@ is_installed_tool() {
     ufw) command -v ufw >/dev/null 2>&1;;
     bfg) command -v bfg >/dev/null 2>&1;;
     gh) command -v gh >/dev/null 2>&1;;
+    aider) command -v aider >/dev/null 2>&1;;
+    antigravity) command -v antigravity >/dev/null 2>&1;;
+    claude-code) command -v claude >/dev/null 2>&1;;
+    codex) command -v codex >/dev/null 2>&1;;
+    copilot) command -v copilot >/dev/null 2>&1;;
+    cursor) command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1;;
+    gemini) command -v gemini >/dev/null 2>&1;;
+    kiro) command -v kiro >/dev/null 2>&1 || command -v kiro-cli >/dev/null 2>&1;;
+    ollama) command -v ollama >/dev/null 2>&1;;
     tldr) command -v tldr >/dev/null 2>&1;;
     bandwhich) command -v bandwhich >/dev/null 2>&1;;
     k9s) command -v k9s >/dev/null 2>&1;;
@@ -1618,6 +1903,8 @@ main() {
     borgbackup duplicity fdupes lz4 tar unzip
     # ── Development ──
     bfg build-tools composer delta gh git git-lfs lazygit tokei
+    # ── AI tools ──
+    aider antigravity claude-code codex copilot cursor gemini kiro ollama
     # ── Languages & Runtimes ──
     go java node php ruby rust
     # ── DevOps & Containers ──
@@ -1662,7 +1949,7 @@ main() {
     # Clear the screen after dialog closes before showing installation output
     clear
   else
-    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
+    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei aider antigravity claude-code codex copilot cursor gemini kiro ollama go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
   fi
 
   # Build set of selected tools
@@ -1749,6 +2036,15 @@ main() {
       tree) install_tree "$mgr";;
       bfg) install_bfg "$mgr";;
       gh) install_gh "$mgr";;
+      aider) install_aider "$mgr";;
+      antigravity) install_antigravity "$mgr";;
+      claude-code) install_claude_code "$mgr";;
+      codex) install_codex "$mgr";;
+      copilot) install_copilot "$mgr";;
+      cursor) install_cursor "$mgr";;
+      gemini) install_gemini "$mgr";;
+      kiro) install_kiro "$mgr";;
+      ollama) install_ollama "$mgr";;
       tldr) install_tldr "$mgr";;
       bandwhich) install_bandwhich "$mgr";;
       k9s) install_k9s "$mgr";;
@@ -1863,6 +2159,15 @@ main() {
         tree) uninstall_pkg_simple "$mgr" tree;;
         bfg) uninstall_bfg "$mgr";;
         gh) uninstall_gh "$mgr";;
+        aider) uninstall_aider "$mgr";;
+        antigravity) uninstall_antigravity "$mgr";;
+        claude-code) uninstall_claude_code "$mgr";;
+        codex) uninstall_codex "$mgr";;
+        copilot) uninstall_copilot "$mgr";;
+        cursor) uninstall_cursor "$mgr";;
+        gemini) uninstall_gemini "$mgr";;
+        kiro) uninstall_kiro "$mgr";;
+        ollama) uninstall_ollama "$mgr";;
         tldr) uninstall_tldr "$mgr";;
         bandwhich) uninstall_bandwhich "$mgr";;
         k9s) uninstall_k9s "$mgr";;

@@ -63,8 +63,16 @@ distrodeck import --input backup.txt --apply-config-files
 
 distrodeck update
 
+distrodeck update --cleanup-kernels
+
 distrodeck upgrade
 (On Debian, pass `--target-codename` or set `DISTRODECK_TARGET_CODENAME`.)
+
+distrodeck upgrade --cleanup-kernels
+
+distrodeck cleanup-kernels --dry-run
+
+distrodeck cleanup-kernels
 
 distrodeck security
 
@@ -124,7 +132,7 @@ distrodeck install-tools --all
 
 ### Install-tools categories
 
-The `install-tools` command offers 65 tools organized by category:
+The `install-tools` command offers 74 tools organized by category:
 
 | Category | Examples |
 |----------|----------|
@@ -133,6 +141,7 @@ The `install-tools` command offers 65 tools organized by category:
 | `[System]` | bandwhich, duf, htop, ncdu |
 | `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
 | `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
+| `[AI]` | aider, antigravity, codex, copilot, claude-code, gemini, ollama, cursor, kiro |
 | `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
