@@ -1659,8 +1659,11 @@ uninstall_ollama() {
   if command -v systemctl >/dev/null 2>&1; then
     sudo systemctl stop ollama 2>/dev/null || true
     sudo systemctl disable ollama 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+    sudo systemctl daemon-reload 2>/dev/null || true
+  else
+    sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
   fi
-  sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
   if command -v ollama >/dev/null 2>&1; then
     sudo rm -f "$(command -v ollama)" 2>/dev/null || true
   fi

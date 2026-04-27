@@ -4,6 +4,7 @@ from pathlib import Path
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "distrodeck.py"
 SPEC = importlib.util.spec_from_file_location("distrodeck_module", MODULE_PATH)
+assert SPEC is not None, f"Could not load module spec from {MODULE_PATH}"
 distrodeck = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(distrodeck)
