@@ -76,11 +76,28 @@ def test_select_old_kernel_packages_keeps_previous_adjacent_to_running_kernel():
         keep_previous=1,
     )
 
-    assert bases == ["6.8.0-47", "6.8.0-46"]
-    assert packages == [
+    assert bases == []
+    assert packages == []
+
+
+def test_select_old_kernel_packages_never_removes_newer_than_running_kernel():
+    installed = [
+        "linux-image-6.8.0-48-generic",
         "linux-image-6.8.0-47-generic",
         "linux-image-6.8.0-46-generic",
+        "linux-image-6.8.0-45-generic",
+        "linux-image-6.8.0-44-generic",
     ]
+
+    packages, bases = distrodeck.select_old_kernel_packages(
+        installed,
+        installed,
+        "6.8.0-46-generic",
+        keep_previous=1,
+    )
+
+    assert bases == ["6.8.0-44"]
+    assert packages == ["linux-image-6.8.0-44-generic"]
 
 
 def test_select_old_kernel_packages_ignores_manual_kernel_packages():

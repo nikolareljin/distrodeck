@@ -359,16 +359,26 @@ install_node_major_version() {
       local tmp_key
       tmp_key="$(mktemp)"
       if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$tmp_key"; then
-        sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null || \
-          cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"
+        if ! sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null && \
+          ! cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"; then
+          rm -f "$tmp_key"
+          log_warn "Failed to install NodeSource apt repository key."
+          return 1
+        fi
         rm -f "$tmp_key"
         echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_${node_major}.x nodistro main" | \
           sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
-        sudo apt-get update || true
-        install_pkg "$mgr" nodejs
+        sudo apt-get update || return 1
+        install_pkg "$mgr" nodejs || return 1
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return 0
+        fi
+        log_warn "NodeSource did not provide Node.js ${node_major}+."
+        return 1
       else
         rm -f "$tmp_key"
         log_warn "Failed to download NodeSource GPG key."
+        return 1
       fi
       ;;
     dnf)
@@ -404,10 +414,16 @@ enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL
 REPO
-        install_pkg "$mgr" nodejs
+        install_pkg "$mgr" nodejs || return 1
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return 0
+        fi
+        log_warn "NodeSource did not provide Node.js ${node_major}+."
+        return 1
       else
         rm -f "$tmp_key"
         log_warn "Failed to download NodeSource GPG key."
+        return 1
       fi
       ;;
     pacman) install_pkg "$mgr" nodejs npm;;
@@ -1171,7 +1187,7 @@ ensure_node_major() {
     return 0
   fi
   if [[ "$major" -eq 0 ]]; then
-    log_warn "Node.js is required; installing distrodeck's Node.js package first..."
+    log_warn "Node.js is required; installing or upgrading Node.js first..."
   else
     log_warn "Node.js $required+ is required; detected Node.js $major."
   fi
