@@ -1159,9 +1159,9 @@ ensure_node_major() {
 }
 
 install_npm_global() {
-  local mgr="$1" package="$2"
+  local mgr="$1" package="$2" required="${3:-20}"
   if ! command -v npm >/dev/null 2>&1; then
-    install_node "$mgr" || true
+    ensure_node_major "$mgr" "$required" || true
   fi
   if ! command -v npm >/dev/null 2>&1; then
     log_warn "npm is required to install $package."
@@ -1211,7 +1211,7 @@ install_codex() {
 install_copilot() {
   local mgr="$1"
   ensure_node_major "$mgr" 22 || return 1
-  install_npm_global "$mgr" "@github/copilot"
+  install_npm_global "$mgr" "@github/copilot" 22
 }
 
 install_claude_code() {

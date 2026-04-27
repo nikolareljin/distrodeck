@@ -132,7 +132,7 @@ distrodeck install-tools --all
 
 ### Install-tools categories
 
-The `install-tools` command offers 74 tools organized by category:
+The `install-tools` command offers tools organized by category:
 
 | Category | Examples |
 |----------|----------|

@@ -214,7 +214,7 @@ distrodeck net-tools
 
 ### install-tools
 
-Install optional developer tools via a TUI checklist. Supports 74 tools organized by category.
+Install optional developer tools via a TUI checklist. Tools are organized by category.
 
 ```
 distrodeck install-tools        # opens TUI checklist

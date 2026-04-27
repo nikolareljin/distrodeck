@@ -2378,9 +2378,13 @@ def apt_auto_packages() -> List[str]:
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
 
 
+def cleanup_kernels_supported() -> bool:
+    return cmd_exists("apt-get") and cmd_exists("dpkg-query") and cmd_exists("apt-mark")
+
+
 def run_cleanup_kernels(args: argparse.Namespace) -> bool:
     log_action_start("cleanup-kernels")
-    if not cmd_exists("apt-get") or not cmd_exists("dpkg-query") or not cmd_exists("apt-mark"):
+    if not cleanup_kernels_supported():
         warn("Kernel cleanup is only supported on apt-based systems.")
         log_action_end("cleanup-kernels", "unsupported")
         return False
@@ -2483,7 +2487,9 @@ def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
         if run(["flatpak", "update", "-y"], check=False).returncode != 0:
             had_errors = True
     if cleanup_kernels and not had_errors:
-        if not run_cleanup_kernels(
+        if not cleanup_kernels_supported():
+            warn("Old kernel cleanup is only supported on apt-based systems; skipping.")
+        elif not run_cleanup_kernels(
             argparse.Namespace(dry_run=False, keep=keep_kernels)
         ):
             warn("Old kernel cleanup reported errors.")
@@ -2595,7 +2601,9 @@ def run_upgrade(args: argparse.Namespace) -> None:
         )
         import_from_file(restore_args)
         if getattr(args, "cleanup_kernels", False):
-            if not run_cleanup_kernels(
+            if not cleanup_kernels_supported():
+                warn("Old kernel cleanup is only supported on apt-based systems; skipping.")
+            elif not run_cleanup_kernels(
                 argparse.Namespace(
                     dry_run=False,
                     keep=getattr(args, "keep_kernels", 1),
@@ -2635,7 +2643,9 @@ def run_upgrade(args: argparse.Namespace) -> None:
             )
             import_from_file(restore_args)
             if getattr(args, "cleanup_kernels", False):
-                if not run_cleanup_kernels(
+                if not cleanup_kernels_supported():
+                    warn("Old kernel cleanup is only supported on apt-based systems; skipping.")
+                elif not run_cleanup_kernels(
                     argparse.Namespace(
                         dry_run=False,
                         keep=getattr(args, "keep_kernels", 1),
