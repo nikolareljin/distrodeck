@@ -362,6 +362,7 @@ install_node_major_version() {
         if ! sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null && \
           ! cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"; then
           rm -f "$tmp_key"
+          sudo rm -f "$keyring" 2>/dev/null || true
           log_warn "Failed to install NodeSource apt repository key."
           return 1
         fi
@@ -371,11 +372,15 @@ install_node_major_version() {
         if ! sudo apt-get update; then
           log_warn "apt-get update reported errors after adding NodeSource; continuing with Node.js installation attempt."
         fi
-        install_pkg "$mgr" nodejs || return 1
+        if ! install_pkg "$mgr" nodejs; then
+          sudo rm -f /etc/apt/sources.list.d/nodesource.list "$keyring" 2>/dev/null || true
+          return 1
+        fi
         if [[ "$(node_major_version)" -ge "$node_major" ]]; then
           return 0
         fi
         log_warn "NodeSource did not provide Node.js ${node_major}+."
+        sudo rm -f /etc/apt/sources.list.d/nodesource.list "$keyring" 2>/dev/null || true
         return 1
       else
         rm -f "$tmp_key"
@@ -416,11 +421,15 @@ enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL
 REPO
-        install_pkg "$mgr" nodejs || return 1
+        if ! install_pkg "$mgr" nodejs; then
+          sudo rm -f /etc/yum.repos.d/nodesource-nodistro.repo "$keyring" 2>/dev/null || true
+          return 1
+        fi
         if [[ "$(node_major_version)" -ge "$node_major" ]]; then
           return 0
         fi
         log_warn "NodeSource did not provide Node.js ${node_major}+."
+        sudo rm -f /etc/yum.repos.d/nodesource-nodistro.repo "$keyring" 2>/dev/null || true
         return 1
       else
         rm -f "$tmp_key"
