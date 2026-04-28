@@ -1333,8 +1333,7 @@ install_antigravity() {
       fi
       echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" | \
         sudo tee /etc/apt/sources.list.d/antigravity.list > /dev/null
-      sudo apt update
-      sudo apt install -y antigravity
+      install_pkg "$mgr" antigravity
       ;;
     dnf)
       log_warn "Antigravity RPM install is disabled because the upstream RPM repository does not publish a package signing key."
