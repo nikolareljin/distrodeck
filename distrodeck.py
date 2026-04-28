@@ -2302,10 +2302,10 @@ def _kernel_package_abi(package: str) -> Optional[str]:
 
 
 def _kernel_base(abi: str) -> str:
-    match = re.match(r"^(.+-\d+)(?:-[A-Za-z].*)?$", abi)
-    if match:
-        return match.group(1)
-    return abi
+    base = abi
+    while re.search(r"-[A-Za-z][A-Za-z0-9.]*$", base):
+        base = re.sub(r"-[A-Za-z][A-Za-z0-9.]*$", "", base)
+    return base
 
 
 def _kernel_sort_key(base: str) -> List[object]:
