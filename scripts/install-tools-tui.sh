@@ -1233,8 +1233,10 @@ confirm_remote_script_execution() {
     return 1
   fi
   printf "Run installer downloaded from %s? [y/N] " "$url" >&2
-  local answer
-  IFS= read -r answer
+  local answer=""
+  if ! IFS= read -r answer; then
+    answer=""
+  fi
   case "$answer" in
     y|Y|yes|YES) return 0;;
     *) log_warn "Skipped downloaded installer: $url"; return 1;;

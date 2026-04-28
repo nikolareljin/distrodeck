@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "distrodeck.py"
 SPEC = importlib.util.spec_from_file_location("distrodeck_module", MODULE_PATH)
@@ -14,6 +16,39 @@ def test_kernel_base_preserves_debian_revision():
     assert distrodeck._kernel_base("6.1.0-0.deb12.5-amd64") == "6.1.0-0.deb12.5"
     assert distrodeck._kernel_base("6.1.0-0.deb12.5-common") == "6.1.0-0.deb12.5"
     assert distrodeck._kernel_base("6.1.0-0.deb12.5-rt-amd64") == "6.1.0-0.deb12.5"
+
+
+def test_cleanup_kernels_accepts_keep_kernels_alias():
+    parser = distrodeck.build_parser()
+
+    args = parser.parse_args(["cleanup-kernels", "--keep-kernels", "2"])
+
+    assert args.keep == 2
+
+
+def test_cleanup_kernels_command_does_not_exit_for_unsupported_system(monkeypatch):
+    calls = []
+
+    def fake_run_cleanup(args):
+        calls.append(args)
+        return False
+
+    monkeypatch.setattr(distrodeck, "run_cleanup_kernels", fake_run_cleanup)
+    monkeypatch.setattr(distrodeck, "cleanup_kernels_supported", lambda: False)
+
+    distrodeck.run_cleanup_kernels_cmd(distrodeck.argparse.Namespace())
+
+    assert len(calls) == 1
+
+
+def test_cleanup_kernels_command_exits_for_supported_failure(monkeypatch):
+    monkeypatch.setattr(distrodeck, "run_cleanup_kernels", lambda args: False)
+    monkeypatch.setattr(distrodeck, "cleanup_kernels_supported", lambda: True)
+
+    with pytest.raises(SystemExit) as exc:
+        distrodeck.run_cleanup_kernels_cmd(distrodeck.argparse.Namespace())
+
+    assert exc.value.code == 1
 
 
 def test_select_old_kernel_packages_keeps_running_and_one_previous():

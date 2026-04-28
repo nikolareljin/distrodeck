@@ -111,7 +111,7 @@ distrodeck cleanup-kernels
 
 Options:
 - `--dry-run`: show packages that would be purged
-- `--keep N`: previous kernel versions to keep in addition to the running kernel
+- `--keep N`, `--keep-kernels N`: previous kernel versions to keep in addition to the running kernel
 
 ### security
 

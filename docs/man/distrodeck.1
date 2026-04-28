@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-04-27" "distrodeck 0.8.0" "User Commands"
+.TH DISTRODECK 1 "2026-04-28" "distrodeck 0.8.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -154,10 +154,11 @@ options:
 usage: distrodeck cleanup-kernels [-h] [--dry-run] [--keep KEEP]
 
 options:
-  -h, --help   show this help message and exit
-  --dry-run    Preview kernel packages that would be removed
-  --keep KEEP  Previous kernel versions to keep in addition to the running
-               kernel
+  -h, --help            show this help message and exit
+  --dry-run             Preview kernel packages that would be removed
+  --keep KEEP, --keep-kernels KEEP
+                        Previous kernel versions to keep in addition to the
+                        running kernel
 .fi
 .SS security
 .nf
