@@ -1340,7 +1340,12 @@ install_antigravity() {
       local tmp_key
       tmp_key="$(mktemp)"
       if download_file "https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg" "$tmp_key"; then
-        sudo gpg --dearmor --yes -o /etc/apt/keyrings/antigravity-repo-key.gpg "$tmp_key"
+        if ! sudo gpg --dearmor --yes -o /etc/apt/keyrings/antigravity-repo-key.gpg "$tmp_key"; then
+          rm -f "$tmp_key"
+          sudo rm -f /etc/apt/keyrings/antigravity-repo-key.gpg 2>/dev/null || true
+          log_warn "Failed to import Antigravity apt repository key."
+          return 1
+        fi
         sudo chmod 0644 /etc/apt/keyrings/antigravity-repo-key.gpg
         rm -f "$tmp_key"
       else

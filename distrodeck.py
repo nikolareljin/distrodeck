@@ -5099,9 +5099,12 @@ def run_tui() -> None:
         elif choice == "update":
             if not ensure_sudo():
                 continue
-            cleanup_kernels = dialog_yesno(
-                "Update", "Clean up old auto-installed kernels after successful update?"
-            )
+            cleanup_kernels = False
+            if cleanup_kernels_supported():
+                cleanup_kernels = dialog_yesno(
+                    "Update",
+                    "Clean up old auto-installed kernels after successful update?",
+                )
             if cmd_exists("nala"):
                 run(["dialog", "--clear"], check=False)
                 log(
@@ -5130,9 +5133,12 @@ def run_tui() -> None:
         elif choice == "upgrade":
             if not ensure_sudo():
                 continue
-            cleanup_kernels = dialog_yesno(
-                "Upgrade", "Clean up old auto-installed kernels after successful distro upgrade?"
-            )
+            cleanup_kernels = False
+            if cleanup_kernels_supported():
+                cleanup_kernels = dialog_yesno(
+                    "Upgrade",
+                    "Clean up old auto-installed kernels after successful distro upgrade?",
+                )
             run(["dialog", "--clear"], check=False)
             log("Starting distro upgrade. Follow any prompts in the terminal.")
             run_upgrade(

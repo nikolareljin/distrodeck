@@ -6,9 +6,11 @@ import pytest
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "distrodeck.py"
 SPEC = importlib.util.spec_from_file_location("distrodeck_module", MODULE_PATH)
-assert SPEC is not None, f"Could not load module spec from {MODULE_PATH}"
+if SPEC is None:
+    raise RuntimeError(f"Could not load module spec from {MODULE_PATH}")
 distrodeck = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
+if SPEC.loader is None:
+    raise RuntimeError(f"Could not load module loader from {MODULE_PATH}")
 SPEC.loader.exec_module(distrodeck)
 
 
