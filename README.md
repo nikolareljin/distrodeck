@@ -149,6 +149,8 @@ The `install-tools` command offers tools organized by category:
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 
+`distrodeck install-tools --all` installs the default non-interactive tool set. Tools that require downloaded installer confirmation or hosted account CLIs are skipped unless you run from an interactive terminal with `DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true`. The older `DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS=true` name is also accepted for compatibility.
+
 Example prompt segment after `git-status set`:
 
 ```

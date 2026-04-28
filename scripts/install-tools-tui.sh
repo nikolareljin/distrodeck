@@ -366,6 +366,8 @@ install_node_major_version() {
           log_warn "Failed to install NodeSource apt repository key."
           return 1
         fi
+        sudo chmod 0755 /etc/apt/keyrings
+        sudo chmod 0644 "$keyring"
         rm -f "$tmp_key"
         echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_${node_major}.x nodistro main" | \
           sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
@@ -2050,14 +2052,15 @@ main() {
     clear
   else
     selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
-    remote_script_tools="aider antigravity claude-code codex copilot cursor gemini kiro ollama"
-    if [[ "${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}" == "true" && -t 0 ]]; then
+    opt_in_tools="aider antigravity claude-code codex copilot cursor gemini kiro ollama"
+    include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
+    if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
       unset DISTRODECK_NONINTERACTIVE
-      selected+=" ${remote_script_tools}"
+      selected+=" ${opt_in_tools}"
     else
       export DISTRODECK_NONINTERACTIVE=true
-      if [[ "${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}" == "true" ]]; then
-        log_warn "Skipping remote-script tools in --all mode because no interactive terminal is available."
+      if [[ "$include_opt_in_tools" == "true" ]]; then
+        log_warn "Skipping opt-in tools in --all mode because no interactive terminal is available."
       fi
     fi
   fi

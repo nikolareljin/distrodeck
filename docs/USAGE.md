@@ -218,8 +218,10 @@ Install optional developer tools via a TUI checklist. Tools are organized by cat
 
 ```
 distrodeck install-tools        # opens TUI checklist
-distrodeck install-tools --all  # installs all tools non-interactively
+distrodeck install-tools --all  # installs the default non-interactive tool set
 ```
+
+`--all` skips tools that require downloaded installer confirmation or hosted account CLIs. To include those tools, run from an interactive terminal with `DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true`. The older `DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS=true` name is also accepted for compatibility.
 
 **Features:**
 - Tools are grouped by category with prefixes: `[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Backup]`, `[Dev]`, `[AI]`, `[Lang]`, `[DevOps]`, `[Util]`, `[App]`
