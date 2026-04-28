@@ -368,7 +368,9 @@ install_node_major_version() {
         rm -f "$tmp_key"
         echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_${node_major}.x nodistro main" | \
           sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
-        sudo apt-get update || return 1
+        if ! sudo apt-get update; then
+          log_warn "apt-get update reported errors after adding NodeSource; continuing with Node.js installation attempt."
+        fi
         install_pkg "$mgr" nodejs || return 1
         if [[ "$(node_major_version)" -ge "$node_major" ]]; then
           return 0
