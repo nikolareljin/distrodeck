@@ -327,68 +327,132 @@ install_micro() {
   install_pkg "$1" micro || log_warn "Failed to install micro from repos."
 }
 
-install_node() {
-  local mgr="$1"
+install_node_major_version() {
+  local mgr="$1" node_major="${2:-20}"
   case "$mgr" in
     apt)
       # Try system repo first (Ubuntu 22.04+ has Node 18+)
       if install_pkg "$mgr" nodejs npm 2>/dev/null; then
-        return
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return
+        fi
+        log_warn "System repository Node.js is older than ${node_major}; using NodeSource fallback."
       fi
       # Fall back to NodeSource repository (manual setup, no piped scripts)
-      log_info "Adding NodeSource repository for Node.js 20.x..."
+      log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
       if ! command -v curl >/dev/null 2>&1; then
-        install_pkg "$mgr" curl ca-certificates gnupg || true
+        install_pkg "$mgr" curl ca-certificates || true
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        install_pkg "$mgr" gnupg || true
+      fi
+      if ! command -v curl >/dev/null 2>&1; then
+        log_warn "curl is required to download the NodeSource GPG key."
+        return 1
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        log_warn "gpg is required to install the NodeSource apt repository key."
+        return 1
       fi
       sudo mkdir -p /etc/apt/keyrings
       local keyring="/etc/apt/keyrings/nodesource.gpg"
       local tmp_key
       tmp_key="$(mktemp)"
       if curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$tmp_key"; then
-        sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null || \
-          cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"
+        if ! sudo gpg --dearmor -o "$keyring" < "$tmp_key" 2>/dev/null && \
+          ! cat "$tmp_key" | sudo gpg --dearmor -o "$keyring"; then
+          rm -f "$tmp_key"
+          sudo rm -f "$keyring" 2>/dev/null || true
+          log_warn "Failed to install NodeSource apt repository key."
+          return 1
+        fi
+        sudo chmod 0755 /etc/apt/keyrings
+        sudo chmod 0644 "$keyring"
         rm -f "$tmp_key"
-        echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_20.x nodistro main" | \
+        echo "deb [signed-by=$keyring] https://deb.nodesource.com/node_${node_major}.x nodistro main" | \
           sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
-        sudo apt-get update || true
-        install_pkg "$mgr" nodejs
+        if ! sudo apt-get update; then
+          log_warn "apt-get update reported errors after adding NodeSource; continuing with Node.js installation attempt."
+        fi
+        if ! install_pkg "$mgr" nodejs; then
+          sudo rm -f /etc/apt/sources.list.d/nodesource.list "$keyring" 2>/dev/null || true
+          return 1
+        fi
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return 0
+        fi
+        log_warn "NodeSource did not provide Node.js ${node_major}+."
+        sudo rm -f /etc/apt/sources.list.d/nodesource.list "$keyring" 2>/dev/null || true
+        return 1
       else
         rm -f "$tmp_key"
         log_warn "Failed to download NodeSource GPG key."
+        return 1
       fi
       ;;
     dnf)
       # Try system repo first (Fedora has recent Node.js)
       if install_pkg "$mgr" nodejs npm 2>/dev/null; then
-        return
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return
+        fi
+        log_warn "System repository Node.js is older than ${node_major}; using NodeSource fallback."
       fi
       # Fall back to NodeSource repository (manual setup)
-      log_info "Adding NodeSource repository for Node.js 20.x..."
+      log_info "Adding NodeSource repository for Node.js ${node_major}.x..."
+      if ! command -v curl >/dev/null 2>&1; then
+        install_pkg "$mgr" curl ca-certificates || true
+      fi
+      if ! command -v curl >/dev/null 2>&1; then
+        log_warn "curl is required to download the NodeSource GPG key."
+        return 1
+      fi
       local keyring="/etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL"
       local tmp_key
       tmp_key="$(mktemp)"
       if curl -fsSL https://rpm.nodesource.com/gpgkey/ns-operations-public.key -o "$tmp_key"; then
+        sudo mkdir -p /etc/pki/rpm-gpg
         sudo cp "$tmp_key" "$keyring"
         rm -f "$tmp_key"
-        cat << 'REPO' | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
+        cat << REPO | sudo tee /etc/yum.repos.d/nodesource-nodistro.repo > /dev/null
 [nodesource-nodistro]
 name=Node.js Packages for Linux RPM based distros - x86_64
-baseurl=https://rpm.nodesource.com/pub_20.x/nodistro/x86_64
+baseurl=https://rpm.nodesource.com/pub_${node_major}.x/nodistro/x86_64
 priority=1
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL
 REPO
-        install_pkg "$mgr" nodejs
+        if ! install_pkg "$mgr" nodejs; then
+          sudo rm -f /etc/yum.repos.d/nodesource-nodistro.repo "$keyring" 2>/dev/null || true
+          return 1
+        fi
+        if [[ "$(node_major_version)" -ge "$node_major" ]]; then
+          return 0
+        fi
+        log_warn "NodeSource did not provide Node.js ${node_major}+."
+        sudo rm -f /etc/yum.repos.d/nodesource-nodistro.repo "$keyring" 2>/dev/null || true
+        return 1
       else
         rm -f "$tmp_key"
         log_warn "Failed to download NodeSource GPG key."
+        return 1
       fi
       ;;
     pacman) install_pkg "$mgr" nodejs npm;;
-    zypper) install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm;;
+    zypper)
+      if [[ "$node_major" -ge 22 ]]; then
+        install_pkg "$mgr" nodejs22 npm22 || install_pkg "$mgr" nodejs npm
+      else
+        install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm
+      fi
+      ;;
     *) log_warn "Node install not supported for this distro.";;
   esac
+}
+
+install_node() {
+  install_node_major_version "$1" 20
 }
 
 install_lazygit() {
@@ -544,6 +608,14 @@ install_pkg_simple() {
 
 install_image_view() {
   local mgr="$1"
+  if ! command -v git >/dev/null 2>&1; then
+    log_warn "git is required to install image-view; installing git..."
+    install_git "$mgr" || true
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    log_warn "git still missing; cannot install image-view."
+    return 1
+  fi
   if ! command -v cargo >/dev/null 2>&1; then
     log_warn "cargo is required to install image-view; installing Rust..."
     install_rust "$mgr" || true
@@ -552,8 +624,7 @@ install_image_view() {
     log_warn "cargo still missing; cannot install image-view."
     return 1
   fi
-  cargo install --git https://github.com/nikolareljin/image-view --bin image-view || \
-    log_warn "Failed to install image-view via cargo."
+  cargo install --git https://github.com/nikolareljin/image-view --bin image-view
 }
 
 download_file() {
@@ -1107,6 +1178,213 @@ WRAPPER
   rm -rf "$tmp_dir"
 }
 
+node_major_version() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo 0
+    return
+  fi
+  local major
+  major="$(node --version | sed 's/^v//' | cut -d. -f1)"
+  if [[ "$major" =~ ^[0-9]+$ ]]; then
+    echo "$major"
+  else
+    echo 0
+  fi
+}
+
+ensure_node_major() {
+  local mgr="$1" required="$2"
+  local major
+  major="$(node_major_version)"
+  if [[ "$major" -ge "$required" ]]; then
+    return 0
+  fi
+  if [[ "$major" -eq 0 ]]; then
+    log_warn "Node.js is required; installing or upgrading Node.js first..."
+  else
+    log_warn "Node.js $required+ is required; detected Node.js $major."
+  fi
+  install_node_major_version "$mgr" "$required" || true
+  major="$(node_major_version)"
+  if [[ "$major" -lt "$required" ]]; then
+    log_warn "Node.js $required+ is still unavailable; cannot install this tool."
+    return 1
+  fi
+}
+
+install_npm_global() {
+  local mgr="$1" package="$2" required="${3:-20}"
+  ensure_node_major "$mgr" "$required" || return 1
+  if ! command -v npm >/dev/null 2>&1; then
+    install_node_major_version "$mgr" "$required" || true
+    ensure_node_major "$mgr" "$required" || return 1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    log_warn "npm is required to install $package."
+    return 1
+  fi
+  sudo npm install -g "$package"
+}
+
+show_downloaded_script_preview() {
+  local url="$1" path="$2"
+  log_info "Downloaded installer from $url to $path"
+  log_info "Installer preview, first 20 lines:"
+  sed -n '1,20p' "$path" >&2 || true
+}
+
+confirm_remote_script_execution() {
+  local url="$1"
+  if [[ "${DISTRODECK_NONINTERACTIVE:-false}" == "true" ]]; then
+    log_warn "Skipping downloaded installer in noninteractive mode: $url"
+    return 1
+  fi
+  if [[ ! -t 0 ]]; then
+    log_warn "Refusing to execute downloaded installer without an interactive terminal: $url"
+    return 1
+  fi
+  printf "Run installer downloaded from %s? [y/N] " "$url" >&2
+  local answer=""
+  if ! IFS= read -r answer; then
+    answer=""
+  fi
+  case "$answer" in
+    y|Y|yes|YES) return 0;;
+    *) log_warn "Skipped downloaded installer: $url"; return 1;;
+  esac
+}
+
+run_downloaded_script() {
+  local url="$1"
+  local tmp_file rc
+  tmp_file="$(mktemp)"
+  if ! download_file "$url" "$tmp_file"; then
+    rm -f "$tmp_file"
+    log_warn "Failed to download installer: $url"
+    return 1
+  fi
+  show_downloaded_script_preview "$url" "$tmp_file"
+  if ! confirm_remote_script_execution "$url"; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+  if bash "$tmp_file"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f "$tmp_file"
+  return "$rc"
+}
+
+install_codex() {
+  install_npm_global "$1" "@openai/codex"
+}
+
+install_copilot() {
+  install_npm_global "$1" "@github/copilot" 22
+}
+
+install_claude_code() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://claude.ai/install.sh"
+}
+
+install_gemini() {
+  local mgr="$1"
+  ensure_node_major "$mgr" 20 || return 1
+  install_npm_global "$mgr" "@google/gemini-cli"
+}
+
+install_ollama() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://ollama.com/install.sh"
+}
+
+install_cursor() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://cursor.com/install"
+}
+
+install_kiro() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  run_downloaded_script "https://cli.kiro.dev/install"
+}
+
+install_antigravity() {
+  if command -v antigravity >/dev/null 2>&1; then
+    return 0
+  fi
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        install_curl "$mgr" || true
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        install_pkg "$mgr" gnupg || true
+      fi
+      if ! command -v gpg >/dev/null 2>&1; then
+        log_warn "gpg is required to install the Antigravity apt repository key."
+        return 1
+      fi
+      sudo mkdir -p /etc/apt/keyrings
+      local tmp_key
+      tmp_key="$(mktemp)"
+      if download_file "https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg" "$tmp_key"; then
+        if ! sudo gpg --dearmor --yes -o /etc/apt/keyrings/antigravity-repo-key.gpg "$tmp_key"; then
+          rm -f "$tmp_key"
+          sudo rm -f /etc/apt/keyrings/antigravity-repo-key.gpg 2>/dev/null || true
+          log_warn "Failed to import Antigravity apt repository key."
+          return 1
+        fi
+        sudo chmod 0644 /etc/apt/keyrings/antigravity-repo-key.gpg
+        rm -f "$tmp_key"
+      else
+        rm -f "$tmp_key"
+        log_warn "Failed to download Antigravity apt repository key."
+        return 1
+      fi
+      echo "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main" | \
+        sudo tee /etc/apt/sources.list.d/antigravity.list > /dev/null
+      install_pkg "$mgr" antigravity
+      ;;
+    dnf)
+      log_warn "Antigravity RPM install is disabled because the upstream RPM repository does not publish a package signing key."
+      log_warn "Use https://antigravity.google/download/linux for manual RPM installation guidance."
+      return 1
+      ;;
+    zypper)
+      log_warn "Antigravity RPM install is disabled because the upstream RPM repository does not publish a package signing key."
+      log_warn "Use https://antigravity.google/download/linux for manual RPM installation guidance."
+      return 1
+      ;;
+    *)
+      log_warn "Antigravity install is supported by distrodeck on apt systems."
+      return 1
+      ;;
+  esac
+}
+
+install_aider() {
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    install_curl "$1" || true
+  fi
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    log_warn "curl or wget is required to install aider."
+    return 1
+  fi
+  run_downloaded_script "https://aider.chat/install.sh"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Uninstall functions for tools that need special handling
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1159,7 +1437,17 @@ uninstall_build_tools() {
 uninstall_node() {
   local mgr="$1"
   case "$mgr" in
-    apt|dnf|pacman|zypper) uninstall_pkg "$mgr" nodejs npm;;
+    apt)
+      uninstall_pkg "$mgr" nodejs npm || true
+      sudo rm -f /etc/apt/sources.list.d/nodesource.list 2>/dev/null || true
+      sudo rm -f /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
+      ;;
+    dnf)
+      uninstall_pkg "$mgr" nodejs npm || true
+      sudo rm -f /etc/yum.repos.d/nodesource-nodistro.repo 2>/dev/null || true
+      sudo rm -f /etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL 2>/dev/null || true
+      ;;
+    pacman|zypper) uninstall_pkg "$mgr" nodejs npm;;
     *) log_warn "Node uninstall not supported for this distro.";;
   esac
 }
@@ -1411,6 +1699,95 @@ uninstall_cron() {
   esac
 }
 
+uninstall_npm_global() {
+  local package="$1"
+  if command -v npm >/dev/null 2>&1; then
+    sudo npm uninstall -g "$package" || true
+  else
+    log_warn "npm not found; cannot uninstall $package automatically."
+  fi
+}
+
+uninstall_codex() {
+  uninstall_npm_global "@openai/codex"
+}
+
+uninstall_copilot() {
+  uninstall_npm_global "@github/copilot"
+}
+
+uninstall_gemini() {
+  uninstall_npm_global "@google/gemini-cli"
+}
+
+uninstall_claude_code() {
+  log_warn "Claude Code does not expose a stable distrodeck uninstall flow yet; remove it using Claude Code's official uninstall instructions."
+  return 1
+}
+
+uninstall_ollama() {
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl stop ollama 2>/dev/null || true
+    sudo systemctl disable ollama 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+    sudo systemctl daemon-reload 2>/dev/null || true
+  else
+    sudo rm -f /etc/systemd/system/ollama.service 2>/dev/null || true
+  fi
+  if command -v ollama >/dev/null 2>&1; then
+    sudo rm -f "$(command -v ollama)" 2>/dev/null || true
+  fi
+  sudo rm -rf /usr/share/ollama /usr/local/lib/ollama /usr/lib/ollama /lib/ollama 2>/dev/null || true
+  sudo userdel ollama 2>/dev/null || true
+  sudo groupdel ollama 2>/dev/null || true
+}
+
+uninstall_cursor() {
+  rm -f "$HOME/.local/bin/cursor" "$HOME/.local/bin/cursor-agent" 2>/dev/null || true
+  if is_installed_tool cursor; then
+    log_warn "Cursor is still installed after the uninstall attempt; remove the remaining cursor binary manually if needed."
+    return 1
+  fi
+}
+
+uninstall_kiro() {
+  rm -f "$HOME/.local/bin/kiro" "$HOME/.local/bin/kiro-cli" 2>/dev/null || true
+}
+
+uninstall_antigravity() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      uninstall_pkg "$mgr" antigravity || true
+      sudo rm -f /etc/apt/sources.list.d/antigravity.list 2>/dev/null || true
+      sudo rm -f /etc/apt/keyrings/antigravity-repo-key.gpg 2>/dev/null || true
+      ;;
+    dnf)
+      uninstall_pkg "$mgr" antigravity || true
+      sudo rm -f /etc/yum.repos.d/antigravity.repo 2>/dev/null || true
+      ;;
+    zypper)
+      uninstall_pkg "$mgr" antigravity || true
+      sudo rm -f /etc/zypp/repos.d/antigravity.repo 2>/dev/null || true
+      ;;
+    *)
+      log_warn "Antigravity uninstall is supported by distrodeck on apt, dnf, and zypper systems."
+      return 1
+      ;;
+  esac
+}
+
+uninstall_aider() {
+  if command -v uv >/dev/null 2>&1; then
+    uv tool uninstall aider-chat 2>/dev/null || true
+    uv tool uninstall aider 2>/dev/null || true
+  fi
+  if command -v pipx >/dev/null 2>&1; then
+    pipx uninstall aider-chat 2>/dev/null || true
+  fi
+  rm -f "$HOME/.local/bin/aider" 2>/dev/null || true
+}
+
 tool_desc() {
   case "$1" in
     # ── Shell & CLI ──
@@ -1471,6 +1848,16 @@ tool_desc() {
     git-lfs) echo "[Dev] git-lfs - large file storage";;
     lazygit) echo "[Dev] LazyGit - git TUI";;
     tokei) echo "[Dev] tokei - code statistics";;
+    # ── AI tools ──
+    aider) echo "[AI] aider - AI pair programming";;
+    antigravity) echo "[AI] Antigravity - AI development environment";;
+    claude-code) echo "[AI] Claude Code";;
+    codex) echo "[AI] OpenAI Codex CLI";;
+    copilot) echo "[AI] GitHub Copilot CLI";;
+    cursor) echo "[AI] Cursor IDE / Agent";;
+    gemini) echo "[AI] Gemini CLI";;
+    kiro) echo "[AI] Kiro IDE / CLI";;
+    ollama) echo "[AI] Ollama local models";;
     # ── Languages & Runtimes ──
     go) echo "[Lang] Go";;
     java) echo "[Lang] Java (JDK)";;
@@ -1565,6 +1952,15 @@ is_installed_tool() {
     ufw) command -v ufw >/dev/null 2>&1;;
     bfg) command -v bfg >/dev/null 2>&1;;
     gh) command -v gh >/dev/null 2>&1;;
+    aider) command -v aider >/dev/null 2>&1;;
+    antigravity) command -v antigravity >/dev/null 2>&1;;
+    claude-code) command -v claude >/dev/null 2>&1;;
+    codex) command -v codex >/dev/null 2>&1;;
+    copilot) command -v copilot >/dev/null 2>&1;;
+    cursor) command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1;;
+    gemini) command -v gemini >/dev/null 2>&1;;
+    kiro) command -v kiro >/dev/null 2>&1 || command -v kiro-cli >/dev/null 2>&1;;
+    ollama) command -v ollama >/dev/null 2>&1;;
     tldr) command -v tldr >/dev/null 2>&1;;
     bandwhich) command -v bandwhich >/dev/null 2>&1;;
     k9s) command -v k9s >/dev/null 2>&1;;
@@ -1618,6 +2014,8 @@ main() {
     borgbackup duplicity fdupes lz4 tar unzip
     # ── Development ──
     bfg build-tools composer delta gh git git-lfs lazygit tokei
+    # ── AI tools ──
+    aider antigravity claude-code codex copilot cursor gemini kiro ollama
     # ── Languages & Runtimes ──
     go java node php ruby rust
     # ── DevOps & Containers ──
@@ -1663,6 +2061,17 @@ main() {
     clear
   else
     selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
+    opt_in_tools="aider antigravity claude-code codex copilot cursor gemini kiro ollama"
+    include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
+    if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
+      unset DISTRODECK_NONINTERACTIVE
+      selected+=" ${opt_in_tools}"
+    else
+      export DISTRODECK_NONINTERACTIVE=true
+      if [[ "$include_opt_in_tools" == "true" ]]; then
+        log_warn "Skipping opt-in tools in --all mode because no interactive terminal is available."
+      fi
+    fi
   fi
 
   # Build set of selected tools
@@ -1749,6 +2158,15 @@ main() {
       tree) install_tree "$mgr";;
       bfg) install_bfg "$mgr";;
       gh) install_gh "$mgr";;
+      aider) install_aider "$mgr";;
+      antigravity) install_antigravity "$mgr";;
+      claude-code) install_claude_code "$mgr";;
+      codex) install_codex "$mgr";;
+      copilot) install_copilot "$mgr";;
+      cursor) install_cursor "$mgr";;
+      gemini) install_gemini "$mgr";;
+      kiro) install_kiro "$mgr";;
+      ollama) install_ollama "$mgr";;
       tldr) install_tldr "$mgr";;
       bandwhich) install_bandwhich "$mgr";;
       k9s) install_k9s "$mgr";;
@@ -1863,6 +2281,15 @@ main() {
         tree) uninstall_pkg_simple "$mgr" tree;;
         bfg) uninstall_bfg "$mgr";;
         gh) uninstall_gh "$mgr";;
+        aider) uninstall_aider "$mgr";;
+        antigravity) uninstall_antigravity "$mgr";;
+        claude-code) uninstall_claude_code "$mgr";;
+        codex) uninstall_codex "$mgr";;
+        copilot) uninstall_copilot "$mgr";;
+        cursor) uninstall_cursor "$mgr";;
+        gemini) uninstall_gemini "$mgr";;
+        kiro) uninstall_kiro "$mgr";;
+        ollama) uninstall_ollama "$mgr";;
         tldr) uninstall_tldr "$mgr";;
         bandwhich) uninstall_bandwhich "$mgr";;
         k9s) uninstall_k9s "$mgr";;

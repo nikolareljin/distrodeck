@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-01-23" "distrodeck 0.5.0" "User Commands"
+.TH DISTRODECK 1 "2026-04-28" "distrodeck 0.8.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -7,19 +7,11 @@ distrodeck \- Export and restore packages before distro upgrades.
 .SH DESCRIPTION
 distrodeck exports installed packages and sources, then re-installs them after a distro upgrade.
 .SH CONFIGURATION
-Optional config file: \fI~/.config/distrodeck/config.ini\fR or \fI/etc/distrodeck/config.ini\fR.
+distrodeck reads optional config files from \fI/etc/distrodeck/config.ini\fR and \fI$XDG_CONFIG_HOME/distrodeck/config.ini\fR, or \fI~/.config/distrodeck/config.ini\fR when \fIXDG_CONFIG_HOME\fR is unset.
 .PP
-Sample file: \fIexamples/config.ini\fR.
+The \fB[apt]\fR section can define \fIofficial_hosts_common\fR, \fIofficial_hosts_ubuntu\fR, \fIofficial_hosts_debian\fR, or distro-specific \fIofficial_hosts_<id>_override\fR entries as comma-separated host lists.
 .PP
-Example:
-.PP
-.nf
-[apt]
-official_hosts_common = mirrors.example.org
-official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
-official_hosts_debian = deb.debian.org, security.debian.org
-# official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
-.fi
+See \fIexamples/config.ini\fR for a sample configuration.
 .SH COMMANDS
 .TP
 .B export
@@ -33,6 +25,9 @@ Update system packages
 .TP
 .B upgrade
 Run distro upgrade
+.TP
+.B cleanup-kernels
+Clean up old auto-installed kernels
 .TP
 .B security
 Apply security upgrades
@@ -65,7 +60,7 @@ Delete all logs
 Show full system info
 .TP
 .B config-edit
-Edit common system config files (TUI, includes distrodeck config files when present)
+Edit common system config files (TUI)
 .TP
 .B net-tools
 Run installed network tools (TUI)
@@ -127,19 +122,43 @@ options:
 .fi
 .SS update
 .nf
-usage: distrodeck update [-h]
+usage: distrodeck update [-h] [--cleanup-kernels]
+                         [--keep-kernels KEEP_KERNELS]
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help            show this help message and exit
+  --cleanup-kernels     Clean up old auto-installed kernels after a successful
+                        update
+  --keep-kernels KEEP_KERNELS
+                        Previous kernel versions to keep when --cleanup-
+                        kernels is used
 .fi
 .SS upgrade
 .nf
 usage: distrodeck upgrade [-h] [--target-codename TARGET_CODENAME]
+                          [--cleanup-kernels] [--keep-kernels KEEP_KERNELS]
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help            show this help message and exit
   --target-codename TARGET_CODENAME
-                Target codename for Debian upgrades (or set DISTRODECK_TARGET_CODENAME)
+                        Target codename for Debian upgrades (or set
+                        DISTRODECK_TARGET_CODENAME)
+  --cleanup-kernels     Clean up old auto-installed kernels after a successful
+                        distro upgrade
+  --keep-kernels KEEP_KERNELS
+                        Previous kernel versions to keep when --cleanup-
+                        kernels is used
+.fi
+.SS cleanup-kernels
+.nf
+usage: distrodeck cleanup-kernels [-h] [--dry-run] [--keep KEEP]
+
+options:
+  -h, --help            show this help message and exit
+  --dry-run             Preview kernel packages that would be removed
+  --keep KEEP, --keep-kernels KEEP
+                        Previous kernel versions to keep in addition to the
+                        running kernel
 .fi
 .SS security
 .nf
@@ -189,15 +208,13 @@ usage: distrodeck git-aliases [-h] {set,unset,show} ...
 
 positional arguments:
   {set,unset,show}
-    set        Set recommended git aliases
-    unset      Remove recommended git aliases
-    show       Show recommended git aliases
+    set             Set recommended git aliases
+    unset           Remove recommended git aliases
+    show            Show recommended git aliases
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help        show this help message and exit
 .fi
-.PP
-Recommended aliases are prefixed with \fBd\fR (e.g., \fBgit df\fR, \fBgit dp\fR, \fBgit dl\fR, \fBgit dbr\fR, \fBgit dis\fR, \fBgit dprs\fR, \fBgit dup\fR, \fBgit dhelp\fR).
 .SS preflight
 .nf
 usage: distrodeck preflight [-h]

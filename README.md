@@ -63,8 +63,16 @@ distrodeck import --input backup.txt --apply-config-files
 
 distrodeck update
 
+distrodeck update --cleanup-kernels
+
 distrodeck upgrade
 (On Debian, pass `--target-codename` or set `DISTRODECK_TARGET_CODENAME`.)
+
+distrodeck upgrade --cleanup-kernels
+
+distrodeck cleanup-kernels --dry-run
+
+distrodeck cleanup-kernels
 
 distrodeck security
 
@@ -124,7 +132,7 @@ distrodeck install-tools --all
 
 ### Install-tools categories
 
-The `install-tools` command offers 65 tools organized by category:
+The `install-tools` command offers tools organized by category:
 
 | Category | Examples |
 |----------|----------|
@@ -133,12 +141,15 @@ The `install-tools` command offers 65 tools organized by category:
 | `[System]` | bandwhich, duf, htop, ncdu |
 | `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
 | `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
+| `[AI]` | aider, antigravity, codex, copilot, claude-code, gemini, ollama, cursor, kiro |
 | `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
 | `[App]` | gimp, nemo, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
+
+`distrodeck install-tools --all` installs the default non-interactive tool set. Tools that require downloaded installer confirmation or hosted account CLIs are skipped unless you run from an interactive terminal with `DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true`. The older `DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS=true` name is also accepted for compatibility.
 
 Example prompt segment after `git-status set`:
 

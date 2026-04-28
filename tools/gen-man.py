@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
@@ -45,7 +45,7 @@ def main() -> None:
     version = run([str(script), "--version"], env=env).stdout.strip()
     commands = parse_commands(help_text)
 
-    date = datetime.utcnow().strftime("%Y-%m-%d")
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     lines = [
         f'.TH DISTRODECK 1 "{date}" "distrodeck {version}" "User Commands"',
         ".SH NAME",
@@ -55,6 +55,12 @@ def main() -> None:
         "\\fIcommand\\fR [options]",
         ".SH DESCRIPTION",
         "distrodeck exports installed packages and sources, then re-installs them after a distro upgrade.",
+        ".SH CONFIGURATION",
+        "distrodeck reads optional config files from \\fI/etc/distrodeck/config.ini\\fR and \\fI$XDG_CONFIG_HOME/distrodeck/config.ini\\fR, or \\fI~/.config/distrodeck/config.ini\\fR when \\fIXDG_CONFIG_HOME\\fR is unset.",
+        ".PP",
+        "The \\fB[apt]\\fR section can define \\fIofficial_hosts_common\\fR, \\fIofficial_hosts_ubuntu\\fR, \\fIofficial_hosts_debian\\fR, or distro-specific \\fIofficial_hosts_<id>_override\\fR entries as comma-separated host lists.",
+        ".PP",
+        "See \\fIexamples/config.ini\\fR for a sample configuration.",
         ".SH COMMANDS",
     ]
     for name, desc in commands:
