@@ -1325,6 +1325,7 @@ install_antigravity() {
       tmp_key="$(mktemp)"
       if download_file "https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg" "$tmp_key"; then
         sudo gpg --dearmor --yes -o /etc/apt/keyrings/antigravity-repo-key.gpg "$tmp_key"
+        sudo chmod 0644 /etc/apt/keyrings/antigravity-repo-key.gpg
         rm -f "$tmp_key"
       else
         rm -f "$tmp_key"
@@ -1415,7 +1416,17 @@ uninstall_build_tools() {
 uninstall_node() {
   local mgr="$1"
   case "$mgr" in
-    apt|dnf|pacman|zypper) uninstall_pkg "$mgr" nodejs npm;;
+    apt)
+      uninstall_pkg "$mgr" nodejs npm || true
+      sudo rm -f /etc/apt/sources.list.d/nodesource.list 2>/dev/null || true
+      sudo rm -f /etc/apt/keyrings/nodesource.gpg 2>/dev/null || true
+      ;;
+    dnf)
+      uninstall_pkg "$mgr" nodejs npm || true
+      sudo rm -f /etc/yum.repos.d/nodesource-nodistro.repo 2>/dev/null || true
+      sudo rm -f /etc/pki/rpm-gpg/NODESOURCE-GPG-SIGNING-KEY-EL 2>/dev/null || true
+      ;;
+    pacman|zypper) uninstall_pkg "$mgr" nodejs npm;;
     *) log_warn "Node uninstall not supported for this distro.";;
   esac
 }
