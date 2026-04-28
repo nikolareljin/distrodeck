@@ -1743,7 +1743,11 @@ uninstall_ollama() {
 }
 
 uninstall_cursor() {
-  rm -f "$HOME/.local/bin/cursor-agent" 2>/dev/null || true
+  rm -f "$HOME/.local/bin/cursor" "$HOME/.local/bin/cursor-agent" 2>/dev/null || true
+  if is_installed_tool cursor; then
+    log_warn "Cursor is still installed after the uninstall attempt; remove the remaining cursor binary manually if needed."
+    return 1
+  fi
 }
 
 uninstall_kiro() {

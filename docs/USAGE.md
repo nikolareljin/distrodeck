@@ -85,6 +85,10 @@ distrodeck update
 distrodeck update --cleanup-kernels
 ```
 
+Options:
+- `--cleanup-kernels`: clean old auto-installed kernels after a successful update
+- `--keep-kernels N`: previous kernel versions to keep when cleanup is enabled
+
 ### upgrade
 
 Run a distro upgrade. On Ubuntu this uses `do-release-upgrade`.
