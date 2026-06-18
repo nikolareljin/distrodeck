@@ -296,3 +296,11 @@ Before publishing to a PPA, update `debian/changelog` and `debian/control` with 
 ## Contributing
 
 Keep the script POSIX-friendly where possible and avoid adding heavy dependencies.
+
+---
+
+## Clone traffic
+
+![Clone traffic](https://raw.githubusercontent.com/nikolareljin/stats/main/charts/distrodeck.svg)
+
+_Updated daily. Total and unique cloners over the last 14 days._
