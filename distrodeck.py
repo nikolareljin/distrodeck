@@ -2594,11 +2594,13 @@ def build_upgrade_restore_args(
 def ubuntu_release_available() -> bool:
     """Return True if do-release-upgrade reports a new release on offer.
 
-    ``do-release-upgrade -c`` exits 0 when an upgrade is available and exits
-    non-zero (typically 1) when none is. Under the default ``Prompt=lts``
-    policy in ``/etc/update-manager/release-upgrades`` that non-zero exit is
-    the normal "you are already on the latest supported release" case, not a
-    failure, so we treat it as "nothing to upgrade" rather than an error.
+    ``do-release-upgrade -c`` reports the result via its exit code. Per the
+    ubuntu-release-upgrader source these are ``RELEASE_AVAILABLE = 0`` and
+    ``NO_RELEASE_AVAILABLE = 1`` (and other non-zero codes for errors), so an
+    upgrade is on offer only when the exit code is 0. Under the default
+    ``Prompt=lts`` policy in ``/etc/update-manager/release-upgrades`` a
+    non-zero exit is the normal "you are already on the latest supported
+    release" case, not a failure, so we treat it as "nothing to upgrade".
     """
     if not cmd_exists("do-release-upgrade"):
         return False
