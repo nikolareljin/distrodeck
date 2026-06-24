@@ -9,11 +9,13 @@ This project follows Keep a Changelog and Semantic Versioning.
 ### Fixed
 - `upgrade` no longer crashes with a Python traceback when `do-release-upgrade`
   exits non-zero. On Ubuntu it now pre-checks for an available release and, when
-  none is on offer (the normal case under the default `Prompt=lts` policy),
-  reports "No new Ubuntu release is available" and exits cleanly instead of
-  running a useless pre-upgrade export. A genuine `do-release-upgrade` failure
-  is now reported as a warning with the kept export path rather than an
-  unhandled exception.
+  none is on offer (exit code 1, the normal case under the default `Prompt=lts`
+  policy), reports "No new Ubuntu release is available" and exits cleanly instead
+  of running a useless pre-upgrade export. An unexpected probe error (any other
+  non-zero exit code, e.g. a transient network failure) is surfaced as a warning
+  and the upgrade is still attempted rather than being masked as "nothing to
+  upgrade". A genuine `do-release-upgrade` failure is reported as a warning with
+  the kept export path rather than an unhandled exception.
 
 ## [0.8.0]
 

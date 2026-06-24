@@ -2591,21 +2591,23 @@ def build_upgrade_restore_args(
     )
 
 
-def ubuntu_release_available() -> bool:
-    """Return True if do-release-upgrade reports a new release on offer.
+# do-release-upgrade -c reports availability via its exit code. Per the
+# ubuntu-release-upgrader source: 0 means a new release is on offer, 1 means
+# none is. Any other non-zero code is an error (transient network failure,
+# unexpected condition) and must not be confused with "nothing to upgrade".
+RELEASE_UPGRADE_AVAILABLE = 0
+RELEASE_UPGRADE_NONE = 1
 
-    ``do-release-upgrade -c`` reports the result via its exit code. Per the
-    ubuntu-release-upgrader source these are ``RELEASE_AVAILABLE = 0`` and
-    ``NO_RELEASE_AVAILABLE = 1`` (and other non-zero codes for errors), so an
-    upgrade is on offer only when the exit code is 0. Under the default
-    ``Prompt=lts`` policy in ``/etc/update-manager/release-upgrades`` a
-    non-zero exit is the normal "you are already on the latest supported
-    release" case, not a failure, so we treat it as "nothing to upgrade".
+
+def check_ubuntu_release_upgrade() -> subprocess.CompletedProcess:
+    """Probe do-release-upgrade for a pending release upgrade.
+
+    Returns the completed process for ``do-release-upgrade -c``. Callers
+    interpret ``returncode`` against ``RELEASE_UPGRADE_AVAILABLE`` (0) and
+    ``RELEASE_UPGRADE_NONE`` (1); any other non-zero code is an error rather
+    than the benign "you are already on the latest supported release" case.
     """
-    if not cmd_exists("do-release-upgrade"):
-        return False
-    result = run(["do-release-upgrade", "-c"], check=False, capture_output=True)
-    return result.returncode == 0
+    return run(["do-release-upgrade", "-c"], check=False, capture_output=True)
 
 
 def run_upgrade(args: argparse.Namespace) -> None:
@@ -2622,7 +2624,8 @@ def run_upgrade(args: argparse.Namespace) -> None:
         # Pre-flight: skip the (potentially large) pre-upgrade export when no
         # new release is on offer, so a benign "nothing to upgrade" does not
         # waste work or, worse, crash with a traceback.
-        if not ubuntu_release_available():
+        check = check_ubuntu_release_upgrade()
+        if check.returncode == RELEASE_UPGRADE_NONE:
             log("No new Ubuntu release is available to upgrade to.")
             log(
                 "If you want a non-LTS or development release, set "
@@ -2631,6 +2634,17 @@ def run_upgrade(args: argparse.Namespace) -> None:
             )
             log_action_end("upgrade", "none")
             return
+        if check.returncode != RELEASE_UPGRADE_AVAILABLE:
+            # An unexpected error from the availability probe (e.g. a transient
+            # network failure) must not be silently reported as "nothing to
+            # upgrade". Warn with the captured output and fall through to the
+            # upgrade attempt, which reports its own failure gracefully.
+            detail = (check.stderr or check.stdout or "").strip()
+            warn(
+                "do-release-upgrade -c exited with status "
+                f"{check.returncode}; proceeding with the upgrade attempt."
+                + (f" Output: {detail}" if detail else "")
+            )
     export_path = Path(default_export_filename())
     log(f"Creating pre-upgrade export at {export_path}")
     export_args = argparse.Namespace(
