@@ -4,6 +4,17 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.1]
+
+### Fixed
+- `upgrade` no longer crashes with a Python traceback when `do-release-upgrade`
+  exits non-zero. On Ubuntu it now pre-checks for an available release and, when
+  none is on offer (the normal case under the default `Prompt=lts` policy),
+  reports "No new Ubuntu release is available" and exits cleanly instead of
+  running a useless pre-upgrade export. A genuine `do-release-upgrade` failure
+  is now reported as a warning with the kept export path rather than an
+  unhandled exception.
+
 ## [0.8.0]
 
 ### Added

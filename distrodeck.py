@@ -22,7 +22,7 @@ from shutil import get_terminal_size
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
@@ -2591,6 +2591,21 @@ def build_upgrade_restore_args(
     )
 
 
+def ubuntu_release_available() -> bool:
+    """Return True if do-release-upgrade reports a new release on offer.
+
+    ``do-release-upgrade -c`` exits 0 when an upgrade is available and exits
+    non-zero (typically 1) when none is. Under the default ``Prompt=lts``
+    policy in ``/etc/update-manager/release-upgrades`` that non-zero exit is
+    the normal "you are already on the latest supported release" case, not a
+    failure, so we treat it as "nothing to upgrade" rather than an error.
+    """
+    if not cmd_exists("do-release-upgrade"):
+        return False
+    result = run(["do-release-upgrade", "-c"], check=False, capture_output=True)
+    return result.returncode == 0
+
+
 def run_upgrade(args: argparse.Namespace) -> None:
     log_action_start("upgrade")
     os_id = get_os_id()
@@ -2599,6 +2614,21 @@ def run_upgrade(args: argparse.Namespace) -> None:
         warn(f"Distro upgrade not implemented for {os_id}")
         log_action_end("upgrade", "unsupported")
         return
+    if os_id == "ubuntu":
+        if not cmd_exists("do-release-upgrade"):
+            fail("do-release-upgrade not available")
+        # Pre-flight: skip the (potentially large) pre-upgrade export when no
+        # new release is on offer, so a benign "nothing to upgrade" does not
+        # waste work or, worse, crash with a traceback.
+        if not ubuntu_release_available():
+            log("No new Ubuntu release is available to upgrade to.")
+            log(
+                "If you want a non-LTS or development release, set "
+                "Prompt=normal in /etc/update-manager/release-upgrades "
+                "(or run 'do-release-upgrade -d')."
+            )
+            log_action_end("upgrade", "none")
+            return
     export_path = Path(default_export_filename())
     log(f"Creating pre-upgrade export at {export_path}")
     export_args = argparse.Namespace(
@@ -2616,12 +2646,19 @@ def run_upgrade(args: argparse.Namespace) -> None:
     export_all(export_args)
 
     if os_id == "ubuntu":
-        if not cmd_exists("do-release-upgrade"):
-            fail("do-release-upgrade not available")
         cmd = ["sudo", "do-release-upgrade"]
         if in_dialog_mode():
             cmd.extend(["-f", "DistUpgradeViewText"])
-        run(cmd)
+        result = run(cmd, check=False)
+        if result.returncode != 0:
+            warn(
+                "do-release-upgrade exited with status "
+                f"{result.returncode}; the release upgrade did not complete. "
+                "The pre-upgrade export was kept at "
+                f"{export_path}."
+            )
+            log_action_end("upgrade", "failed")
+            return
         new_codename = get_codename()
         if old_codename and new_codename and old_codename != new_codename:
             update_apt_sources_codename(old_codename, new_codename)
