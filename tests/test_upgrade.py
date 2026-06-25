@@ -60,12 +60,16 @@ def test_run_upgrade_exits_cleanly_when_no_release(monkeypatch):
     distrodeck.run_upgrade(SimpleNamespace())
 
 
-def test_run_upgrade_proceeds_on_unexpected_check_error(monkeypatch):
+def test_run_upgrade_proceeds_on_unexpected_check_error(monkeypatch, tmp_path):
     """A non-1 error from the probe must not be reported as 'nothing to upgrade'."""
     monkeypatch.setattr(distrodeck, "get_os_id", lambda: "ubuntu")
     monkeypatch.setattr(distrodeck, "get_codename", lambda: "noble")
     monkeypatch.setattr(distrodeck, "cmd_exists", lambda name: True)
     monkeypatch.setattr(distrodeck, "in_dialog_mode", lambda: True)
+    # Keep the test hermetic: do not touch the real export directory in HOME.
+    monkeypatch.setattr(
+        distrodeck, "default_export_filename", lambda: str(tmp_path / "export.txt")
+    )
     # Exit code 2 == unexpected error (e.g. transient failure), not "no release".
     monkeypatch.setattr(
         distrodeck,
@@ -97,7 +101,7 @@ def test_run_upgrade_proceeds_on_unexpected_check_error(monkeypatch):
     assert calls and calls[0][:2] == ["sudo", "do-release-upgrade"]
 
 
-def test_run_upgrade_does_not_raise_on_nonzero_upgrade(monkeypatch):
+def test_run_upgrade_does_not_raise_on_nonzero_upgrade(monkeypatch, tmp_path):
     monkeypatch.setattr(distrodeck, "get_os_id", lambda: "ubuntu")
     monkeypatch.setattr(distrodeck, "get_codename", lambda: "noble")
     monkeypatch.setattr(distrodeck, "cmd_exists", lambda name: True)
@@ -107,6 +111,10 @@ def test_run_upgrade_does_not_raise_on_nonzero_upgrade(monkeypatch):
     )
     monkeypatch.setattr(distrodeck, "export_all", lambda args: None)
     monkeypatch.setattr(distrodeck, "in_dialog_mode", lambda: True)
+    # Keep the test hermetic: do not touch the real export directory in HOME.
+    monkeypatch.setattr(
+        distrodeck, "default_export_filename", lambda: str(tmp_path / "export.txt")
+    )
 
     calls = []
 
