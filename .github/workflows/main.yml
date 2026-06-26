@@ -5,6 +5,14 @@ on:
 
 jobs:
   deb:
+    # deb-build@production declares `permissions: contents: write` to upload
+    # the built .deb to GitHub Releases. A called reusable workflow cannot be
+    # granted more permission than the caller, and this repo's default workflow
+    # token is read-only, so without this grant the run is rejected at startup
+    # (startup_failure). Scoped to this job only (least privilege) since the
+    # other jobs' reusable workflows don't request write.
+    permissions:
+      contents: write
     uses: nikolareljin/ci-helpers/.github/workflows/deb-build.yml@production
     with:
       working_directory: "."
