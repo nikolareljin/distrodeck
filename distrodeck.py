@@ -4377,6 +4377,23 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         " else echo \"$safe_url\"; fi;"
         " }; f"
     )
+    # Lists the three most recently updated branches and the three most recent
+    # tags. Repo-local and offline: reads refs only, never contacts a remote.
+    _dlr_cmd = (
+        "!f() {"
+        " if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1;"
+        " then echo 'Not a git repository (or any of the parent directories).' >&2; return 1; fi;"
+        " branches=$(git for-each-ref --sort=-committerdate --count=3"
+        " --format='  %(refname:short)  %(committerdate:short)  %(subject)' refs/heads);"
+        " tags=$(git for-each-ref --sort=-creatordate --count=3"
+        " --format='  %(refname:short)  %(creatordate:short)' refs/tags);"
+        " echo 'Branches:';"
+        " if [ -n \"$branches\" ]; then printf '%s\\n' \"$branches\"; else echo '  (none)'; fi;"
+        " echo;"
+        " echo 'Tags:';"
+        " if [ -n \"$tags\" ]; then printf '%s\\n' \"$tags\"; else echo '  (none)'; fi;"
+        " }; f"
+    )
     # fmt: on
     entries = [
         ("df", "fetch", "fetch"),
@@ -4407,6 +4424,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dco", "checkout", "checkout"),
         ("dcb", "checkout -b", "create branch"),
         ("do", _do_cmd, "open remote origin URL in browser"),
+        ("dlr", _dlr_cmd, "latest 3 branches and latest 3 tags"),
     ]
     alias_names = [name for name, _, _ in entries] + ["dhelp"]
     alias_pattern = "|".join(re.escape(name) for name in alias_names)
