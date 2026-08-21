@@ -75,6 +75,61 @@ Options:
 - `--cleanup-extras`: remove snap/flatpak extras not present in the export
 - `--apply-config-files`: restore exported config files to their paths
 
+### diff
+
+Compare an export file against the current system without changing anything.
+Read-only: it never installs, removes, or touches package sources.
+
+```
+distrodeck diff --input backup.txt
+distrodeck diff --input backup.txt --detailed
+distrodeck diff --input backup.txt --sections apt_manual,snap --json
+```
+
+For each section it reports:
+- `missing`: present in the export but not installed on this system
+- `extra`: installed on this system but absent from the export
+
+Options:
+- `--input FILE`: export file to compare (required)
+- `--sections`: comma-separated sections to compare (default: all comparable
+  sections). Valid values: `apt_manual`, `apt_hold`, `ppas`, `apt_sources`,
+  `snap`, `flatpak`, `pacman`, `dnf`, `zypper`, `appimage`
+- `--detailed`: list the differing entries instead of only counts
+- `--json`: emit a machine-readable report (schema version 1)
+- `--exit-code`: exit 1 when differences are found, 0 when in sync
+- `--appimage-dirs DIRS`: colon-separated AppImage search dirs
+
+Output is sorted, so repeated runs against unchanged inputs produce identical
+output and can be diffed or checksummed. Snap and flatpak entries are compared
+on the package name alone, so a channel or remote change is not reported as an
+add plus a remove.
+
+Without `--exit-code`, the command exits 0 whether or not differences exist;
+`--exit-code` is the opt-in for CI-style checks:
+
+```
+distrodeck diff --input backup.txt --exit-code || echo "system has drifted"
+```
+
+JSON shape:
+
+```json
+{
+  "schema": 1,
+  "file": "backup.txt",
+  "distro_id": "ubuntu",
+  "codename": "noble",
+  "sections": {
+    "apt_manual": { "missing": ["curl"], "extra": ["vim"] }
+  },
+  "summary": { "missing": 1, "extra": 1 }
+}
+```
+
+Config snapshots, service state, and config files are not comparable as lists
+and are therefore outside the scope of `diff`.
+
 ### update
 
 Update and upgrade installed packages across apt/nala, snap, and flatpak.
@@ -221,9 +276,32 @@ distrodeck net-tools
 Install optional developer tools via a TUI checklist. Tools are organized by category.
 
 ```
-distrodeck install-tools        # opens TUI checklist
-distrodeck install-tools --all  # installs the default non-interactive tool set
+distrodeck install-tools                      # opens TUI checklist
+distrodeck install-tools --all                # installs the default non-interactive tool set
+distrodeck install-tools --tools bat,eza,gh   # installs only these, no checklist
+distrodeck install-tools --tools-file tools.txt
+distrodeck install-tools --list-tools         # prints the catalog, one per line
 ```
+
+Options:
+- `--all`: install every tool without showing the checklist
+- `--tools LIST`: install only `LIST` (comma or space separated; repeatable)
+- `--tools-file PATH`: install the tools listed in `PATH`, one per line; blank
+  lines and `#` comments are ignored, and `-` reads from stdin
+- `--reconcile`: with `--tools`, also uninstall previously tracked tools that
+  are not in the requested set
+- `--list-tools`: print the tool catalog and exit
+
+`--tools` and `--tools-file` are the noninteractive entry points for scripts and
+external integrators. Unknown tool names are rejected with exit code 2 *before*
+anything is installed, so a typo cannot half-configure a machine. Tools not in
+the requested set are left alone unless `--reconcile` is passed: removing
+software the caller never mentioned is not a safe default. Tracked state in
+`~/.local/state/distrodeck/installed-tools.txt` is updated exactly as it is in
+the interactive flow.
+
+Exit codes: `0` success, `2` invalid usage (unknown option, unknown tool,
+unreadable tools file).
 
 `--all` skips tools that require downloaded installer confirmation or hosted account CLIs. To include those tools, run from an interactive terminal with `DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true`. The older `DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS=true` name is also accepted for compatibility.
 
@@ -244,10 +322,10 @@ distrodeck install-tools --all  # installs the default non-interactive tool set
 | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
 | Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
 | AI | aider, antigravity, claude-code, codex, copilot, cursor, gemini, kiro, ollama |
-| Languages | go, java, node (20 LTS), php, ruby, rust |
+| Languages | go, java, node (24 LTS + nvm), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
-| Apps | gimp, image-view, isoforge, nemo, streamcontroller |
+| Apps | gimp, image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 **Notable tools:**
 - `bfg` - BFG Repo-Cleaner for removing large files from git history
@@ -259,6 +337,16 @@ distrodeck install-tools --all  # installs the default non-interactive tool set
 - `gimp` - GNU Image Manipulation Program with web export plugins
 - `wine` - Windows compatibility layer for running Windows applications
 - `tor` - Anonymous communication network with Tor Browser
+- `rustdesk` - Open-source remote desktop and remote support (deb/rpm from
+  upstream releases, Flatpak fallback)
+- `node` - Installs Node 24 from the system/NodeSource repository *and* nvm
+  (cloned at a pinned tag) with Node 24 and 22 available. `nvm use 22` and
+  `nvm use 24` switch between them; 24 is the default alias. The system package
+  keeps Node available to `sudo`, cron, and package dependencies, which never
+  see `~/.nvm`. Open a new shell after installing before using nvm.
+  Uninstalling `node` removes the system package and the shell wiring but
+  leaves `~/.nvm` in place, since it holds versions and global packages
+  distrodeck did not create.
 
 ## Configuration
 
@@ -319,6 +407,7 @@ Recommended aliases (all prefixed with `d`):
 - `git dds` -> diff staged
 - `git dco` -> checkout
 - `git dcb` -> create branch
+- `git dlr` -> latest 3 branches and latest 3 tags (newest first)
 - `git dhelp` -> list distrodeck aliases
 
 Example prompt segment:

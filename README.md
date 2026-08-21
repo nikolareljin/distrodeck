@@ -11,6 +11,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 
 - Export installed packages and package sources (including PPAs)
 - Import and reinstall from the export file
+- Diff an export against the current system before importing (text or JSON)
 - Import makes an automatic backup and offers a revert prompt on failures
 - Update/upgrade system packages (uses Nala)
 - Trigger distro upgrades on Ubuntu
@@ -18,7 +19,7 @@ Primary target: Ubuntu. Should work on other Debian-based distros with apt, and 
 - Repair apt repo issues (disable broken sources, refresh keys)
 - Run automation via `ansible-pull` from the TUI
 - Track snaps, flatpaks, and AppImages
-- Install 56+ developer tools via TUI with uninstall support
+- Install 85 developer tools via TUI, or noninteractively with `--tools`, with uninstall support
 - Includes an `About` entry in the TUI with GitHub and LinkedIn profile links
 
 ## Install
@@ -54,6 +55,12 @@ distrodeck export --output backup.txt --include-config-files
 
 Default exports are saved under `~/.local/state/distrodeck/exports` (or
 `$XDG_STATE_HOME/distrodeck/exports` when set).
+
+distrodeck diff --input backup.txt
+
+distrodeck diff --input backup.txt --detailed
+
+distrodeck diff --input backup.txt --json
 
 distrodeck import --input backup.txt --apply --update-sources
 
@@ -116,6 +123,7 @@ Recommended git aliases (prefixed with `d`):
 - `git dds` -> diff staged
 - `git dco` -> checkout
 - `git dcb` -> create branch
+- `git dlr` -> latest 3 branches and latest 3 tags (newest first)
 - `git dhelp` -> list distrodeck aliases
 
 distrodeck sysinfo
@@ -128,6 +136,12 @@ distrodeck net-tools
 distrodeck  # use the TUI "Automate" action
 
 distrodeck install-tools --all
+
+distrodeck install-tools --tools bat,eza,gh
+
+distrodeck install-tools --tools-file tools.txt
+
+distrodeck install-tools --list-tools
 ```
 
 ### Install-tools categories
@@ -142,12 +156,16 @@ The `install-tools` command offers tools organized by category:
 | `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
 | `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
 | `[AI]` | aider, antigravity, codex, copilot, claude-code, gemini, ollama, cursor, kiro |
-| `[Lang]` | go, java, node (20 LTS), php, ruby, rust |
+| `[Lang]` | go, java, node (24 LTS + nvm), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
-| `[App]` | gimp, nemo, streamcontroller |
+| `[App]` | gimp, nemo, rustdesk, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
+
+For scripts and external integrators, `--tools LIST` and `--tools-file PATH` install a named set without opening the checklist. Unknown tool names exit 2 before anything is installed, and tools outside the requested set are left alone unless `--reconcile` is passed. `--list-tools` prints the catalog.
+
+Selecting `node` installs Node 24 from the system repository and nvm (Node 24 and 22, default 24), so versions can be switched per shell with `nvm use 22`.
 
 `distrodeck install-tools --all` installs the default non-interactive tool set. Tools that require downloaded installer confirmation or hosted account CLIs are skipped unless you run from an interactive terminal with `DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true`. The older `DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS=true` name is also accepted for compatibility.
 
