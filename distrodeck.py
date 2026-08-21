@@ -3977,10 +3977,25 @@ def run_install_tools(args: argparse.Namespace) -> None:
         locations = ", ".join(str(path) for path in script_candidates)
         fail(f"Installer script not found. Checked: {locations}")
     cmd = [str(script)]
-    if args.all:
+    if getattr(args, "list_tools", False):
+        cmd.append("--list-tools")
+    elif args.all:
         cmd.append("--all")
+    else:
+        for value in getattr(args, "tools", None) or []:
+            cmd.extend(["--tools", value])
+        tools_file = getattr(args, "tools_file", None)
+        if tools_file:
+            cmd.extend(["--tools-file", tools_file])
+        if getattr(args, "reconcile", False):
+            cmd.append("--reconcile")
     # Use check=False to allow partial failures (script reports them)
     result = run(cmd, check=False)
+    if result.returncode == 2:
+        # Usage error (unknown tool/option): propagate so callers can tell a
+        # bad request apart from a partially failed install.
+        log_action_end("install-tools")
+        sys.exit(2)
     if result.returncode != 0:
         log("Some tools failed to install/uninstall. See warnings above.")
     log_action_end("install-tools")
@@ -5459,6 +5474,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--all",
         action="store_true",
         help="Install all tools without showing the TUI",
+    )
+    install_cmd.add_argument(
+        "--tools",
+        action="append",
+        metavar="LIST",
+        help=(
+            "Install only these tools without showing the TUI "
+            "(comma or space separated; repeatable)"
+        ),
+    )
+    install_cmd.add_argument(
+        "--tools-file",
+        metavar="PATH",
+        help="Install only the tools listed in PATH, one per line ('-' for stdin)",
+    )
+    install_cmd.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="With --tools, also uninstall tracked tools outside the requested set",
+    )
+    install_cmd.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="Print the tool catalog and exit",
     )
     install_cmd.set_defaults(func=run_install_tools)
 
