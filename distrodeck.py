@@ -4464,10 +4464,10 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
 
 
 GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str, str], ...] = (
-    ("df", "git df [<fetch-options>]", "Fetch updates from the current remote.", "Git remote access", "git df --prune"),
-    ("dp", "git dp [<pull-options>]", "Pull the current branch from its upstream.", "An upstream branch", "git dp --ff-only"),
-    ("dfp", "git dfp", "Fetch all remotes, then pull all tracked branches.", "Git remote access", "git dfp"),
-    ("dl", "git dl [<log-options>]", "Show decorated graph history for all refs.", "None", "git dl -20"),
+    ("df", "git df [<fetch-options>]", "Fetch updates from the current remote.", "Inside a Git repository; Git remote access", "git df --prune"),
+    ("dp", "git dp [<pull-options>]", "Pull the current branch from its upstream.", "Inside a Git repository; an upstream branch", "git dp --ff-only"),
+    ("dfp", "git dfp", "Fetch all remotes, then pull all tracked branches.", "Inside a Git repository; Git remote access", "git dfp"),
+    ("dl", "git dl [<log-options>]", "Show decorated graph history for all refs.", "Inside a Git repository", "git dl -20"),
     ("dpr", "git dpr", "Create a pull request with values inferred by gh.", "GitHub CLI (gh)", "git dpr"),
     ("dis", "git dis", "List repository issues with number, title, and state.", "GitHub CLI (gh)", "git dis"),
     ("dprs", "git dprs", "List repository pull requests with number, title, and state.", "GitHub CLI (gh)", "git dprs"),
@@ -4491,8 +4491,8 @@ GIT_ALIAS_HELP_INVOCATIONS: Dict[str, str] = {
     "dfp": "git fetch --all && git pull --all",
     "dl": "git log --graph --decorate --oneline --all --color=always",
     "dpr": "gh pr create --fill",
-    "dis": "gh issue list --state all --limit 1000",
-    "dprs": "gh pr list --state all --limit 1000",
+    "dis": "gh issue list --state all --limit 1000 --json number,title,state --template '<tablerow template>'",
+    "dprs": "gh pr list --state all --limit 1000 --json number,title,state --template '<tablerow template>'",
     "dup": "git push -u origin <current-branch>",
     "ds": "git status -sb",
     "db": "git branch -vv",
