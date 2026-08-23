@@ -42,7 +42,7 @@ def test_tui_title_displays_version(monkeypatch):
 
     distrodeck.run_tui()
 
-    assert titles == [f"Distrodeck v{distrodeck.VERSION}"]
+    assert titles == [f"Distrodeck ({distrodeck.VERSION})"]
 
 
 

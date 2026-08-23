@@ -5042,7 +5042,7 @@ def run_tui() -> None:
     ]
     while True:
         clear_dialog_before_run = False
-        choice = dialog_menu(f"Distrodeck v{VERSION}", "Select an action:", actions)
+        choice = dialog_menu(f"Distrodeck ({VERSION})", "Select an action:", actions)
         if not choice or choice == "quit":
             if cmd_exists("dialog"):
                 run(["dialog", "--clear"], check=False)
