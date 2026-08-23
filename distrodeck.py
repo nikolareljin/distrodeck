@@ -2700,6 +2700,10 @@ def self_update_method() -> Optional[str]:
             continue
         if probe.returncode == 0:
             key = backend.get(manager, manager)
+            if key == "rpm":
+                preferred = "zypper" if get_os_id() in {"opensuse", "opensuse-tumbleweed", "sles"} else "dnf"
+                if manager != preferred:
+                    continue
             if key not in methods or manager == "nala":
                 methods[key] = manager
     if source_checkout_root() is not None:
@@ -2725,6 +2729,8 @@ def source_install_prefix() -> Path:
     configured_prefix = os.environ.get("PREFIX")
     if configured_prefix:
         return Path(configured_prefix).expanduser()
+    if SCRIPT_FILE.parent.name == "bin":
+        return SCRIPT_FILE.parent.parent
     installed = shutil.which("distrodeck")
     if installed:
         installed_path = Path(installed)
