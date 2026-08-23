@@ -479,7 +479,7 @@ wire_nvm_profile() {
   {
     echo ""
     echo "$NVM_PROFILE_BEGIN"
-    echo "export NVM_DIR=\"\$HOME/.nvm\""
+    printf 'export NVM_DIR=%q\n' "$NVM_INSTALL_DIR"
     echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
     echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"'
     echo "$NVM_PROFILE_END"
@@ -1190,7 +1190,7 @@ install_rustdesk() {
             sudo apt-get -f install -y || true
             ;;
           dnf) sudo dnf install -y "$pkg_path" || true;;
-          zypper) sudo zypper --non-interactive install --allow-unsigned-rpm "$pkg_path" || true;;
+          zypper) sudo zypper --non-interactive install "$pkg_path" || true;;
           pacman) sudo pacman -U --noconfirm "$pkg_path" || true;;
         esac
         rm -rf "$tmp_dir"
@@ -2134,7 +2134,7 @@ is_installed_tool() {
     composer) command -v composer >/dev/null 2>&1;;
     micro) command -v micro >/dev/null 2>&1;;
     neovim) command -v nvim >/dev/null 2>&1;;
-    node) command -v node >/dev/null 2>&1 || command -v npm >/dev/null 2>&1 || [[ -s "$NVM_INSTALL_DIR/nvm.sh" ]];;
+    node) command -v node >/dev/null 2>&1 || command -v npm >/dev/null 2>&1;;
     rust) command -v rustc >/dev/null 2>&1 || command -v cargo >/dev/null 2>&1;;
     dialog) command -v dialog >/dev/null 2>&1;;
     docker) command -v docker >/dev/null 2>&1;;
@@ -2313,12 +2313,6 @@ collect_tools_file() {
 }
 
 main() {
-  local mgr
-  mgr="$(detect_pkg_mgr)"
-  if [[ "$mgr" == "unknown" ]]; then
-    log_error "No supported package manager found."
-    exit 1
-  fi
 
   local selected=""
   local all=false
@@ -2371,6 +2365,15 @@ main() {
     log_error "--reconcile only applies to --tools/--tools-file runs."
     exit 2
   fi
+  # Informational and validation-only modes above deliberately work without a
+  # package manager. Detect one only once an install or TUI run is required.
+  local mgr
+  mgr="$(detect_pkg_mgr)"
+  if [[ "$mgr" == "unknown" ]]; then
+    log_error "No supported package manager found."
+    exit 1
+  fi
+
 
   # Load previously tracked tools (installed via distrodeck)
   declare -A tracked=()

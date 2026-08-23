@@ -70,6 +70,19 @@ assert_not_contains() {
 
 assert_exit 0 "--list-tools exits 0" "$INSTALLER" --list-tools
 assert_exit 0 "--help exits 0" "$INSTALLER" --help
+# These modes only parse local data and must stay available on unsupported
+# systems, where package-manager detection would otherwise fail first.
+assert_exit 0 "--help works without a package manager" bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo unknown; }
+  main --help
+' _ "$INSTALLER"
+assert_exit 0 "--list-tools works without a package manager" bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo unknown; }
+  main --list-tools
+' _ "$INSTALLER"
+
 assert_exit 2 "unknown tool is rejected" "$INSTALLER" --tools bat,definitely-not-a-tool
 assert_exit 2 "--all with --tools is rejected" "$INSTALLER" --all --tools bat
 assert_exit 2 "--reconcile without --tools is rejected" "$INSTALLER" --reconcile
@@ -155,6 +168,24 @@ else
   fail "unwire_nvm_profile preserves unrelated profile content" "original line was removed"
 fi
 rm -f "$profile"
+# A custom NVM_DIR must be preserved in the profile, and nvm itself must not
+# count as Node after distrodeck removes the system Node package.
+custom_nvm_dir="$(mktemp -d)"
+NVM_INSTALL_DIR="$custom_nvm_dir"
+profile="$(mktemp)"
+wire_nvm_profile "$profile" >/dev/null 2>&1
+profile_contents="$(<"$profile")"
+assert_contains "$profile_contents" "export NVM_DIR=$custom_nvm_dir" "wire_nvm_profile preserves custom NVM_DIR"
+rm -f "$profile"
+
+touch "$custom_nvm_dir/nvm.sh"
+if (PATH=""; is_installed_tool node); then
+  fail "nvm checkout alone does not count as Node installed"
+else
+  pass "nvm checkout alone does not count as Node installed"
+fi
+rm -rf "$custom_nvm_dir"
+
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
