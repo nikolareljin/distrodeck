@@ -191,6 +191,13 @@ rustdesk_release_version="${rustdesk_release_tag#v}"
 rustdesk_release_url="https://github.com/rustdesk/rustdesk/releases/download/${rustdesk_release_tag}/rustdesk-${rustdesk_release_version}-x86_64.deb"
 assert_contains "$rustdesk_release_url" "/download/v1.4.9/" "RustDesk release URL preserves tag prefix"
 assert_contains "$rustdesk_release_url" "rustdesk-1.4.9-x86_64.deb" "RustDesk artifact name omits tag prefix"
+download_file() { return 1; }
+if [[ "$(rustdesk_latest_tag)" == "v1.4.9" ]]; then
+  pass "RustDesk fallback preserves release tag prefix"
+else
+  fail "RustDesk fallback preserves release tag prefix"
+fi
+
 
 wire_nvm_profile "$profile" >/dev/null 2>&1
 profile_contents="$(<"$profile")"

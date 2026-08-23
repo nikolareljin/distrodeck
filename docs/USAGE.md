@@ -118,7 +118,8 @@ JSON shape:
 {
   "schema": 1,
   "file": "backup.txt",
-  "distro_id": "ubuntu",
+  "export_distro_id": "ubuntu",
+  "current_distro_id": "ubuntu",
   "codename": "noble",
   "sections": {
     "apt_manual": { "missing": ["curl"], "extra": ["vim"] }
