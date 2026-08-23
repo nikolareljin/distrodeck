@@ -27,6 +27,24 @@ def test_cleanup_kernels_accepts_keep_kernels_alias():
 
     assert args.keep == 2
 
+def test_cli_help_displays_version():
+    assert f"Version: {distrodeck.VERSION}" in distrodeck.build_parser().format_help()
+
+def test_tui_title_displays_version(monkeypatch):
+    titles = []
+    monkeypatch.setattr(distrodeck, "require_dialog", lambda: None)
+    monkeypatch.setattr(distrodeck, "cmd_exists", lambda _name: False)
+    monkeypatch.setattr(
+        distrodeck,
+        "dialog_menu",
+        lambda title, _prompt, _items: titles.append(title) or None,
+    )
+
+    distrodeck.run_tui()
+
+    assert titles == [f"Distrodeck v{distrodeck.VERSION}"]
+
+
 
 def test_cleanup_kernels_command_does_not_exit_for_unsupported_system(monkeypatch):
     calls = []

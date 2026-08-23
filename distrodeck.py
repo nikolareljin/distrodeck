@@ -5042,7 +5042,7 @@ def run_tui() -> None:
     ]
     while True:
         clear_dialog_before_run = False
-        choice = dialog_menu("Distrodeck", "Select an action:", actions)
+        choice = dialog_menu(f"Distrodeck v{VERSION}", "Select an action:", actions)
         if not choice or choice == "quit":
             if cmd_exists("dialog"):
                 run(["dialog", "--clear"], check=False)
@@ -5445,6 +5445,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="distrodeck",
         description="Export and restore packages before distro upgrades.",
+        epilog=f"Version: {VERSION}",
     )
     parser.add_argument(
         "-v",
@@ -5452,7 +5453,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable verbose output where applicable",
     )
-    parser.add_argument("--version", action="version", version=VERSION)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     export_cmd = sub.add_parser("export", help="Export installed packages and sources")
