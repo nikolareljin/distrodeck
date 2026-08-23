@@ -52,4 +52,4 @@ def test_git_dhelp_command_detects_terminal_and_no_color():
 
     assert "[ -t 1 ]" in command
     assert "${NO_COLOR:-}" in command
-    assert "DHELP_ROWS" in command
+    assert "\n" not in command

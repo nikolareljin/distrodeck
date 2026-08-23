@@ -4463,7 +4463,7 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
     log_action_end("git-status unset")
 
 
-GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str], ...] = (
+GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str, str], ...] = (
     ("df", "git df [<fetch-options>]", "Fetch updates from the current remote.", "Git remote access", "git df --prune"),
     ("dp", "git dp [<pull-options>]", "Pull the current branch from its upstream.", "An upstream branch", "git dp --ff-only"),
     ("dfp", "git dfp", "Fetch all remotes, then pull all tracked branches.", "Git remote access", "git dfp"),
@@ -4486,24 +4486,21 @@ GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str], ...] = (
 
 
 def git_alias_help_command() -> str:
-    rows = "\n".join("|".join(row) for row in GIT_ALIAS_HELP_ROWS)
-    return (
+    command = (
         "!f() {"
         " if [ -t 1 ] && [ -z \"${NO_COLOR:-}\" ]; then"
         " title=$(printf '\\033[1;36m'); label=$(printf '\\033[1;33m'); reset=$(printf '\\033[0m');"
         " else title=''; label=''; reset=''; fi;"
         " printf '%sDistrodeck Git Help%s\\n' \"$title\" \"$reset\";"
-        " while IFS='|' read -r name usage description requirement example; do"
-        " [ -n \"$name\" ] || continue;"
-        " printf '\\n%s%s%s\\n' \"$title\" \"$usage\" \"$reset\";"
-        " printf '  %sWhat it does:%s %s\\n' \"$label\" \"$reset\" \"$description\";"
-        " printf '  %sRequires:%s %s\\n' \"$label\" \"$reset\" \"$requirement\";"
-        " printf '  %sExample:%s %s\\n' \"$label\" \"$reset\" \"$example\";"
-        " done <<'DHELP_ROWS'\n"
-        + rows
-        + "\nDHELP_ROWS\n"
-        " }; f"
     )
+    for _, usage, description, requirement, example in GIT_ALIAS_HELP_ROWS:
+        command += (
+            f" printf '\\n%s%s%s\\n' \"$title\" {shlex.quote(usage)} \"$reset\";"
+            f" printf '  %sWhat it does:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(description)};"
+            f" printf '  %sRequires:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(requirement)};"
+            f" printf '  %sExample:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(example)};"
+        )
+    return command + " }; f"
 
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
     # Tuple format: (alias_name, git_command, human_readable_description)
@@ -4578,8 +4575,6 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("do", _do_cmd, "open remote origin URL in browser"),
         ("dlr", _dlr_cmd, "latest 3 branches and latest 3 tags"),
     ]
-    alias_names = [name for name, _, _ in entries] + ["dhelp"]
-    alias_pattern = "|".join(re.escape(name) for name in alias_names)
     entries.append(
         (
             "dhelp",
