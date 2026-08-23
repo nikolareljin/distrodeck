@@ -2701,7 +2701,7 @@ def self_update_method() -> Optional[str]:
         if probe.returncode == 0:
             key = backend.get(manager, manager)
             if key == "rpm":
-                preferred = "zypper" if get_os_id() in {"opensuse", "opensuse-tumbleweed", "sles"} else "dnf"
+                preferred = "zypper" if get_os_id() in {"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"} else "dnf"
                 if manager != preferred:
                     continue
             if key not in methods or manager == "nala":
@@ -2744,7 +2744,9 @@ def source_self_update_commands(root: Path, prefix: Path) -> List[List[str]]:
         ["git", "-C", str(root), "pull", "--ff-only"],
         ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
         [str(root / "build")],
-        ["sudo", "env", f"PREFIX={prefix}", str(root / "install")],
+        (["env", f"PREFIX={prefix}", str(root / "install")]
+         if str(prefix).startswith(str(Path.home()))
+         else ["sudo", "env", f"PREFIX={prefix}", str(root / "install")]),
     ]
 
 def run_self_update(_: argparse.Namespace) -> bool:
@@ -2787,6 +2789,12 @@ def run_self_update(_: argparse.Namespace) -> bool:
                 warn(f"Self-update failed: {' '.join(command)}")
                 log_action_end("self-update", "failed")
                 return False
+    elif method in {"nala", "apt-get"} and run(
+        ["sudo", method, "update"], check=False
+    ).returncode != 0:
+        warn(f"Self-update via {method} failed while refreshing package metadata.")
+        log_action_end("self-update", "failed")
+        return False
     elif run(self_update_command(method), check=False).returncode != 0:
         warn(f"Self-update via {method} failed.")
         log_action_end("self-update", "failed")

@@ -140,7 +140,7 @@ distrodeck self-update
 distrodeck self-upgrade
 ```
 
-Package-managed installs use their native updater and require sudo except Homebrew. Source checkouts must be clean and fast-forwardable; distrodeck refreshes recursive submodules, builds, and reinstalls with the detected prefix (or `PREFIX` when set). A dirty or non-fast-forwardable checkout is refused without installation.
+Package-managed installs use their native updater and require sudo except Homebrew. Source checkouts must be clean and reinstall with sudo unless the detected prefix is under the current home directory. and fast-forwardable; distrodeck refreshes recursive submodules, builds, and reinstalls with the detected prefix (or `PREFIX` when set). A dirty or non-fast-forwardable checkout is refused without installation.
 
 ### update
 
