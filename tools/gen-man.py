@@ -20,9 +20,12 @@ def parse_commands(help_text: str) -> List[Tuple[str, str]]:
             continue
         if in_section and not line.strip():
             break
-        if in_section and (
-            not line.startswith("    ") or line.startswith("                        ")
-        ):
+        if in_section and line.startswith("                        "):
+            if commands:
+                name, desc = commands[-1]
+                commands[-1] = (name, f"{desc} {line.strip()}".strip())
+            continue
+        if in_section and not line.startswith("    "):
             continue
         if in_section:
             parts = line.strip().split(None, 1)

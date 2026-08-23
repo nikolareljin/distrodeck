@@ -2682,6 +2682,8 @@ def self_update_method() -> Optional[str]:
         if probe_command is None or not cmd_exists(probe_command[0]):
             continue
         probe = run(probe_command, check=False, capture_output=True)
+        if manager in {"nala", "apt-get"} and (probe.stdout or "").strip() != "installed":
+            continue
         if probe.returncode == 0:
             return manager
     if (SCRIPT_FILE.parent / ".git").is_dir():
