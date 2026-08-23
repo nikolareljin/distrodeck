@@ -2674,7 +2674,20 @@ def self_update_probe_command(manager: str, version: bool = False) -> Optional[L
     return [part for part in commands[manager] if part]
 
 
+def source_checkout_root() -> Optional[Path]:
+    direct = SCRIPT_FILE.parent
+    if (direct / ".git").exists():
+        return direct
+    source_root_file = (runtime_share_root or SCRIPT_FILE.parent.parent / "share" / "distrodeck") / "SOURCE_ROOT"
+    try:
+        source_root = Path(source_root_file.read_text(encoding="utf-8").strip())
+    except OSError:
+        return None
+    return source_root if (source_root / ".git").exists() else None
+
+
 def self_update_method() -> Optional[str]:
+    methods = []
     for manager in SELF_UPDATE_MANAGERS:
         if not cmd_exists(manager):
             continue
@@ -2685,10 +2698,12 @@ def self_update_method() -> Optional[str]:
         if manager in {"nala", "apt-get"} and (probe.stdout or "").strip() != "installed":
             continue
         if probe.returncode == 0:
-            return manager
-    if (SCRIPT_FILE.parent / ".git").is_dir():
-        return "source"
-    return None
+            methods.append(manager)
+    if source_checkout_root() is not None:
+        methods.append("source")
+    if len(methods) != 1:
+        return None
+    return methods[0]
 
 
 def self_update_command(method: str) -> List[str]:
@@ -2739,7 +2754,11 @@ def run_self_update(_: argparse.Namespace) -> bool:
         return False
     log(f"Updating distrodeck via {method} (current version: {before})")
     if method == "source":
-        root = SCRIPT_FILE.parent
+        root = source_checkout_root()
+        if root is None:
+            warn("Source checkout location is unavailable; refusing self-update.")
+            log_action_end("self-update", "unsupported")
+            return False
         status = run(["git", "-C", str(root), "status", "--porcelain"], check=False, capture_output=True)
         if status.returncode != 0 or (status.stdout or "").strip():
             warn("Source checkout is dirty or unavailable; refusing self-update.")
@@ -5372,7 +5391,9 @@ def run_tui() -> None:
             run_network_tools_tui()
             continue
         elif choice == "self-update":
-            run_self_update(argparse.Namespace())
+            run(["dialog", "--clear"], check=False)
+            succeeded = run_self_update(argparse.Namespace())
+            dialog_msgbox("Self-update", "Completed." if succeeded else "Did not complete; see the log above.")
             continue
         elif choice == "config-edit":
             run_config_edit_tui()

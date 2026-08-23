@@ -73,6 +73,7 @@ install -m 755 "${BUILD_DIR}/bin/distrodeck"    "${PREFIX_REAL}/bin/distrodeck"
 install -m 755 "${BUILD_DIR}/bin/distrodeck.py" "${PREFIX_REAL}/bin/distrodeck.py"
 
 install -d "${PREFIX_REAL}/share/distrodeck"
+printf "%s\n" "$(pwd -P)" > "${PREFIX_REAL}/share/distrodeck/SOURCE_ROOT"
 install -m 644 "${BUILD_DIR}/share/distrodeck/VERSION" "${PREFIX_REAL}/share/distrodeck/VERSION"
 
 install -d "${PREFIX_REAL}/share/distrodeck/scripts"

@@ -35,6 +35,7 @@ def test_source_self_update_commands_preserve_prefix():
 def test_self_update_refuses_dirty_source_checkout(monkeypatch, tmp_path):
     root = tmp_path / "source"
     root.mkdir()
+    (root / ".git").mkdir()
     monkeypatch.setattr(distrodeck, "SCRIPT_FILE", root / "distrodeck.py")
     monkeypatch.setattr(distrodeck, "self_update_method", lambda: "source")
     calls = []
