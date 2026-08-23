@@ -48,3 +48,23 @@ def test_self_update_refuses_dirty_source_checkout(monkeypatch, tmp_path):
     distrodeck.run_self_update(SimpleNamespace())
 
     assert calls == [["git", "-C", str(root), "status", "--porcelain"]]
+
+
+def test_self_update_refuses_non_fast_forward_source_checkout(monkeypatch, tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / ".git").mkdir()
+    monkeypatch.setattr(distrodeck, "SCRIPT_FILE", root / "distrodeck.py")
+    monkeypatch.setattr(distrodeck, "self_update_method", lambda: "source")
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0 if command[-1] == "--porcelain" else 1, stdout="")
+
+    monkeypatch.setattr(distrodeck, "run", fake_run)
+    assert distrodeck.run_self_update(SimpleNamespace()) is False
+    assert calls == [
+        ["git", "-C", str(root), "status", "--porcelain"],
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", "@{u}"],
+    ]

@@ -2686,6 +2686,23 @@ def source_checkout_root() -> Optional[Path]:
     return source_root if (source_root / ".git").exists() else None
 
 
+
+def self_update_owns_running_script(manager: str) -> bool:
+    if manager in {"nala", "apt-get"}:
+        command = ["dpkg-query", "-S", str(SCRIPT_FILE)]
+    elif manager in {"dnf", "zypper"}:
+        command = ["rpm", "-qf", str(SCRIPT_FILE)]
+    elif manager == "pacman":
+        command = ["pacman", "-Qo", str(SCRIPT_FILE)]
+    else:
+        result = run(["brew", "--prefix", "distrodeck"], check=False, capture_output=True)
+        if result.returncode != 0:
+            return False
+        prefix = (result.stdout or "").strip()
+        return bool(prefix) and os.path.commonpath([str(SCRIPT_FILE.absolute()), prefix]) == prefix
+    result = run(command, check=False, capture_output=True)
+    return result.returncode == 0
+
 def self_update_method() -> Optional[str]:
     methods = {}
     backend = {"nala": "dpkg", "apt-get": "dpkg", "dnf": "rpm", "zypper": "rpm"}
@@ -2698,7 +2715,7 @@ def self_update_method() -> Optional[str]:
         probe = run(probe_command, check=False, capture_output=True)
         if manager in {"nala", "apt-get"} and (probe.stdout or "").strip() != "installed":
             continue
-        if probe.returncode == 0:
+        if probe.returncode == 0 and self_update_owns_running_script(manager):
             key = backend.get(manager, manager)
             if key == "rpm":
                 preferred = "zypper" if get_os_id() in {"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"} else "dnf"
