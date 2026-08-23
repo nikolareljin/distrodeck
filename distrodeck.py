@@ -2692,7 +2692,7 @@ def self_update_method() -> Optional[str]:
 def self_update_command(method: str) -> List[str]:
     commands = {
         "brew": ["brew", "upgrade", "distrodeck"],
-        "nala": ["sudo", "nala", "upgrade", "-y", "distrodeck"],
+        "nala": ["sudo", "nala", "install", "-y", "distrodeck"],
         "apt-get": ["sudo", "apt-get", "install", "--only-upgrade", "-y", "distrodeck"],
         "dnf": ["sudo", "dnf", "upgrade", "-y", "distrodeck"],
         "zypper": ["sudo", "zypper", "update", "-y", "distrodeck"],
@@ -2725,6 +2725,12 @@ def run_self_update(_: argparse.Namespace) -> None:
     log_action_start("self-update")
     method = self_update_method()
     before = VERSION
+    if method and method != "source":
+        version_probe = self_update_probe_command(method, version=True)
+        if version_probe and cmd_exists(version_probe[0]):
+            probe = run(version_probe, check=False, capture_output=True)
+            if probe.returncode == 0 and (probe.stdout or "").strip():
+                before = (probe.stdout or "").strip().split()[-1]
     if method is None:
         warn("Unable to detect a supported distrodeck installation. Install from a package manager or run from a git checkout.")
         log_action_end("self-update", "unsupported")
@@ -2735,6 +2741,14 @@ def run_self_update(_: argparse.Namespace) -> None:
         status = run(["git", "-C", str(root), "status", "--porcelain"], check=False, capture_output=True)
         if status.returncode != 0 or (status.stdout or "").strip():
             warn("Source checkout is dirty or unavailable; refusing self-update.")
+            log_action_end("self-update", "refused")
+            return
+        fast_forwardable = run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", "@{u}"],
+            check=False,
+        )
+        if fast_forwardable.returncode != 0:
+            warn("Source checkout cannot fast-forward; refusing self-update.")
             log_action_end("self-update", "refused")
             return
         steps = source_self_update_commands(root, source_install_prefix())

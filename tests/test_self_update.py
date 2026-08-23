@@ -13,7 +13,7 @@ SPEC.loader.exec_module(distrodeck)
 
 def test_self_update_commands_are_native_to_each_manager():
     assert distrodeck.self_update_command("brew") == ["brew", "upgrade", "distrodeck"]
-    assert distrodeck.self_update_command("nala") == ["sudo", "nala", "upgrade", "-y", "distrodeck"]
+    assert distrodeck.self_update_command("nala") == ["sudo", "nala", "install", "-y", "distrodeck"]
     assert distrodeck.self_update_command("apt-get") == ["sudo", "apt-get", "install", "--only-upgrade", "-y", "distrodeck"]
     assert distrodeck.self_update_command("dnf") == ["sudo", "dnf", "upgrade", "-y", "distrodeck"]
     assert distrodeck.self_update_command("zypper") == ["sudo", "zypper", "update", "-y", "distrodeck"]
@@ -44,6 +44,6 @@ def test_self_update_refuses_dirty_source_checkout(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stdout="dirty\n")
 
     monkeypatch.setattr(distrodeck, "run", fake_run)
-    distrodeck.run_self_update(None)
+    distrodeck.run_self_update(SimpleNamespace())
 
     assert calls == [["git", "-C", str(root), "status", "--porcelain"]]
