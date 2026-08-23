@@ -4491,8 +4491,16 @@ GIT_ALIAS_HELP_INVOCATIONS: Dict[str, str] = {
     "dfp": "git fetch --all && git pull --all",
     "dl": "git log --graph --decorate --oneline --all --color=always",
     "dpr": "gh pr create --fill",
-    "dis": "gh issue list --state all --limit 1000 --json number,title,state --template '<tablerow template>'",
-    "dprs": "gh pr list --state all --limit 1000 --json number,title,state --template '<tablerow template>'",
+    "dis": (
+        "gh issue list --state all --limit 1000 --json number,title,state "
+        "--template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow "
+        "(printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'"
+    ),
+    "dprs": (
+        "gh pr list --state all --limit 1000 --json number,title,state "
+        "--template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow "
+        "(printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'"
+    ),
     "dup": "git push -u origin <current-branch>",
     "ds": "git status -sb",
     "db": "git branch -vv",

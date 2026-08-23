@@ -45,6 +45,7 @@ def test_git_dhelp_is_detailed_and_plain_when_no_color(monkeypatch, tmp_path):
     assert "Invokes:" in result.stdout
     assert "git fetch" in result.stdout
     assert "--json number,title,state --template" in result.stdout
+    assert "{{tablerender}}" in result.stdout
     assert "Requires:" in result.stdout
     assert "Example:" in result.stdout
     assert "git dco <branch-or-pathspec>" in result.stdout
