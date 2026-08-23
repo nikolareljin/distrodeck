@@ -4485,6 +4485,27 @@ GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str, str], ...] = (
 )
 
 
+GIT_ALIAS_HELP_INVOCATIONS: Dict[str, str] = {
+    "df": "git fetch",
+    "dp": "git pull",
+    "dfp": "git fetch --all && git pull --all",
+    "dl": "git log --graph --decorate --oneline --all --color=always",
+    "dpr": "gh pr create --fill",
+    "dis": "gh issue list --state all --limit 1000",
+    "dprs": "gh pr list --state all --limit 1000",
+    "dup": "git push -u origin <current-branch>",
+    "ds": "git status -sb",
+    "db": "git branch -vv",
+    "dbr": "git branch -a",
+    "dd": "git diff",
+    "dds": "git diff --staged",
+    "dco": "git checkout",
+    "dcb": "git checkout -b",
+    "do": "git remote get-url origin, then opens its HTTP(S) URL",
+    "dlr": "git for-each-ref for the newest branches and tags",
+    "dhelp": "a shell function that renders this reference",
+}
+
 def git_alias_help_command() -> str:
     command = (
         "!f() {"
@@ -4493,10 +4514,11 @@ def git_alias_help_command() -> str:
         " else title=''; label=''; reset=''; fi;"
         " printf '%sDistrodeck Git Help%s\\n' \"$title\" \"$reset\";"
     )
-    for _, usage, description, requirement, example in GIT_ALIAS_HELP_ROWS:
+    for name, usage, description, requirement, example in GIT_ALIAS_HELP_ROWS:
         command += (
             f" printf '\\n%s%s%s\\n' \"$title\" {shlex.quote(usage)} \"$reset\";"
             f" printf '  %sWhat it does:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(description)};"
+            f" printf '  %sInvokes:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(GIT_ALIAS_HELP_INVOCATIONS[name])};"
             f" printf '  %sRequires:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(requirement)};"
             f" printf '  %sExample:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(example)};"
         )
@@ -4579,7 +4601,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         (
             "dhelp",
             git_alias_help_command(),
-            "show distrodeck aliases",
+            "show detailed distrodeck alias reference",
         )
     )
     return entries

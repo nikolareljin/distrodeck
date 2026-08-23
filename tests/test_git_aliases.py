@@ -17,6 +17,7 @@ def test_git_alias_help_covers_every_alias_definition():
     documented = {row[0] for row in distrodeck.GIT_ALIAS_HELP_ROWS}
 
     assert documented == aliases
+    assert set(distrodeck.GIT_ALIAS_HELP_INVOCATIONS) == documented
     assert "dhelp" in documented
 
 
@@ -41,6 +42,8 @@ def test_git_dhelp_is_detailed_and_plain_when_no_color(monkeypatch, tmp_path):
     assert result.returncode == 0
     assert "Distrodeck Git Help" in result.stdout
     assert "What it does:" in result.stdout
+    assert "Invokes:" in result.stdout
+    assert "git fetch" in result.stdout
     assert "Requires:" in result.stdout
     assert "Example:" in result.stdout
     assert "git dco <branch-or-pathspec>" in result.stdout
@@ -53,3 +56,9 @@ def test_git_dhelp_command_detects_terminal_and_no_color():
     assert "[ -t 1 ]" in command
     assert "${NO_COLOR:-}" in command
     assert "\n" not in command
+
+
+def test_git_dhelp_show_description_matches_its_detailed_output():
+    aliases = {name: description for name, _, description in distrodeck.git_alias_definitions()}
+
+    assert aliases["dhelp"] == "show detailed distrodeck alias reference"
