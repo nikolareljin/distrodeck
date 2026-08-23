@@ -2772,7 +2772,7 @@ def run_self_update(_: argparse.Namespace) -> None:
         if probe_command and cmd_exists(probe_command[0]):
             probe = run(probe_command, check=False, capture_output=True)
             if probe.returncode == 0 and (probe.stdout or "").strip():
-                resulting = (probe.stdout or "").strip()
+                resulting = (probe.stdout or "").strip().split()[-1]
     log(f"distrodeck self-update completed (was {before}; now {resulting}).")
     log_action_end("self-update")
 
@@ -5367,6 +5367,7 @@ def run_tui() -> None:
             continue
         elif choice == "net-tools":
             run_network_tools_tui()
+            continue
         elif choice == "self-update":
             run_self_update(argparse.Namespace())
             continue
