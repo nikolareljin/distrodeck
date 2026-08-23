@@ -2687,7 +2687,8 @@ def source_checkout_root() -> Optional[Path]:
 
 
 def self_update_method() -> Optional[str]:
-    methods = []
+    methods = {}
+    backend = {"nala": "dpkg", "apt-get": "dpkg", "dnf": "rpm", "zypper": "rpm"}
     for manager in SELF_UPDATE_MANAGERS:
         if not cmd_exists(manager):
             continue
@@ -2698,12 +2699,14 @@ def self_update_method() -> Optional[str]:
         if manager in {"nala", "apt-get"} and (probe.stdout or "").strip() != "installed":
             continue
         if probe.returncode == 0:
-            methods.append(manager)
+            key = backend.get(manager, manager)
+            if key not in methods or manager == "nala":
+                methods[key] = manager
     if source_checkout_root() is not None:
-        methods.append("source")
+        methods["source"] = "source"
     if len(methods) != 1:
         return None
-    return methods[0]
+    return next(iter(methods.values()))
 
 
 def self_update_command(method: str) -> List[str]:
@@ -2724,7 +2727,7 @@ def source_install_prefix() -> Path:
         return Path(configured_prefix).expanduser()
     installed = shutil.which("distrodeck")
     if installed:
-        installed_path = Path(installed).resolve()
+        installed_path = Path(installed)
         if installed_path.parent.name == "bin":
             return installed_path.parent.parent
     return Path("/usr/local")
@@ -2794,6 +2797,10 @@ def run_self_update(_: argparse.Namespace) -> bool:
             probe = run(probe_command, check=False, capture_output=True)
             if probe.returncode == 0 and (probe.stdout or "").strip():
                 resulting = (probe.stdout or "").strip().split()[-1]
+    if resulting == "unknown":
+        warn("Self-update completed but the installed version could not be verified.")
+        log_action_end("self-update", "unverified")
+        return False
     log(f"distrodeck self-update completed (was {before}; now {resulting}).")
     log_action_end("self-update")
     return True
