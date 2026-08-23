@@ -2703,7 +2703,7 @@ def self_update_owns_running_script(manager: str) -> bool:
     result = run(command, check=False, capture_output=True)
     return result.returncode == 0
 
-def self_update_method() -> Optional[str]:
+def self_update_methods() -> dict[str, str]:
     methods = {}
     backend = {"nala": "dpkg", "apt-get": "dpkg", "dnf": "rpm", "zypper": "rpm"}
     for manager in SELF_UPDATE_MANAGERS:
@@ -2719,12 +2719,17 @@ def self_update_method() -> Optional[str]:
             key = backend.get(manager, manager)
             if key == "rpm":
                 preferred = "zypper" if get_os_id() in {"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"} else "dnf"
-                if manager != preferred:
+                if manager != preferred and cmd_exists(preferred):
                     continue
             if key not in methods or manager == "nala":
                 methods[key] = manager
     if source_checkout_root() is not None:
         methods["source"] = "source"
+    return methods
+
+
+def self_update_method() -> Optional[str]:
+    methods = self_update_methods()
     if len(methods) != 1:
         return None
     return next(iter(methods.values()))
@@ -2777,7 +2782,15 @@ def run_self_update(_: argparse.Namespace) -> bool:
             if probe.returncode == 0 and (probe.stdout or "").strip():
                 before = (probe.stdout or "").strip().split()[-1]
     if method is None:
-        warn("Unable to detect a supported distrodeck installation. Install from a package manager or run from a git checkout.")
+        methods = self_update_methods()
+        if len(methods) > 1:
+            warn(
+                "Multiple distrodeck installations were detected "
+                f"({', '.join(sorted(methods.values()))}). Remove the unwanted installation "
+                "or run the intended installation directly."
+            )
+        else:
+            warn("Unable to detect a supported distrodeck installation. Install from a package manager or run from a git checkout.")
         log_action_end("self-update", "unsupported")
         return False
     log(f"Updating distrodeck via {method} (current version: {before})")
@@ -2785,6 +2798,10 @@ def run_self_update(_: argparse.Namespace) -> bool:
         root = source_checkout_root()
         if root is None:
             warn("Source checkout location is unavailable; refusing self-update.")
+            log_action_end("self-update", "unsupported")
+            return False
+        if not cmd_exists("git"):
+            warn("Git is required to update a source checkout.")
             log_action_end("self-update", "unsupported")
             return False
         status = run(["git", "-C", str(root), "status", "--porcelain"], check=False, capture_output=True)

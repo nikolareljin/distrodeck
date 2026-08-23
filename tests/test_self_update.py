@@ -68,3 +68,14 @@ def test_self_update_refuses_non_fast_forward_source_checkout(monkeypatch, tmp_p
         ["git", "-C", str(root), "status", "--porcelain"],
         ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", "@{u}"],
     ]
+
+
+def test_self_update_refuses_source_checkout_without_git(monkeypatch, tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / ".git").mkdir()
+    monkeypatch.setattr(distrodeck, "SCRIPT_FILE", root / "distrodeck.py")
+    monkeypatch.setattr(distrodeck, "self_update_method", lambda: "source")
+    monkeypatch.setattr(distrodeck, "cmd_exists", lambda command: command != "git")
+
+    assert distrodeck.run_self_update(SimpleNamespace()) is False
