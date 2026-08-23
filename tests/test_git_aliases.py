@@ -26,7 +26,7 @@ def test_git_dhelp_is_detailed_and_plain_when_no_color(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config_path))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("NO_COLOR", "")
 
     assert distrodeck.apply_git_aliases(distrodeck.git_alias_definitions())
 
@@ -54,7 +54,7 @@ def test_git_dhelp_command_detects_terminal_and_no_color():
     command = distrodeck.git_alias_help_command()
 
     assert "[ -t 1 ]" in command
-    assert "${NO_COLOR:-}" in command
+    assert "${NO_COLOR+x}" in command
     assert "\n" not in command
 
 

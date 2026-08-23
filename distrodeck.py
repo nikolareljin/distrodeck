@@ -4509,7 +4509,7 @@ GIT_ALIAS_HELP_INVOCATIONS: Dict[str, str] = {
 def git_alias_help_command() -> str:
     command = (
         "!f() {"
-        " if [ -t 1 ] && [ -z \"${NO_COLOR:-}\" ]; then"
+        " if [ -t 1 ] && [ -z \"${NO_COLOR+x}\" ]; then"
         " title=$(printf '\\033[1;36m'); label=$(printf '\\033[1;33m'); reset=$(printf '\\033[0m');"
         " else title=''; label=''; reset=''; fi;"
         " printf '%sDistrodeck Git Help%s\\n' \"$title\" \"$reset\";"
