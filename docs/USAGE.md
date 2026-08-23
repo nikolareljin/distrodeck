@@ -409,7 +409,7 @@ Recommended aliases (all prefixed with `d`):
 - `git dco` -> checkout
 - `git dcb` -> create branch
 - `git dlr` -> latest 3 branches and latest 3 tags (newest first)
-- `git dhelp` -> list distrodeck aliases
+- `git dhelp` -> detailed distrodeck alias reference (purpose, parameters, requirements, examples)
 
 Example prompt segment:
 

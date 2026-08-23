@@ -4463,6 +4463,75 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
     log_action_end("git-status unset")
 
 
+GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str, str], ...] = (
+    ("df", "git df [<fetch-options>]", "Fetch updates from the current remote.", "Inside a Git repository; Git remote access", "git df --prune"),
+    ("dp", "git dp [<pull-options>]", "Pull the current branch from its upstream.", "Inside a Git repository; an upstream branch", "git dp --ff-only"),
+    ("dfp", "git dfp", "Fetch all remotes, then pull all tracked branches.", "Inside a Git repository; Git remote access", "git dfp"),
+    ("dl", "git dl [<log-options>]", "Show decorated graph history for all refs.", "Inside a Git repository", "git dl -20"),
+    ("dpr", "git dpr", "Create a pull request with values inferred by gh.", "GitHub CLI (gh)", "git dpr"),
+    ("dis", "git dis", "List repository issues with number, title, and state.", "GitHub CLI (gh)", "git dis"),
+    ("dprs", "git dprs", "List repository pull requests with number, title, and state.", "GitHub CLI (gh)", "git dprs"),
+    ("dup", "git dup", "Push the current branch and set origin tracking.", "A checked-out branch and origin remote", "git dup"),
+    ("ds", "git ds [<status-options>]", "Show compact repository status.", "Inside a Git repository", "git ds"),
+    ("db", "git db [<branch-options>]", "Show local branches with upstream details.", "Inside a Git repository", "git db"),
+    ("dbr", "git dbr [<branch-options>]", "Show local and remote branches.", "Inside a Git repository", "git dbr"),
+    ("dd", "git dd [<diff-options>] [<pathspec>...]", "Show unstaged changes.", "Inside a Git repository", "git dd -- README.md"),
+    ("dds", "git dds [<diff-options>] [<pathspec>...]", "Show staged changes.", "Inside a Git repository", "git dds --stat"),
+    ("dco", "git dco <branch-or-pathspec>", "Check out a branch, commit, or path.", "Inside a Git repository", "git dco main"),
+    ("dcb", "git dcb <new-branch>", "Create and check out a new branch.", "Inside a Git repository", "git dcb fix/readme"),
+    ("do", "git do", "Open the origin repository URL in a browser.", "origin remote; a supported browser launcher", "git do"),
+    ("dlr", "git dlr", "List the latest three branches and latest three tags.", "Inside a Git repository", "git dlr"),
+    ("dhelp", "git dhelp", "Show this detailed distrodeck alias reference.", "Distrodeck aliases configured with git-aliases set", "git dhelp"),
+)
+
+
+GIT_ALIAS_HELP_INVOCATIONS: Dict[str, str] = {
+    "df": "git fetch",
+    "dp": "git pull",
+    "dfp": "git fetch --all && git pull --all",
+    "dl": "git log --graph --decorate --oneline --all --color=always",
+    "dpr": "gh pr create --fill",
+    "dis": (
+        "gh issue list --state all --limit 1000 --json number,title,state "
+        "--template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow "
+        "(printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'"
+    ),
+    "dprs": (
+        "gh pr list --state all --limit 1000 --json number,title,state "
+        "--template '{{tablerow \"NUMBER\" \"TITLE\" \"STATE\"}}{{range .}}{{tablerow "
+        "(printf \"#%v\" .number) .title .state}}{{end}}{{tablerender}}'"
+    ),
+    "dup": "git push -u origin <current-branch>",
+    "ds": "git status -sb",
+    "db": "git branch -vv",
+    "dbr": "git branch -a",
+    "dd": "git diff",
+    "dds": "git diff --staged",
+    "dco": "git checkout",
+    "dcb": "git checkout -b",
+    "do": "git remote get-url origin, then opens its HTTP(S) URL",
+    "dlr": "git for-each-ref for the newest branches and tags",
+    "dhelp": "a shell function that renders this reference",
+}
+
+def git_alias_help_command() -> str:
+    command = (
+        "!f() {"
+        " if [ -t 1 ] && [ -z \"${NO_COLOR+x}\" ]; then"
+        " title=$(printf '\\033[1;36m'); label=$(printf '\\033[1;33m'); reset=$(printf '\\033[0m');"
+        " else title=''; label=''; reset=''; fi;"
+        " printf '%sDistrodeck Git Help%s\\n' \"$title\" \"$reset\";"
+    )
+    for name, usage, description, requirement, example in GIT_ALIAS_HELP_ROWS:
+        command += (
+            f" printf '\\n%s%s%s\\n' \"$title\" {shlex.quote(usage)} \"$reset\";"
+            f" printf '  %sWhat it does:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(description)};"
+            f" printf '  %sInvokes:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(GIT_ALIAS_HELP_INVOCATIONS[name])};"
+            f" printf '  %sRequires:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(requirement)};"
+            f" printf '  %sExample:%s %s\\n' \"$label\" \"$reset\" {shlex.quote(example)};"
+        )
+    return command + " }; f"
+
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
     # Tuple format: (alias_name, git_command, human_readable_description)
     # fmt: off
@@ -4536,13 +4605,11 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("do", _do_cmd, "open remote origin URL in browser"),
         ("dlr", _dlr_cmd, "latest 3 branches and latest 3 tags"),
     ]
-    alias_names = [name for name, _, _ in entries] + ["dhelp"]
-    alias_pattern = "|".join(re.escape(name) for name in alias_names)
     entries.append(
         (
             "dhelp",
-            f"!git config --get-regexp '^alias\\.({alias_pattern})$' || true",
-            "show distrodeck aliases",
+            git_alias_help_command(),
+            "show detailed distrodeck alias reference",
         )
     )
     return entries
