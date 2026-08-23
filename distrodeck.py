@@ -2230,7 +2230,8 @@ def run_diff(args: argparse.Namespace) -> None:
         payload = {
             "schema": 1,
             "file": str(path),
-            "distro_id": get_os_id(),
+            "export_distro_id": data.get("distro_id", ""),
+            "current_distro_id": get_os_id(),
             "codename": data.get("codename", ""),
             "sections": result,
             "summary": {"missing": total_missing, "extra": total_extra},
@@ -3205,12 +3206,16 @@ def parse_export_file(path: Path) -> dict:
         "services_enabled": [],
         "services_active": [],
         "config_files": [],
+        "distro_id": "",
         "codename": "",
     }
     section = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if line.startswith("distro_id="):
+            data["distro_id"] = line.split("=", 1)[1]
             continue
         if line.startswith("codename="):
             data["codename"] = line.split("=", 1)[1]

@@ -492,9 +492,19 @@ unwire_nvm_profile() {
   local profile="$1"
   [[ -f "$profile" ]] || return 0
   grep -Fq "$NVM_PROFILE_BEGIN" "$profile" 2>/dev/null || return 0
+  grep -Fq "$NVM_PROFILE_END" "$profile" 2>/dev/null || return 0
   local tmp
   tmp="$(mktemp)"
-  sed "/${NVM_PROFILE_BEGIN}/,/${NVM_PROFILE_END}/d" "$profile" > "$tmp" && mv "$tmp" "$profile"
+  if ! sed "/${NVM_PROFILE_BEGIN}/,/${NVM_PROFILE_END}/d" "$profile" > "$tmp"; then
+    rm -f "$tmp"
+    log_error "Failed to remove nvm wiring from ${profile}."
+    return 1
+  fi
+  if ! mv "$tmp" "$profile"; then
+    rm -f "$tmp"
+    log_error "Failed to update ${profile}."
+    return 1
+  fi
   log_info "Removed nvm wiring from ${profile}."
 }
 
@@ -1130,24 +1140,25 @@ install_streamcontroller() {
   fi
 }
 
-# Resolve the latest RustDesk version from the GitHub API, falling back to the
-# pinned version when the API is unavailable or rate-limited.
-rustdesk_latest_version() {
-  local tmp_dir version=""
+# Resolve the latest RustDesk release tag from the GitHub API, falling back to
+# the pinned version when the API is unavailable or rate-limited. The tag is
+# retained verbatim because release download paths may require its v prefix.
+rustdesk_latest_tag() {
+  local tmp_dir tag=""
   tmp_dir="$(mktemp -d)"
   if download_file "https://api.github.com/repos/rustdesk/rustdesk/releases/latest" "$tmp_dir/release.json"; then
-    version="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\?\([^"]*\)".*/\1/p' "$tmp_dir/release.json" | head -n1)"
+    tag="$(sed -n "s/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$tmp_dir/release.json" | head -n1)"
   fi
   rm -rf "$tmp_dir"
-  if [[ -z "$version" ]]; then
-    version="$FALLBACK_VERSION_RUSTDESK"
+  if [[ -z "$tag" ]]; then
+    tag="$FALLBACK_VERSION_RUSTDESK"
   fi
-  printf '%s\n' "$version"
+  printf "%s\n" "$tag"
 }
 
 install_rustdesk() {
   local mgr="$1"
-  local arch version url tmp_dir pkg_path
+  local arch tag version url tmp_dir pkg_path
 
   arch="$(uname -m)"
   case "$arch" in
@@ -1157,23 +1168,24 @@ install_rustdesk() {
   esac
 
   if [[ -n "$arch" ]] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then
-    version="$(rustdesk_latest_version)"
+    tag="$(rustdesk_latest_tag)"
+    version="${tag#v}"
     tmp_dir="$(mktemp -d)"
     case "$mgr" in
       apt)
-        url="https://github.com/rustdesk/rustdesk/releases/download/${version}/rustdesk-${version}-${arch}.deb"
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-${arch}.deb"
         pkg_path="$tmp_dir/rustdesk.deb"
         ;;
       dnf)
-        url="https://github.com/rustdesk/rustdesk/releases/download/${version}/rustdesk-${version}-0.${arch}.rpm"
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-0.${arch}.rpm"
         pkg_path="$tmp_dir/rustdesk.rpm"
         ;;
       zypper)
-        url="https://github.com/rustdesk/rustdesk/releases/download/${version}/rustdesk-${version}-0.${arch}-suse.rpm"
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-0.${arch}-suse.rpm"
         pkg_path="$tmp_dir/rustdesk.rpm"
         ;;
       pacman)
-        url="https://github.com/rustdesk/rustdesk/releases/download/${version}/rustdesk-${version}-0-${arch}.pkg.tar.zst"
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-0-${arch}.pkg.tar.zst"
         pkg_path="$tmp_dir/rustdesk.pkg.tar.zst"
         ;;
       *)

@@ -167,12 +167,31 @@ if grep -q "# existing profile" "$profile"; then
 else
   fail "unwire_nvm_profile preserves unrelated profile content" "original line was removed"
 fi
+# A malformed profile with an unterminated managed block must be left intact.
+profile="$(mktemp)"
+printf "before\n%s\nkeep this\n" "$NVM_PROFILE_BEGIN" > "$profile"
+original_profile="$(<"$profile")"
+unwire_nvm_profile "$profile" >/dev/null 2>&1
+if [[ "$(<"$profile")" == "$original_profile" ]]; then
+  pass "unwire_nvm_profile preserves an unterminated block"
+else
+  fail "unwire_nvm_profile preserves an unterminated block"
+fi
 rm -f "$profile"
+
 # A custom NVM_DIR must be preserved in the profile, and nvm itself must not
 # count as Node after distrodeck removes the system Node package.
 custom_nvm_dir="$(mktemp -d)"
 NVM_INSTALL_DIR="$custom_nvm_dir"
 profile="$(mktemp)"
+# API tags are retained for the release path while artifact names omit v.
+download_file() { printf '{"tag_name":"v1.4.9"}\n' > "$2"; }
+rustdesk_release_tag="$(rustdesk_latest_tag)"
+rustdesk_release_version="${rustdesk_release_tag#v}"
+rustdesk_release_url="https://github.com/rustdesk/rustdesk/releases/download/${rustdesk_release_tag}/rustdesk-${rustdesk_release_version}-x86_64.deb"
+assert_contains "$rustdesk_release_url" "/download/v1.4.9/" "RustDesk release URL preserves tag prefix"
+assert_contains "$rustdesk_release_url" "rustdesk-1.4.9-x86_64.deb" "RustDesk artifact name omits tag prefix"
+
 wire_nvm_profile "$profile" >/dev/null 2>&1
 profile_contents="$(<"$profile")"
 assert_contains "$profile_contents" "export NVM_DIR=$custom_nvm_dir" "wire_nvm_profile preserves custom NVM_DIR"

@@ -124,7 +124,8 @@ def test_run_diff_json_output_is_parseable(export_file, monkeypatch, capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema"] == 1
-    assert payload["distro_id"] == "ubuntu"
+    assert payload["export_distro_id"] == "ubuntu"
+    assert payload["current_distro_id"] == distrodeck.get_os_id()
     assert payload["sections"]["apt_manual"]["missing"] == ["curl", "htop"]
     assert payload["sections"]["apt_manual"]["extra"] == ["vim"]
     assert payload["sections"]["snap"] == {"missing": [], "extra": []}
