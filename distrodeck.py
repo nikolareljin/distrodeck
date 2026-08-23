@@ -2761,7 +2761,7 @@ def run_self_update(_: argparse.Namespace) -> None:
         warn(f"Self-update via {method} failed.")
         log_action_end("self-update", "failed")
         return
-    resulting = VERSION
+    resulting = "unknown"
     if method == "source":
         try:
             resulting = (root / "VERSION").read_text(encoding="utf-8").strip() or VERSION
