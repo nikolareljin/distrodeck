@@ -72,18 +72,30 @@ shlib_import logging dialog
 #
 # MAINTENANCE: Update these periodically to recent stable versions.
 # Check each tool's GitHub releases page for current versions:
-#   - lazygit: https://github.com/jesseduffield/lazygit/releases
-#   - k9s:     https://github.com/derailed/k9s/releases
-#   - glow:    https://github.com/charmbracelet/glow/releases
-#   - delta:   https://github.com/dandavison/delta/releases
-#   - bfg:     https://github.com/rtyley/bfg-repo-cleaner/releases
+#   - lazygit:  https://github.com/jesseduffield/lazygit/releases
+#   - k9s:      https://github.com/derailed/k9s/releases
+#   - glow:     https://github.com/charmbracelet/glow/releases
+#   - delta:    https://github.com/dandavison/delta/releases
+#   - bfg:      https://github.com/rtyley/bfg-repo-cleaner/releases
+#   - rustdesk: https://github.com/rustdesk/rustdesk/releases
 #
-# Last updated: 2025-01-22
-FALLBACK_VERSION_LAZYGIT="0.44.1"
-FALLBACK_VERSION_K9S="v0.50.18"
-FALLBACK_VERSION_GLOW="2.1.1"
-FALLBACK_VERSION_DELTA="0.18.2"
+# NVM is not a release download; it is cloned and checked out at this tag.
+#   - nvm:      https://github.com/nvm-sh/nvm/releases
+#
+# Last updated: 2026-08-21
+FALLBACK_VERSION_LAZYGIT="0.64.1"
+FALLBACK_VERSION_K9S="v0.51.0"
+FALLBACK_VERSION_GLOW="3.0.0"
+FALLBACK_VERSION_DELTA="0.19.2"
 FALLBACK_VERSION_BFG="1.15.0"
+FALLBACK_VERSION_RUSTDESK="v1.4.9"
+NVM_PINNED_VERSION="v0.40.7"
+
+# Default Node.js major installed by the `node` tool. Node 20 reached
+# end-of-life in April 2026; 24 is the current Active LTS.
+NODE_DEFAULT_MAJOR="24"
+# Additional Node major installed under nvm so users can switch between them.
+NODE_ALT_MAJOR="22"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # State tracking for installed tools
@@ -441,18 +453,120 @@ REPO
       ;;
     pacman) install_pkg "$mgr" nodejs npm;;
     zypper)
-      if [[ "$node_major" -ge 22 ]]; then
-        install_pkg "$mgr" nodejs22 npm22 || install_pkg "$mgr" nodejs npm
-      else
-        install_pkg "$mgr" nodejs20 npm20 || install_pkg "$mgr" nodejs npm
-      fi
+      # openSUSE ships versioned packages (nodejs22, nodejs24, ...). Fall back
+      # to the unversioned package when the requested major is unavailable.
+      install_pkg "$mgr" "nodejs${node_major}" "npm${node_major}" || install_pkg "$mgr" nodejs npm
       ;;
     *) log_warn "Node install not supported for this distro.";;
   esac
 }
 
+# Directory nvm is cloned into. Overridable for tests.
+NVM_INSTALL_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+# Shell profile block markers, so the wiring stays idempotent and removable.
+NVM_PROFILE_BEGIN="# >>> distrodeck nvm >>>"
+NVM_PROFILE_END="# <<< distrodeck nvm <<<"
+
+# Append the nvm sourcing block to a shell profile if it is not already there.
+# Usage: wire_nvm_profile /path/to/.bashrc
+wire_nvm_profile() {
+  local profile="$1"
+  [[ -e "$profile" ]] || return 0
+  if grep -Fq "$NVM_PROFILE_BEGIN" "$profile" 2>/dev/null; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "$NVM_PROFILE_BEGIN"
+    printf 'export NVM_DIR=%q\n' "$NVM_INSTALL_DIR"
+    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"'
+    echo "$NVM_PROFILE_END"
+  } >> "$profile"
+  log_info "Wired nvm into ${profile}."
+}
+
+# Remove the distrodeck-managed nvm block from a shell profile.
+unwire_nvm_profile() {
+  local profile="$1"
+  [[ -f "$profile" ]] || return 0
+  grep -Fq "$NVM_PROFILE_BEGIN" "$profile" 2>/dev/null || return 0
+  grep -Fq "$NVM_PROFILE_END" "$profile" 2>/dev/null || return 0
+  local tmp
+  tmp="$(mktemp)"
+  if ! sed "/${NVM_PROFILE_BEGIN}/,/${NVM_PROFILE_END}/d" "$profile" > "$tmp"; then
+    rm -f "$tmp"
+    log_error "Failed to remove nvm wiring from ${profile}."
+    return 1
+  fi
+  if ! mv "$tmp" "$profile"; then
+    rm -f "$tmp"
+    log_error "Failed to update ${profile}."
+    return 1
+  fi
+  log_info "Removed nvm wiring from ${profile}."
+}
+
+# Install nvm by cloning the repository at a pinned tag. Deliberately avoids
+# piping the upstream install script into a shell: the clone is deterministic,
+# reviewable, and needs no sudo, which keeps `node` usable in --all runs.
+install_nvm() {
+  if ! command -v git >/dev/null 2>&1; then
+    log_warn "git is required to install nvm; skipping nvm setup."
+    return 1
+  fi
+
+  if [[ -d "$NVM_INSTALL_DIR/.git" ]]; then
+    log_info "Updating existing nvm in ${NVM_INSTALL_DIR} to ${NVM_PINNED_VERSION}..."
+    git -C "$NVM_INSTALL_DIR" fetch --tags --quiet origin || {
+      log_warn "Failed to fetch nvm tags; keeping the existing checkout."
+      return 1
+    }
+  elif [[ -d "$NVM_INSTALL_DIR" ]]; then
+    log_warn "${NVM_INSTALL_DIR} exists but is not a git checkout; leaving it untouched."
+    return 1
+  else
+    log_info "Installing nvm ${NVM_PINNED_VERSION} into ${NVM_INSTALL_DIR}..."
+    git clone --quiet https://github.com/nvm-sh/nvm.git "$NVM_INSTALL_DIR" || {
+      log_warn "Failed to clone nvm."
+      return 1
+    }
+  fi
+
+  git -C "$NVM_INSTALL_DIR" checkout --quiet "$NVM_PINNED_VERSION" || {
+    log_warn "Failed to check out nvm ${NVM_PINNED_VERSION}."
+    return 1
+  }
+
+  wire_nvm_profile "$HOME/.bashrc"
+  wire_nvm_profile "$HOME/.zshrc"
+
+  # nvm is a shell function, not a binary: source it before use.
+  # shellcheck source=/dev/null
+  export NVM_DIR="$NVM_INSTALL_DIR"
+  if ! . "$NVM_INSTALL_DIR/nvm.sh"; then
+    log_warn "Failed to source nvm; Node versions were not installed via nvm."
+    return 1
+  fi
+
+  local major
+  for major in "$NODE_DEFAULT_MAJOR" "$NODE_ALT_MAJOR"; do
+    log_info "Installing Node ${major} via nvm..."
+    nvm install "$major" >/dev/null 2>&1 || log_warn "nvm could not install Node ${major}."
+  done
+  nvm alias default "$NODE_DEFAULT_MAJOR" >/dev/null 2>&1 || true
+
+  log_info "nvm ready. Open a new shell (or run 'source ~/.bashrc') to use it."
+  log_info "Switch versions with: nvm use ${NODE_ALT_MAJOR}  /  nvm use ${NODE_DEFAULT_MAJOR}"
+  return 0
+}
+
 install_node() {
-  install_node_major_version "$1" 20
+  # System Node keeps sudo, cron, and deb dependencies working; nvm sits on top
+  # for per-shell switching between the default and alternate majors.
+  install_node_major_version "$1" "$NODE_DEFAULT_MAJOR"
+  install_nvm || true
 }
 
 install_lazygit() {
@@ -1026,6 +1140,97 @@ install_streamcontroller() {
   fi
 }
 
+# Resolve the latest RustDesk release tag from the GitHub API, falling back to
+# the pinned version when the API is unavailable or rate-limited. The tag is
+# retained verbatim because release download paths may require its v prefix.
+rustdesk_latest_tag() {
+  local tmp_dir tag=""
+  tmp_dir="$(mktemp -d)"
+  if download_file "https://api.github.com/repos/rustdesk/rustdesk/releases/latest" "$tmp_dir/release.json"; then
+    tag="$(sed -n "s/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$tmp_dir/release.json" | head -n1)"
+  fi
+  rm -rf "$tmp_dir"
+  if [[ -z "$tag" ]]; then
+    tag="$FALLBACK_VERSION_RUSTDESK"
+  fi
+  printf "%s\n" "$tag"
+}
+
+install_rustdesk() {
+  local mgr="$1"
+  local arch tag version url tmp_dir pkg_path
+
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x86_64";;
+    aarch64|arm64) arch="aarch64";;
+    *) arch="";;
+  esac
+
+  if [[ -n "$arch" ]] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then
+    tag="$(rustdesk_latest_tag)"
+    version="${tag#v}"
+    tmp_dir="$(mktemp -d)"
+    case "$mgr" in
+      apt)
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-${arch}.deb"
+        pkg_path="$tmp_dir/rustdesk.deb"
+        ;;
+      dnf)
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-0.${arch}.rpm"
+        pkg_path="$tmp_dir/rustdesk.rpm"
+        ;;
+      zypper)
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-0.${arch}-suse.rpm"
+        pkg_path="$tmp_dir/rustdesk.rpm"
+        ;;
+      pacman)
+        url="https://github.com/rustdesk/rustdesk/releases/download/${tag}/rustdesk-${version}-0-${arch}.pkg.tar.zst"
+        pkg_path="$tmp_dir/rustdesk.pkg.tar.zst"
+        ;;
+      *)
+        url=""
+        ;;
+    esac
+
+    if [[ -n "$url" ]]; then
+      log_info "Downloading RustDesk ${version} from GitHub releases..."
+      if download_file "$url" "$pkg_path"; then
+        case "$mgr" in
+          apt)
+            sudo dpkg -i "$pkg_path" || true
+            sudo apt-get -f install -y || true
+            ;;
+          dnf) sudo dnf install -y "$pkg_path" || true;;
+          zypper) sudo zypper --non-interactive install "$pkg_path" || true;;
+          pacman) sudo pacman -U --noconfirm "$pkg_path" || true;;
+        esac
+        rm -rf "$tmp_dir"
+        if command -v rustdesk >/dev/null 2>&1; then
+          return 0
+        fi
+        log_warn "RustDesk package install did not produce a rustdesk binary; trying Flatpak..."
+      else
+        rm -rf "$tmp_dir"
+        log_warn "Failed to download RustDesk package; trying Flatpak..."
+      fi
+    else
+      rm -rf "$tmp_dir"
+    fi
+  fi
+
+  # Flatpak fallback keeps RustDesk available on distros or architectures with
+  # no matching release artifact.
+  if ! command -v flatpak >/dev/null 2>&1; then
+    install_flatpak "$mgr" || true
+  fi
+  if command -v flatpak >/dev/null 2>&1; then
+    flatpak install -y flathub com.rustdesk.RustDesk || log_warn "Failed to install RustDesk via Flatpak."
+  else
+    log_warn "Could not install RustDesk: no package artifact and no flatpak."
+  fi
+}
+
 install_gimp() {
   local mgr="$1"
   case "$mgr" in
@@ -1450,6 +1655,14 @@ uninstall_node() {
     pacman|zypper) uninstall_pkg "$mgr" nodejs npm;;
     *) log_warn "Node uninstall not supported for this distro.";;
   esac
+
+  # Remove the shell wiring distrodeck added, but never ~/.nvm itself: it holds
+  # Node versions and global npm packages the user installed by hand.
+  unwire_nvm_profile "$HOME/.bashrc"
+  unwire_nvm_profile "$HOME/.zshrc"
+  if [[ -d "$NVM_INSTALL_DIR" ]]; then
+    log_info "Left nvm in place at ${NVM_INSTALL_DIR}; remove it manually to drop nvm-managed Node versions."
+  fi
 }
 
 uninstall_java() {
@@ -1671,6 +1884,18 @@ uninstall_streamcontroller() {
   fi
 }
 
+uninstall_rustdesk() {
+  local mgr="$1"
+  case "$mgr" in
+    apt) uninstall_pkg "$mgr" rustdesk || true;;
+    dnf|zypper) uninstall_pkg "$mgr" rustdesk || true;;
+    pacman) uninstall_pkg "$mgr" rustdesk || true;;
+  esac
+  if command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.rustdesk.RustDesk"; then
+    flatpak uninstall -y com.rustdesk.RustDesk || log_warn "Failed to uninstall RustDesk via Flatpak."
+  fi
+}
+
 uninstall_gimp() {
   local mgr="$1"
   case "$mgr" in
@@ -1861,7 +2086,7 @@ tool_desc() {
     # ── Languages & Runtimes ──
     go) echo "[Lang] Go";;
     java) echo "[Lang] Java (JDK)";;
-    node) echo "[Lang] Node.js 20 LTS";;
+    node) echo "[Lang] Node.js 24 LTS + nvm (24/22 switchable)";;
     php) echo "[Lang] PHP";;
     ruby) echo "[Lang] Ruby";;
     rust) echo "[Lang] Rust (rustc/cargo)";;
@@ -1885,6 +2110,7 @@ tool_desc() {
     image-view) echo "[App] image-view - terminal image viewer";;
     isoforge) echo "[App] Isoforge - ISO burner";;
     nemo) echo "[App] Nemo - file manager";;
+    rustdesk) echo "[App] RustDesk - remote desktop";;
     streamcontroller) echo "[App] StreamController - Stream Deck";;
     *) echo "$1";;
   esac
@@ -1977,11 +2203,182 @@ is_installed_tool() {
     streamcontroller) command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.core447.StreamController";;
     gimp) command -v gimp >/dev/null 2>&1;;
     nemo) command -v nemo >/dev/null 2>&1;;
+    rustdesk) command -v rustdesk >/dev/null 2>&1 || { command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.rustdesk.RustDesk"; };;
     *) return 1;;
   esac
 }
 
+# ───────────────────────────────────────────────────────────────────────────────
+# Tool catalog
+# ───────────────────────────────────────────────────────────────────────────────
+# Single source of truth: the interactive checklist, --all, and --tools
+# validation all read this array. Order defines the checklist order.
+TOOL_CATALOG=(
+  # ── Shell & CLI ──
+  bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh
+  # ── Editors & Terminal ──
+  mc meld micro neovim screen tmux vscode
+  # ── System & Monitoring ──
+  bandwhich cron duf htop lm-sensors ncdu pciutils usbutils
+  # ── Networking ──
+  bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget
+  # ── Backup & Storage ──
+  borgbackup duplicity fdupes lz4 tar unzip
+  # ── Development ──
+  bfg build-tools composer delta gh git git-lfs lazygit tokei
+  # ── AI tools ──
+  aider antigravity claude-code codex copilot cursor gemini kiro ollama
+  # ── Languages & Runtimes ──
+  go java node php ruby rust
+  # ── DevOps & Containers ──
+  ansible docker k9s lazydocker podman
+  # ── Utilities ──
+  adb dialog flatpak nala ntfs wine
+  # ── Apps ──
+  gimp image-view isoforge nemo rustdesk streamcontroller
+)
+
+# Tools whose installers fetch and execute upstream scripts. They are held out
+# of --all unless DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true, but an explicit
+# --tools request counts as consent and installs them.
+OPT_IN_TOOLS=(aider antigravity claude-code codex copilot cursor gemini kiro ollama)
+
+# Return 0 when $1 is a known catalog tool.
+is_catalog_tool() {
+  local needle="$1" tool
+  for tool in "${TOOL_CATALOG[@]}"; do
+    [[ "$tool" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+# Return 0 when $1 requires opt-in for --all runs.
+is_opt_in_tool() {
+  local needle="$1" tool
+  for tool in "${OPT_IN_TOOLS[@]}"; do
+    [[ "$tool" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+# Print the default --all selection: the whole catalog minus opt-in tools.
+default_all_selection() {
+  local tool out=()
+  for tool in "${TOOL_CATALOG[@]}"; do
+    is_opt_in_tool "$tool" || out+=("$tool")
+  done
+  printf '%s\n' "${out[*]}"
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: install-tools-tui.sh [OPTIONS]
+
+Options:
+  --all                 Install every tool without showing the checklist.
+                        Opt-in tools are skipped unless
+                        DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true.
+  --tools LIST          Install only LIST (comma or space separated) without
+                        showing the checklist. Repeatable.
+  --tools-file PATH     Install only the tools listed in PATH, one per line.
+                        Blank lines and lines starting with # are ignored.
+                        Use - to read the list from stdin. Repeatable.
+  --reconcile           In --tools mode, also uninstall previously tracked
+                        tools that are not in the requested set. Off by
+                        default: unlisted tools are left alone.
+  --list-tools          Print the tool catalog, one per line, and exit.
+  -h, --help            Show this help and exit.
+
+Exit codes:
+  0  success
+  2  invalid usage (unknown option, unknown tool, unreadable tools file)
+USAGE
+}
+
+# Append comma/whitespace separated tools from $1 into the named array ($2).
+# Usage: collect_tools "bat,eza fd" requested
+collect_tools() {
+  local raw="$1"
+  local -n _dest="$2"
+  local item
+  raw="${raw//,/ }"
+  for item in $raw; do
+    [[ -n "$item" ]] && _dest+=("$item")
+  done
+}
+
+# Append tools listed in file $1 (one per line, # comments) into array ($2).
+# A path of "-" reads from stdin.
+collect_tools_file() {
+  local path="$1"
+  local -n _dest2="$2"
+  local line
+  if [[ "$path" != "-" && ! -r "$path" ]]; then
+    log_error "Cannot read tools file: ${path}"
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line//$'\t'/ }"
+    collect_tools "$line" _dest2
+  done < <(if [[ "$path" == "-" ]]; then cat; else cat "$path"; fi)
+}
+
 main() {
+
+  local selected=""
+  local all=false
+  local reconcile=false
+  local requested=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all) all=true;;
+      --tools)
+        [[ $# -ge 2 ]] || { log_error "--tools requires a value."; usage; exit 2; }
+        collect_tools "$2" requested
+        shift
+        ;;
+      --tools=*) collect_tools "${1#*=}" requested;;
+      --tools-file)
+        [[ $# -ge 2 ]] || { log_error "--tools-file requires a path."; usage; exit 2; }
+        collect_tools_file "$2" requested || exit 2
+        shift
+        ;;
+      --tools-file=*) collect_tools_file "${1#*=}" requested || exit 2;;
+      --reconcile) reconcile=true;;
+      --list-tools)
+        printf '%s\n' "${TOOL_CATALOG[@]}"
+        exit 0
+        ;;
+      -h|--help) usage; exit 0;;
+      *) log_error "Unknown option: $1"; usage; exit 2;;
+    esac
+    shift
+  done
+
+  # Validate the requested set before touching the system, so a typo cannot
+  # half-install a machine.
+  if [[ ${#requested[@]} -gt 0 ]]; then
+    if $all; then
+      log_error "--all cannot be combined with --tools/--tools-file."
+      exit 2
+    fi
+    local unknown=() tool
+    for tool in "${requested[@]}"; do
+      is_catalog_tool "$tool" || unknown+=("$tool")
+    done
+    if [[ ${#unknown[@]} -gt 0 ]]; then
+      log_error "Unknown tool(s): ${unknown[*]}"
+      log_error "Run with --list-tools to see the catalog."
+      exit 2
+    fi
+  elif $reconcile; then
+    log_error "--reconcile only applies to --tools/--tools-file runs."
+    exit 2
+  fi
+  # Informational and validation-only modes above deliberately work without a
+  # package manager. Detect one only once an install or TUI run is required.
   local mgr
   mgr="$(detect_pkg_mgr)"
   if [[ "$mgr" == "unknown" ]]; then
@@ -1989,42 +2386,13 @@ main() {
     exit 1
   fi
 
-  local selected=""
-  local all=false
-
-  if [[ "${1:-}" == "--all" ]]; then
-    all=true
-  fi
 
   # Load previously tracked tools (installed via distrodeck)
   declare -A tracked=()
   load_tracked_tools tracked
 
   declare -A installed=()
-  local tools=(
-    # ── Shell & CLI ──
-    bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh
-    # ── Editors & Terminal ──
-    mc meld micro neovim screen tmux vscode
-    # ── System & Monitoring ──
-    bandwhich cron duf htop lm-sensors ncdu pciutils usbutils
-    # ── Networking ──
-    bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget
-    # ── Backup & Storage ──
-    borgbackup duplicity fdupes lz4 tar unzip
-    # ── Development ──
-    bfg build-tools composer delta gh git git-lfs lazygit tokei
-    # ── AI tools ──
-    aider antigravity claude-code codex copilot cursor gemini kiro ollama
-    # ── Languages & Runtimes ──
-    go java node php ruby rust
-    # ── DevOps & Containers ──
-    ansible docker k9s lazydocker podman
-    # ── Utilities ──
-    adb dialog flatpak nala ntfs wine
-    # ── Apps ──
-    gimp image-view isoforge nemo streamcontroller
-  )
+  local tools=("${TOOL_CATALOG[@]}")
 
   for tool in "${tools[@]}"; do
     if is_installed_tool "$tool"; then
@@ -2033,7 +2401,14 @@ main() {
       installed["$tool"]="false"
     fi
   done
-  if ! $all; then
+  if [[ ${#requested[@]} -gt 0 ]]; then
+    selected="${requested[*]}"
+    # Naming a tool explicitly is consent to install it, opt-in or not; but its
+    # installer must not block on prompts when there is no terminal attached.
+    if [[ ! -t 0 ]]; then
+      export DISTRODECK_NONINTERACTIVE=true
+    fi
+  elif ! $all; then
     ensure_dialog
     dialog_init
     dialog --stdout --title "Distrodeck Installer" \
@@ -2060,8 +2435,9 @@ main() {
     # Clear the screen after dialog closes before showing installation output
     clear
   else
-    selected="bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh mc meld micro neovim screen tmux vscode bandwhich cron duf htop lm-sensors ncdu pciutils usbutils bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget borgbackup duplicity fdupes lz4 tar unzip bfg build-tools composer delta gh git git-lfs lazygit tokei go java node php ruby rust ansible docker k9s lazydocker podman adb dialog flatpak nala ntfs wine gimp image-view isoforge nemo streamcontroller"
-    opt_in_tools="aider antigravity claude-code codex copilot cursor gemini kiro ollama"
+    # Derived from the catalog so a new tool is never silently missing here.
+    selected="$(default_all_selection)"
+    opt_in_tools="${OPT_IN_TOOLS[*]}"
     include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
     if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
       unset DISTRODECK_NONINTERACTIVE
@@ -2084,19 +2460,26 @@ main() {
     done
   fi
 
-  # Find tools to uninstall: tracked + currently installed + NOT selected
+  # Find tools to uninstall: tracked + currently installed + NOT selected.
+  # In --tools mode this is skipped unless --reconcile was passed: removing
+  # software the caller never mentioned is not a safe default for integrators.
   local to_uninstall=()
-  for tool in "${tools[@]}"; do
-    if [[ "${tracked[$tool]:-}" == "true" ]] && \
-       [[ "${installed[$tool]:-}" == "true" ]] && \
-       [[ "${selected_set[$tool]:-}" != "true" ]]; then
-      to_uninstall+=("$tool")
-    fi
-  done
+  if [[ ${#requested[@]} -eq 0 ]] || $reconcile; then
+    for tool in "${tools[@]}"; do
+      if [[ "${tracked[$tool]:-}" == "true" ]] && \
+         [[ "${installed[$tool]:-}" == "true" ]] && \
+         [[ "${selected_set[$tool]:-}" != "true" ]]; then
+        to_uninstall+=("$tool")
+      fi
+    done
+  fi
 
   # Prompt user about uninstalling unchecked tools
   local do_uninstall=false
-  if [[ ${#to_uninstall[@]} -gt 0 ]] && ! $all; then
+  if [[ ${#to_uninstall[@]} -gt 0 ]] && [[ ${#requested[@]} -gt 0 ]] && $reconcile; then
+    log_info "Reconciling: uninstalling ${#to_uninstall[@]} tracked tool(s) not in the requested set."
+    do_uninstall=true
+  elif [[ ${#to_uninstall[@]} -gt 0 ]] && ! $all && [[ ${#requested[@]} -eq 0 ]]; then
     local uninstall_list=""
     for tool in "${to_uninstall[@]}"; do
       uninstall_list+="  - $(tool_desc "$tool")\n"
@@ -2235,6 +2618,7 @@ main() {
       streamcontroller) install_streamcontroller "$mgr";;
       gimp) install_gimp "$mgr";;
       nemo) install_pkg_simple "$mgr" nemo;;
+      rustdesk) install_rustdesk "$mgr";;
     esac
     ); then
       # Installation command succeeded, verify tool is now installed
@@ -2344,6 +2728,7 @@ main() {
         streamcontroller) uninstall_streamcontroller "$mgr";;
         gimp) uninstall_gimp "$mgr";;
         nemo) uninstall_pkg_simple "$mgr" nemo;;
+        rustdesk) uninstall_rustdesk "$mgr";;
       esac
       ); then
         # Uninstallation succeeded
@@ -2437,4 +2822,8 @@ main() {
   fi
 }
 
-main "$@"
+# Allow tests to source this file and exercise individual helpers without
+# running the installer.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

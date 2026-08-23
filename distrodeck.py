@@ -19,10 +19,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from glob import glob
 from shutil import get_terminal_size
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 SCRIPT_FILE = Path(__file__).resolve()
 
 
@@ -2127,6 +2127,140 @@ def log_diff(title: str, missing: List[str], extra: List[str]) -> None:
         log(f"{title}: extra ({len(extra)}): " + ", ".join(extra))
 
 
+# Sections that can be compared against live system state. The remaining export
+# sections (config snapshots, service state, config files) describe machine
+# state with no comparable list form, so they are outside a package diff.
+DIFF_SECTION_ORDER = [
+    "apt_manual",
+    "apt_hold",
+    "ppas",
+    "apt_sources",
+    "snap",
+    "flatpak",
+    "pacman",
+    "dnf",
+    "zypper",
+    "appimage",
+]
+
+# Sections whose entries carry extra columns (channel, remote) that must be
+# stripped before comparing, so a channel change does not read as add+remove.
+DIFF_SECTION_NORMALIZERS = {
+    "snap": normalize_snap_entry,
+    "flatpak": normalize_flatpak_entry,
+}
+
+
+def collect_current_state(
+    sections: Iterable[str], appimage_dirs: Optional[str] = None
+) -> dict:
+    """Collect the live system state for the diffable sections requested."""
+    collectors = {
+        "apt_manual": export_apt_manual,
+        "apt_hold": export_apt_hold,
+        "ppas": export_ppas,
+        "apt_sources": export_apt_sources,
+        "snap": export_snaps,
+        "flatpak": export_flatpaks,
+        "pacman": export_pacman,
+        "dnf": export_dnf,
+        "zypper": export_zypper,
+        "appimage": lambda: export_appimages(get_appimage_dirs(appimage_dirs)),
+    }
+    wanted = set(sections)
+    return {
+        name: collectors[name]()
+        for name in DIFF_SECTION_ORDER
+        if name in wanted and name in collectors
+    }
+
+
+def compute_diff(desired: dict, current: dict, sections: Iterable[str]) -> dict:
+    """Compare an export against current state, section by section.
+
+    Returns an ordered mapping of section name to {"missing", "extra"} lists.
+    "missing" is present in the export but not on this system; "extra" is on
+    this system but absent from the export. Both are sorted, so repeated runs
+    on unchanged inputs produce byte-identical output.
+    """
+    wanted = set(sections)
+    result: Dict[str, Dict[str, List[str]]] = {}
+    for name in DIFF_SECTION_ORDER:
+        if name not in wanted:
+            continue
+        normalize = DIFF_SECTION_NORMALIZERS.get(name)
+        desired_items = desired.get(name) or []
+        current_items = current.get(name) or []
+        if normalize:
+            desired_items = [normalize(item) for item in desired_items]
+            current_items = [normalize(item) for item in current_items]
+        missing, extra = diff_items(desired_items, current_items)
+        result[name] = {"missing": missing, "extra": extra}
+    return result
+
+
+def run_diff(args: argparse.Namespace) -> None:
+    log_action_start("diff")
+    path = Path(args.input)
+    if not path.exists():
+        fail(f"Export file not found: {path}")
+
+    if args.sections:
+        requested = [item.strip() for item in args.sections.split(",") if item.strip()]
+        unknown = [name for name in requested if name not in DIFF_SECTION_ORDER]
+        if unknown:
+            fail(
+                "Unknown diff section(s): "
+                + ", ".join(unknown)
+                + ". Known sections: "
+                + ", ".join(DIFF_SECTION_ORDER)
+            )
+        sections = requested
+    else:
+        sections = list(DIFF_SECTION_ORDER)
+
+    data = parse_export_file(path)
+    current = collect_current_state(sections, getattr(args, "appimage_dirs", None))
+    result = compute_diff(data, current, sections)
+
+    total_missing = sum(len(entry["missing"]) for entry in result.values())
+    total_extra = sum(len(entry["extra"]) for entry in result.values())
+
+    if args.json:
+        payload = {
+            "schema": 1,
+            "file": str(path),
+            "export_distro_id": data.get("distro_id", ""),
+            "current_distro_id": get_os_id(),
+            "codename": data.get("codename", ""),
+            "sections": result,
+            "summary": {"missing": total_missing, "extra": total_extra},
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        log(f"Diff of {path} against the current system:")
+        log("  missing = in the export but not installed here")
+        log("  extra   = installed here but not in the export")
+        for name, entry in result.items():
+            missing, extra = entry["missing"], entry["extra"]
+            if not missing and not extra:
+                log(f"{name}: up to date.")
+                continue
+            log(f"{name}: {len(missing)} missing, {len(extra)} extra")
+            if args.detailed:
+                if missing:
+                    log("  missing: " + ", ".join(missing))
+                if extra:
+                    log("  extra:   " + ", ".join(extra))
+        log(f"Total: {total_missing} missing, {total_extra} extra")
+        if not args.detailed and (total_missing or total_extra):
+            log("Run with --detailed to list the entries.")
+
+    log_action_end("diff")
+    if getattr(args, "exit_code", False) and (total_missing or total_extra):
+        sys.exit(1)
+
+
 def export_config_snapshot(
     dirs: List[str], excludes: List[str], archive_path: Path
 ) -> Optional[str]:
@@ -3072,12 +3206,16 @@ def parse_export_file(path: Path) -> dict:
         "services_enabled": [],
         "services_active": [],
         "config_files": [],
+        "distro_id": "",
         "codename": "",
     }
     section = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
+            continue
+        if line.startswith("distro_id="):
+            data["distro_id"] = line.split("=", 1)[1]
             continue
         if line.startswith("codename="):
             data["codename"] = line.split("=", 1)[1]
@@ -3226,41 +3364,13 @@ def import_from_file(args: argparse.Namespace) -> None:
         if not args.apply:
             progress.update("Diffing current system state...")
             log("Dry-run diff (desired vs current):")
-            current = {
-                "apt_manual": export_apt_manual(),
-                "apt_hold": export_apt_hold(),
-                "ppas": export_ppas(),
-                "apt_sources": export_apt_sources(),
-                "snap": [normalize_snap_entry(item) for item in export_snaps()],
-                "flatpak": [normalize_flatpak_entry(item) for item in export_flatpaks()],
-                "pacman": export_pacman(),
-                "dnf": export_dnf(),
-                "zypper": export_zypper(),
-                "appimage": export_appimages(get_appimage_dirs(args.appimage_dirs)),
-            }
-            if wants("apt_manual"):
-                progress.update("Diffing apt packages...")
-                log_diff("apt_manual", *diff_items(data["apt_manual"], current["apt_manual"]))
-            if wants("apt_hold"):
-                progress.update("Diffing apt holds...")
-                log_diff("apt_hold", *diff_items(data["apt_hold"], current["apt_hold"]))
-            if wants("ppas"):
-                progress.update("Diffing PPAs...")
-                log_diff("ppas", *diff_items(data["ppas"], current["ppas"]))
-            if wants("apt_sources"):
-                progress.update("Diffing apt sources...")
-                log_diff("apt_sources", *diff_items(data["apt_sources"], current["apt_sources"]))
-            if wants("snap"):
-                progress.update("Diffing snaps...")
-                desired = [normalize_snap_entry(item) for item in data["snap"]]
-                log_diff("snap", *diff_items(desired, current["snap"]))
-            if wants("flatpak"):
-                progress.update("Diffing flatpaks...")
-                desired = [normalize_flatpak_entry(item) for item in data["flatpak"]]
-                log_diff("flatpak", *diff_items(desired, current["flatpak"]))
+            # Shared with the `diff` command so both paths report identically.
+            diff_sections = [name for name in DIFF_SECTION_ORDER if wants(name)]
+            current = collect_current_state(diff_sections, args.appimage_dirs)
+            for name, entry in compute_diff(data, current, diff_sections).items():
+                progress.update(f"Diffing {name}...")
+                log_diff(name, entry["missing"], entry["extra"])
             if wants("appimage"):
-                progress.update("Diffing AppImages...")
-                log_diff("appimage", *diff_items(data["appimage"], current["appimage"]))
                 missing = [item for item in data["appimage"] if not Path(item).exists()]
                 if missing:
                     log("appimage missing on disk: " + ", ".join(missing))
@@ -3977,10 +4087,25 @@ def run_install_tools(args: argparse.Namespace) -> None:
         locations = ", ".join(str(path) for path in script_candidates)
         fail(f"Installer script not found. Checked: {locations}")
     cmd = [str(script)]
-    if args.all:
+    if getattr(args, "list_tools", False):
+        cmd.append("--list-tools")
+    elif args.all:
         cmd.append("--all")
+    else:
+        for value in getattr(args, "tools", None) or []:
+            cmd.extend(["--tools", value])
+        tools_file = getattr(args, "tools_file", None)
+        if tools_file:
+            cmd.extend(["--tools-file", tools_file])
+        if getattr(args, "reconcile", False):
+            cmd.append("--reconcile")
     # Use check=False to allow partial failures (script reports them)
     result = run(cmd, check=False)
+    if result.returncode == 2:
+        # Usage error (unknown tool/option): propagate so callers can tell a
+        # bad request apart from a partially failed install.
+        log_action_end("install-tools")
+        sys.exit(2)
     if result.returncode != 0:
         log("Some tools failed to install/uninstall. See warnings above.")
     log_action_end("install-tools")
@@ -4362,6 +4487,23 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         " else echo \"$safe_url\"; fi;"
         " }; f"
     )
+    # Lists the three most recently updated branches and the three most recent
+    # tags. Repo-local and offline: reads refs only, never contacts a remote.
+    _dlr_cmd = (
+        "!f() {"
+        " if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1;"
+        " then echo 'Not a git repository (or any of the parent directories).' >&2; return 1; fi;"
+        " branches=$(git for-each-ref --sort=-committerdate --count=3"
+        " --format='  %(refname:short)  %(committerdate:short)  %(subject)' refs/heads);"
+        " tags=$(git for-each-ref --sort=-creatordate --count=3"
+        " --format='  %(refname:short)  %(creatordate:short)' refs/tags);"
+        " echo 'Branches:';"
+        " if [ -n \"$branches\" ]; then printf '%s\\n' \"$branches\"; else echo '  (none)'; fi;"
+        " echo;"
+        " echo 'Tags:';"
+        " if [ -n \"$tags\" ]; then printf '%s\\n' \"$tags\"; else echo '  (none)'; fi;"
+        " }; f"
+    )
     # fmt: on
     entries = [
         ("df", "fetch", "fetch"),
@@ -4392,6 +4534,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
         ("dco", "checkout", "checkout"),
         ("dcb", "checkout -b", "create branch"),
         ("do", _do_cmd, "open remote origin URL in browser"),
+        ("dlr", _dlr_cmd, "latest 3 branches and latest 3 tags"),
     ]
     alias_names = [name for name, _, _ in entries] + ["dhelp"]
     alias_pattern = "|".join(re.escape(name) for name in alias_names)
@@ -4878,6 +5021,7 @@ def run_tui() -> None:
         ("preflight", "Diagnostics: Preflight checks"),
         ("export", "Packages: Export installed packages"),
         ("import", "Packages: Import from export file"),
+        ("diff", "Packages: Diff export vs current system"),
         ("update", "System: Update packages"),
         ("upgrade", "System: Upgrade distro"),
         ("cleanup-kernels", "System: Cleanup old kernels"),
@@ -4898,7 +5042,7 @@ def run_tui() -> None:
     ]
     while True:
         clear_dialog_before_run = False
-        choice = dialog_menu("Distrodeck", "Select an action:", actions)
+        choice = dialog_menu(f"Distrodeck ({VERSION})", "Select an action:", actions)
         if not choice or choice == "quit":
             if cmd_exists("dialog"):
                 run(["dialog", "--clear"], check=False)
@@ -4998,6 +5142,20 @@ def run_tui() -> None:
                     cmd.append("--include-config-files")
                     cmd.extend(["--config-files", ":".join(combined)])
             clear_dialog_before_run = True
+        elif choice == "diff":
+            default_path = str(get_export_dir() / DEFAULT_EXPORT_FILE)
+            input_file = dialog_fselect("Diff", "Export file:", default_path)
+            if not input_file:
+                continue
+            detailed = dialog_yesno("Diff", "List the differing entries?")
+            cmd = [self_cmd, "diff", "--input", input_file]
+            if detailed:
+                cmd.append("--detailed")
+            result = run(cmd, check=False, capture_output=True)
+            output = (result.stdout or result.stderr or "No output").strip()
+            dialog_textbox("Distrodeck Diff", output)
+            continue
+
         elif choice == "import":
             default_path = str(get_export_dir() / DEFAULT_EXPORT_FILE)
             input_file = dialog_fselect("Import", "Input file:", default_path)
@@ -5287,6 +5445,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="distrodeck",
         description="Export and restore packages before distro upgrades.",
+        epilog=f"Version: {VERSION}",
     )
     parser.add_argument(
         "-v",
@@ -5294,7 +5453,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable verbose output where applicable",
     )
-    parser.add_argument("--version", action="version", version=VERSION)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     export_cmd = sub.add_parser("export", help="Export installed packages and sources")
@@ -5342,6 +5501,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include enabled/active systemd services",
     )
     export_cmd.set_defaults(func=export_all)
+
+    diff_cmd = sub.add_parser(
+        "diff",
+        help="Compare an export file against the current system",
+    )
+    diff_cmd.add_argument("--input", required=True, help="Export file to compare")
+    diff_cmd.add_argument(
+        "--sections",
+        default=None,
+        help=(
+            "Comma-separated sections to compare (default: all comparable "
+            "sections; see --help for the list)"
+        ),
+    )
+    diff_cmd.add_argument(
+        "--detailed",
+        action="store_true",
+        help="List the differing entries, not just the counts",
+    )
+    diff_cmd.add_argument(
+        "--json",
+        action="store_true",
+        help="Output a machine-readable JSON report",
+    )
+    diff_cmd.add_argument(
+        "--exit-code",
+        action="store_true",
+        help="Exit 1 when differences are found (0 when in sync)",
+    )
+    diff_cmd.add_argument("--appimage-dirs", default=None)
+    diff_cmd.set_defaults(func=run_diff)
 
     import_cmd = sub.add_parser("import", help="Import packages and sources")
     import_cmd.add_argument("--input", required=True)
@@ -5459,6 +5649,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--all",
         action="store_true",
         help="Install all tools without showing the TUI",
+    )
+    install_cmd.add_argument(
+        "--tools",
+        action="append",
+        metavar="LIST",
+        help=(
+            "Install only these tools without showing the TUI "
+            "(comma or space separated; repeatable)"
+        ),
+    )
+    install_cmd.add_argument(
+        "--tools-file",
+        metavar="PATH",
+        help="Install only the tools listed in PATH, one per line ('-' for stdin)",
+    )
+    install_cmd.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="With --tools, also uninstall tracked tools outside the requested set",
+    )
+    install_cmd.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="Print the tool catalog and exit",
     )
     install_cmd.set_defaults(func=run_install_tools)
 

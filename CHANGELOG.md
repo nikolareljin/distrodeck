@@ -4,6 +4,49 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.9.0]
+
+### Added
+- `distrodeck diff --input FILE` compares an export file against the current
+  system without changing anything. Reports `missing` (in the export, not
+  installed here) and `extra` (installed here, not in the export) per section,
+  with `--detailed`, `--sections`, `--json` (schema version 1), and
+  `--exit-code` for CI-style drift checks. Available from the TUI as
+  "Packages: Diff export vs current system". Output is sorted, so repeated runs
+  on unchanged inputs are byte-identical.
+- `install-tools` gained a noninteractive selected-tool mode for scripts and
+  external integrators: `--tools LIST`, `--tools-file PATH` (`-` reads stdin),
+  `--list-tools`, and `--reconcile`. Unknown tools are rejected with exit code
+  2 before anything is installed, and tools outside the requested set are left
+  alone unless `--reconcile` is passed.
+- RustDesk (open-source remote desktop) joins the Apps category, installed from
+  upstream deb/rpm/pkg.tar.zst releases with a Flatpak fallback.
+- `git dlr` alias lists the three most recently updated branches and the three
+  most recent tags, newest first. Repo-local and offline.
+- Selecting the `node` tool now also installs nvm, cloned at a pinned tag, with
+  Node 24 and 22 installed and 24 as the default alias, so versions can be
+  switched per shell.
+- The PR CI gate now runs the test suite (pytest plus the installer argument
+  tests); previously only `py_compile` ran, so tests never gated a PR.
+
+### Changed
+- Default Node.js major installed by the `node` tool is now 24. Node 20 reached
+  end-of-life in April 2026, so the previous default installed an unsupported
+  runtime.
+- Refreshed the fallback versions used when the GitHub API is unavailable or
+  rate-limited: lazygit 0.44.1 -> 0.64.1, k9s v0.50.18 -> v0.51.0, glow 2.1.1 ->
+  3.0.0, delta 0.18.2 -> 0.19.2. These are the versions that get installed on a
+  rate-limited or offline run, so stale pins silently installed old binaries.
+- The `--all` tool selection is derived from the tool catalog instead of a
+  duplicated hardcoded list that had already drifted from it.
+- The openSUSE Node.js branch derives its package name from the requested major
+  rather than hardcoding one branch per version.
+
+### Fixed
+- The import dry-run now reports the `pacman`, `dnf`, and `zypper` sections. It
+  collected them but never printed them, so package differences on those
+  distros were invisible in a dry run.
+
 ## [0.8.1]
 
 ### Fixed

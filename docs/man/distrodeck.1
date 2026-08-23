@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-04-28" "distrodeck 0.8.0" "User Commands"
+.TH DISTRODECK 1 "2026-08-21" "distrodeck 0.9.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -16,6 +16,9 @@ See \fIexamples/config.ini\fR for a sample configuration.
 .TP
 .B export
 Export installed packages and sources
+.TP
+.B diff
+Compare an export file against the current system
 .TP
 .B import
 Import packages and sources
@@ -96,6 +99,21 @@ options:
   --include-user-tools  Include user-level tools (pipx, npm, composer, nuget,
                         cargo, gem, go)
   --include-services    Include enabled/active systemd services
+.fi
+.SS diff
+.nf
+usage: distrodeck diff [-h] --input INPUT [--sections SECTIONS] [--detailed]
+                       [--json] [--exit-code] [--appimage-dirs APPIMAGE_DIRS]
+
+options:
+  -h, --help            show this help message and exit
+  --input INPUT         Export file to compare
+  --sections SECTIONS   Comma-separated sections to compare (default: all
+                        comparable sections; see --help for the list)
+  --detailed            List the differing entries, not just the counts
+  --json                Output a machine-readable JSON report
+  --exit-code           Exit 1 when differences are found (0 when in sync)
+  --appimage-dirs APPIMAGE_DIRS
 .fi
 .SS import
 .nf
@@ -184,11 +202,20 @@ options:
 .fi
 .SS install-tools
 .nf
-usage: distrodeck install-tools [-h] [--all]
+usage: distrodeck install-tools [-h] [--all] [--tools LIST]
+                                [--tools-file PATH] [--reconcile]
+                                [--list-tools]
 
 options:
-  -h, --help  show this help message and exit
-  --all       Install all tools without showing the TUI
+  -h, --help         show this help message and exit
+  --all              Install all tools without showing the TUI
+  --tools LIST       Install only these tools without showing the TUI (comma
+                     or space separated; repeatable)
+  --tools-file PATH  Install only the tools listed in PATH, one per line ('-'
+                     for stdin)
+  --reconcile        With --tools, also uninstall tracked tools outside the
+                     requested set
+  --list-tools       Print the tool catalog and exit
 .fi
 .SS git-status
 .nf

@@ -8,4 +8,11 @@ jobs:
     uses: nikolareljin/ci-helpers/.github/workflows/ci.yml@production
     with:
       python_version: "3.12"
+      # The suite needs the script-helpers submodule (the reusable checkout does
+      # not fetch submodules) and pytest, which this repo does not vendor.
+      test_command: >-
+        git submodule update --init --depth 1 scripts/script-helpers &&
+        python3 -m pip install --quiet --disable-pip-version-check pytest &&
+        python3 -m pytest tests -q &&
+        bash tests/test_install_tools_args.sh
       build_command: "python3 -m py_compile distrodeck.py"
