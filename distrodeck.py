@@ -2745,7 +2745,7 @@ def source_self_update_commands(root: Path, prefix: Path) -> List[List[str]]:
         ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
         [str(root / "build")],
         (["env", f"PREFIX={prefix}", str(root / "install")]
-         if str(prefix).startswith(str(Path.home()))
+         if os.path.commonpath([str(prefix.absolute()), str(Path.home())]) == str(Path.home())
          else ["sudo", "env", f"PREFIX={prefix}", str(root / "install")]),
     ]
 
