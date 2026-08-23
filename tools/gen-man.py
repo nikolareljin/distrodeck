@@ -68,6 +68,14 @@ def main() -> None:
         lines.append(f".B {name}")
         if desc:
             lines.append(desc)
+    lines.extend(
+        [
+            ".SH GIT ALIAS HELP",
+            "After running \\fBdistrodeck git-aliases set\\fR, run \\fBgit dhelp\\fR for a detailed reference of every distrodeck Git alias.",
+            ".PP",
+            "The interactive output uses color when supported; set \\fBNO_COLOR\\fR or pipe it for plain text.",
+        ]
+    )
     lines.append(".SH COMMAND HELP")
     for name, _ in commands:
         cmd_help = run([str(script), name, "--help"], env=env).stdout

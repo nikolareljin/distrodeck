@@ -4463,6 +4463,48 @@ def run_git_status_unset(_: argparse.Namespace) -> None:
     log_action_end("git-status unset")
 
 
+GIT_ALIAS_HELP_ROWS: Tuple[Tuple[str, str, str, str], ...] = (
+    ("df", "git df [<fetch-options>]", "Fetch updates from the current remote.", "Git remote access", "git df --prune"),
+    ("dp", "git dp [<pull-options>]", "Pull the current branch from its upstream.", "An upstream branch", "git dp --ff-only"),
+    ("dfp", "git dfp", "Fetch all remotes, then pull all tracked branches.", "Git remote access", "git dfp"),
+    ("dl", "git dl [<log-options>]", "Show decorated graph history for all refs.", "None", "git dl -20"),
+    ("dpr", "git dpr", "Create a pull request with values inferred by gh.", "GitHub CLI (gh)", "git dpr"),
+    ("dis", "git dis", "List repository issues with number, title, and state.", "GitHub CLI (gh)", "git dis"),
+    ("dprs", "git dprs", "List repository pull requests with number, title, and state.", "GitHub CLI (gh)", "git dprs"),
+    ("dup", "git dup", "Push the current branch and set origin tracking.", "A checked-out branch and origin remote", "git dup"),
+    ("ds", "git ds [<status-options>]", "Show compact repository status.", "Inside a Git repository", "git ds"),
+    ("db", "git db [<branch-options>]", "Show local branches with upstream details.", "Inside a Git repository", "git db"),
+    ("dbr", "git dbr [<branch-options>]", "Show local and remote branches.", "Inside a Git repository", "git dbr"),
+    ("dd", "git dd [<diff-options>] [<pathspec>...]", "Show unstaged changes.", "Inside a Git repository", "git dd -- README.md"),
+    ("dds", "git dds [<diff-options>] [<pathspec>...]", "Show staged changes.", "Inside a Git repository", "git dds --stat"),
+    ("dco", "git dco <branch-or-pathspec>", "Check out a branch, commit, or path.", "Inside a Git repository", "git dco main"),
+    ("dcb", "git dcb <new-branch>", "Create and check out a new branch.", "Inside a Git repository", "git dcb fix/readme"),
+    ("do", "git do", "Open the origin repository URL in a browser.", "origin remote; a supported browser launcher", "git do"),
+    ("dlr", "git dlr", "List the latest three branches and latest three tags.", "Inside a Git repository", "git dlr"),
+    ("dhelp", "git dhelp", "Show this detailed distrodeck alias reference.", "Distrodeck aliases configured with git-aliases set", "git dhelp"),
+)
+
+
+def git_alias_help_command() -> str:
+    rows = "\n".join("|".join(row) for row in GIT_ALIAS_HELP_ROWS)
+    return (
+        "!f() {"
+        " if [ -t 1 ] && [ -z \"${NO_COLOR:-}\" ]; then"
+        " title=$(printf '\\033[1;36m'); label=$(printf '\\033[1;33m'); reset=$(printf '\\033[0m');"
+        " else title=''; label=''; reset=''; fi;"
+        " printf '%sDistrodeck Git Help%s\\n' \"$title\" \"$reset\";"
+        " while IFS='|' read -r name usage description requirement example; do"
+        " [ -n \"$name\" ] || continue;"
+        " printf '\\n%s%s%s\\n' \"$title\" \"$usage\" \"$reset\";"
+        " printf '  %sWhat it does:%s %s\\n' \"$label\" \"$reset\" \"$description\";"
+        " printf '  %sRequires:%s %s\\n' \"$label\" \"$reset\" \"$requirement\";"
+        " printf '  %sExample:%s %s\\n' \"$label\" \"$reset\" \"$example\";"
+        " done <<'DHELP_ROWS'\n"
+        + rows
+        + "\nDHELP_ROWS\n"
+        " }; f"
+    )
+
 def git_alias_definitions() -> List[Tuple[str, str, str]]:
     # Tuple format: (alias_name, git_command, human_readable_description)
     # fmt: off
@@ -4541,7 +4583,7 @@ def git_alias_definitions() -> List[Tuple[str, str, str]]:
     entries.append(
         (
             "dhelp",
-            f"!git config --get-regexp '^alias\\.({alias_pattern})$' || true",
+            git_alias_help_command(),
             "show distrodeck aliases",
         )
     )
