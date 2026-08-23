@@ -2692,6 +2692,26 @@ def self_update_command(method: str) -> List[str]:
     return commands[method]
 
 
+def source_install_prefix() -> Path:
+    configured_prefix = os.environ.get("PREFIX")
+    if configured_prefix:
+        return Path(configured_prefix).expanduser()
+    installed = shutil.which("distrodeck")
+    if installed:
+        installed_path = Path(installed).resolve()
+        if installed_path.parent.name == "bin":
+            return installed_path.parent.parent
+    return Path("/usr/local")
+
+
+def source_self_update_commands(root: Path, prefix: Path) -> List[List[str]]:
+    return [
+        ["git", "-C", str(root), "pull", "--ff-only"],
+        ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
+        [str(root / "build")],
+        ["sudo", "env", f"PREFIX={prefix}", str(root / "install")],
+    ]
+
 def run_self_update(_: argparse.Namespace) -> None:
     log_action_start("self-update")
     method = self_update_method()
@@ -2708,12 +2728,7 @@ def run_self_update(_: argparse.Namespace) -> None:
             warn("Source checkout is dirty or unavailable; refusing self-update.")
             log_action_end("self-update", "refused")
             return
-        steps = [
-            ["git", "-C", str(root), "pull", "--ff-only"],
-            ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
-            [str(root / "build")],
-            ["sudo", str(root / "install")],
-        ]
+        steps = source_self_update_commands(root, source_install_prefix())
         for command in steps:
             if run(command, check=False).returncode != 0:
                 warn(f"Self-update failed: {' '.join(command)}")
@@ -2723,7 +2738,13 @@ def run_self_update(_: argparse.Namespace) -> None:
         warn(f"Self-update via {method} failed.")
         log_action_end("self-update", "failed")
         return
-    log(f"distrodeck self-update completed (was {before}; restart the command to report the installed version).")
+    resulting = VERSION
+    if method == "source":
+        try:
+            resulting = (root / "VERSION").read_text(encoding="utf-8").strip() or VERSION
+        except OSError:
+            pass
+    log(f"distrodeck self-update completed (was {before}; now {resulting}).")
     log_action_end("self-update")
 
 
@@ -5026,7 +5047,6 @@ def run_automate_tui() -> None:
             dialog_msgbox("Automate", "Password/token is required.")
             return
         askpass_path = build_git_askpass_script()
-        ("self-update", "System: Update distrodeck"),
         env_vars.update(
             {
                 "ANSIBLE_GIT_USERNAME": username,
@@ -5087,6 +5107,7 @@ def run_tui() -> None:
     os.environ["DISTRODECK_DIALOG"] = "1"
     self_cmd = str(Path(__file__).resolve())
     actions = [
+        ("self-update", "System: Update distrodeck"),
         ("preflight", "Diagnostics: Preflight checks"),
         ("export", "Packages: Export installed packages"),
         ("import", "Packages: Import from export file"),
@@ -5318,10 +5339,7 @@ def run_tui() -> None:
         elif choice == "net-tools":
             run_network_tools_tui()
         elif choice == "self-update":
-            if not ensure_sudo():
-                continue
             run_self_update(argparse.Namespace())
-            continue
             continue
         elif choice == "config-edit":
             run_config_edit_tui()

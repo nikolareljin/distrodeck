@@ -17,3 +17,15 @@ def test_self_update_commands_are_native_to_each_manager():
     assert distrodeck.self_update_command("dnf") == ["sudo", "dnf", "upgrade", "-y", "distrodeck"]
     assert distrodeck.self_update_command("zypper") == ["sudo", "zypper", "update", "-y", "distrodeck"]
     assert distrodeck.self_update_command("pacman") == ["sudo", "pacman", "-Syu", "--noconfirm", "distrodeck"]
+
+
+def test_source_self_update_commands_preserve_prefix():
+    root = Path("/tmp/distrodeck-source")
+    prefix = Path("/opt/distrodeck")
+
+    assert distrodeck.source_self_update_commands(root, prefix) == [
+        ["git", "-C", str(root), "pull", "--ff-only"],
+        ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
+        [str(root / "build")],
+        ["sudo", "env", "PREFIX=/opt/distrodeck", str(root / "install")],
+    ]
