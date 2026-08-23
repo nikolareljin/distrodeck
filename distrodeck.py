@@ -2667,8 +2667,8 @@ def self_update_probe_command(manager: str, version: bool = False) -> Optional[L
         "brew": ["brew", "list", "--versions" if version else "--formula", "distrodeck"],
         "nala": ["dpkg-query", "-W", "-f=${Version}" if version else "-f=${db:Status-Status}", "distrodeck"],
         "apt-get": ["dpkg-query", "-W", "-f=${Version}" if version else "-f=${db:Status-Status}", "distrodeck"],
-        "dnf": ["rpm", "-q", "--qf" if version else "", "%{VERSION}" if version else "distrodeck", "distrodeck" if version else ""],
-        "zypper": ["rpm", "-q", "--qf" if version else "", "%{VERSION}" if version else "distrodeck", "distrodeck" if version else ""],
+        "dnf": ["rpm", "-q", "--qf", "%{VERSION}", "distrodeck"] if version else ["rpm", "-q", "distrodeck"],
+        "zypper": ["rpm", "-q", "--qf", "%{VERSION}", "distrodeck"] if version else ["rpm", "-q", "distrodeck"],
         "pacman": ["pacman", "-Q", "distrodeck"],
     }
     return [part for part in commands[manager] if part]
