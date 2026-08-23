@@ -2723,7 +2723,7 @@ def source_self_update_commands(root: Path, prefix: Path) -> List[List[str]]:
         ["sudo", "env", f"PREFIX={prefix}", str(root / "install")],
     ]
 
-def run_self_update(_: argparse.Namespace) -> None:
+def run_self_update(_: argparse.Namespace) -> bool:
     log_action_start("self-update")
     method = self_update_method()
     before = VERSION
@@ -2736,7 +2736,7 @@ def run_self_update(_: argparse.Namespace) -> None:
     if method is None:
         warn("Unable to detect a supported distrodeck installation. Install from a package manager or run from a git checkout.")
         log_action_end("self-update", "unsupported")
-        return
+        return False
     log(f"Updating distrodeck via {method} (current version: {before})")
     if method == "source":
         root = SCRIPT_FILE.parent
@@ -2744,7 +2744,7 @@ def run_self_update(_: argparse.Namespace) -> None:
         if status.returncode != 0 or (status.stdout or "").strip():
             warn("Source checkout is dirty or unavailable; refusing self-update.")
             log_action_end("self-update", "refused")
-            return
+            return False
         fast_forwardable = run(
             ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", "@{u}"],
             check=False,
@@ -2752,17 +2752,17 @@ def run_self_update(_: argparse.Namespace) -> None:
         if fast_forwardable.returncode != 0:
             warn("Source checkout cannot fast-forward; refusing self-update.")
             log_action_end("self-update", "refused")
-            return
+            return False
         steps = source_self_update_commands(root, source_install_prefix())
         for command in steps:
             if run(command, check=False).returncode != 0:
                 warn(f"Self-update failed: {' '.join(command)}")
                 log_action_end("self-update", "failed")
-                return
+                return False
     elif run(self_update_command(method), check=False).returncode != 0:
         warn(f"Self-update via {method} failed.")
         log_action_end("self-update", "failed")
-        return
+        return False
     resulting = "unknown"
     if method == "source":
         try:
@@ -2777,6 +2777,7 @@ def run_self_update(_: argparse.Namespace) -> None:
                 resulting = (probe.stdout or "").strip().split()[-1]
     log(f"distrodeck self-update completed (was {before}; now {resulting}).")
     log_action_end("self-update")
+    return True
 
 
 
@@ -5879,7 +5880,9 @@ def main() -> None:
     args = parser.parse_args()
     global VERBOSE
     VERBOSE = args.verbose
-    args.func(args)
+    result = args.func(args)
+    if getattr(args, "command", None) in {"self-update", "self-upgrade"} and result is False:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
