@@ -69,6 +69,8 @@ distrodeck import --input backup.txt --apply-config
 distrodeck import --input backup.txt --apply-config-files
 
 distrodeck update
+distrodeck self-update
+distrodeck self-upgrade
 
 distrodeck update --cleanup-kernels
 

@@ -2659,6 +2659,74 @@ def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     log_action_end("update", "errors" if had_errors else "ok")
     return not had_errors
 
+SELF_UPDATE_MANAGERS = ("brew", "nala", "apt-get", "dnf", "zypper", "pacman")
+
+
+def self_update_method() -> Optional[str]:
+    if (SCRIPT_FILE.parent / ".git").is_dir():
+        return "source"
+    for manager in SELF_UPDATE_MANAGERS:
+        if cmd_exists(manager):
+            if manager == "brew":
+                probe = run(["brew", "list", "--formula", "distrodeck"], check=False, capture_output=True)
+            elif manager in {"nala", "apt-get"}:
+                probe = run(["dpkg-query", "-W", "-f=${db:Status-Status}", "distrodeck"], check=False, capture_output=True)
+            elif manager in {"dnf", "zypper"}:
+                probe = run(["rpm", "-q", "distrodeck"], check=False, capture_output=True)
+            else:
+                probe = run(["pacman", "-Q", "distrodeck"], check=False, capture_output=True)
+            if probe.returncode == 0:
+                return manager
+    return None
+
+
+def self_update_command(method: str) -> List[str]:
+    commands = {
+        "brew": ["brew", "upgrade", "distrodeck"],
+        "nala": ["sudo", "nala", "upgrade", "-y", "distrodeck"],
+        "apt-get": ["sudo", "apt-get", "install", "--only-upgrade", "-y", "distrodeck"],
+        "dnf": ["sudo", "dnf", "upgrade", "-y", "distrodeck"],
+        "zypper": ["sudo", "zypper", "update", "-y", "distrodeck"],
+        "pacman": ["sudo", "pacman", "-Syu", "--noconfirm", "distrodeck"],
+    }
+    return commands[method]
+
+
+def run_self_update(_: argparse.Namespace) -> None:
+    log_action_start("self-update")
+    method = self_update_method()
+    before = VERSION
+    if method is None:
+        warn("Unable to detect a supported distrodeck installation. Install from a package manager or run from a git checkout.")
+        log_action_end("self-update", "unsupported")
+        return
+    log(f"Updating distrodeck via {method} (current version: {before})")
+    if method == "source":
+        root = SCRIPT_FILE.parent
+        status = run(["git", "-C", str(root), "status", "--porcelain"], check=False, capture_output=True)
+        if status.returncode != 0 or (status.stdout or "").strip():
+            warn("Source checkout is dirty or unavailable; refusing self-update.")
+            log_action_end("self-update", "refused")
+            return
+        steps = [
+            ["git", "-C", str(root), "pull", "--ff-only"],
+            ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
+            [str(root / "build")],
+            ["sudo", str(root / "install")],
+        ]
+        for command in steps:
+            if run(command, check=False).returncode != 0:
+                warn(f"Self-update failed: {' '.join(command)}")
+                log_action_end("self-update", "failed")
+                return
+    elif run(self_update_command(method), check=False).returncode != 0:
+        warn(f"Self-update via {method} failed.")
+        log_action_end("self-update", "failed")
+        return
+    log(f"distrodeck self-update completed (was {before}; restart the command to report the installed version).")
+    log_action_end("self-update")
+
+
 
 def run_security() -> None:
     log_action_start("security")
@@ -4958,6 +5026,7 @@ def run_automate_tui() -> None:
             dialog_msgbox("Automate", "Password/token is required.")
             return
         askpass_path = build_git_askpass_script()
+        ("self-update", "System: Update distrodeck"),
         env_vars.update(
             {
                 "ANSIBLE_GIT_USERNAME": username,
@@ -5248,6 +5317,11 @@ def run_tui() -> None:
             continue
         elif choice == "net-tools":
             run_network_tools_tui()
+        elif choice == "self-update":
+            if not ensure_sudo():
+                continue
+            run_self_update(argparse.Namespace())
+            continue
             continue
         elif choice == "config-edit":
             run_config_edit_tui()
@@ -5569,6 +5643,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_cmd.add_argument("--appimage-dirs", default=None)
     import_cmd.set_defaults(func=import_from_file)
+
+    self_update_cmd = sub.add_parser(
+        "self-update", aliases=["self-upgrade"], help="Update distrodeck itself"
+    )
+    self_update_cmd.set_defaults(func=run_self_update)
 
     update_cmd = sub.add_parser("update", help="Update system packages")
     update_cmd.add_argument(

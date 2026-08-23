@@ -131,6 +131,15 @@ JSON shape:
 Config snapshots, service state, and config files are not comparable as lists
 and are therefore outside the scope of `diff`.
 
+### self-update / self-upgrade
+
+Update distrodeck itself through its native package manager or from a clean source checkout.
+
+```
+distrodeck self-update
+distrodeck self-upgrade
+```
+
 ### update
 
 Update and upgrade installed packages across apt/nala, snap, and flatpak.

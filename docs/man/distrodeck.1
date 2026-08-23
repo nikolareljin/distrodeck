@@ -23,6 +23,9 @@ Compare an export file against the current system
 .B import
 Import packages and sources
 .TP
+.B self-update
+(self-upgrade)
+.TP
 .B update
 Update system packages
 .TP
@@ -137,6 +140,13 @@ options:
                         apt_manual,snap,flatpak)
   --cleanup-extras      Remove snap/flatpak extras not present in the export
   --appimage-dirs APPIMAGE_DIRS
+.fi
+.SS self-update
+.nf
+usage: distrodeck self-update [-h]
+
+options:
+  -h, --help  show this help message and exit
 .fi
 .SS update
 .nf
