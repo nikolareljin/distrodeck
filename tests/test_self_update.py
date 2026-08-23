@@ -1,4 +1,5 @@
 import importlib.util
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -29,3 +30,20 @@ def test_source_self_update_commands_preserve_prefix():
         [str(root / "build")],
         ["sudo", "env", "PREFIX=/opt/distrodeck", str(root / "install")],
     ]
+
+
+def test_self_update_refuses_dirty_source_checkout(monkeypatch, tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    monkeypatch.setattr(distrodeck, "SCRIPT_FILE", root / "distrodeck.py")
+    monkeypatch.setattr(distrodeck, "self_update_method", lambda: "source")
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="dirty\n")
+
+    monkeypatch.setattr(distrodeck, "run", fake_run)
+    distrodeck.run_self_update(None)
+
+    assert calls == [["git", "-C", str(root), "status", "--porcelain"]]
