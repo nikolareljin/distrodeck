@@ -2662,21 +2662,30 @@ def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
 SELF_UPDATE_MANAGERS = ("brew", "nala", "apt-get", "dnf", "zypper", "pacman")
 
 
+def self_update_probe_command(manager: str, version: bool = False) -> Optional[List[str]]:
+    commands = {
+        "brew": ["brew", "list", "--versions" if version else "--formula", "distrodeck"],
+        "nala": ["dpkg-query", "-W", "-f=${Version}" if version else "-f=${db:Status-Status}", "distrodeck"],
+        "apt-get": ["dpkg-query", "-W", "-f=${Version}" if version else "-f=${db:Status-Status}", "distrodeck"],
+        "dnf": ["rpm", "-q", "--qf" if version else "", "%{VERSION}" if version else "distrodeck", "distrodeck" if version else ""],
+        "zypper": ["rpm", "-q", "--qf" if version else "", "%{VERSION}" if version else "distrodeck", "distrodeck" if version else ""],
+        "pacman": ["pacman", "-Q", "distrodeck"],
+    }
+    return [part for part in commands[manager] if part]
+
+
 def self_update_method() -> Optional[str]:
+    for manager in SELF_UPDATE_MANAGERS:
+        if not cmd_exists(manager):
+            continue
+        probe_command = self_update_probe_command(manager)
+        if probe_command is None or not cmd_exists(probe_command[0]):
+            continue
+        probe = run(probe_command, check=False, capture_output=True)
+        if probe.returncode == 0:
+            return manager
     if (SCRIPT_FILE.parent / ".git").is_dir():
         return "source"
-    for manager in SELF_UPDATE_MANAGERS:
-        if cmd_exists(manager):
-            if manager == "brew":
-                probe = run(["brew", "list", "--formula", "distrodeck"], check=False, capture_output=True)
-            elif manager in {"nala", "apt-get"}:
-                probe = run(["dpkg-query", "-W", "-f=${db:Status-Status}", "distrodeck"], check=False, capture_output=True)
-            elif manager in {"dnf", "zypper"}:
-                probe = run(["rpm", "-q", "distrodeck"], check=False, capture_output=True)
-            else:
-                probe = run(["pacman", "-Q", "distrodeck"], check=False, capture_output=True)
-            if probe.returncode == 0:
-                return manager
     return None
 
 
@@ -2744,6 +2753,12 @@ def run_self_update(_: argparse.Namespace) -> None:
             resulting = (root / "VERSION").read_text(encoding="utf-8").strip() or VERSION
         except OSError:
             pass
+    else:
+        probe_command = self_update_probe_command(method, version=True)
+        if probe_command and cmd_exists(probe_command[0]):
+            probe = run(probe_command, check=False, capture_output=True)
+            if probe.returncode == 0 and (probe.stdout or "").strip():
+                resulting = (probe.stdout or "").strip()
     log(f"distrodeck self-update completed (was {before}; now {resulting}).")
     log_action_end("self-update")
 
