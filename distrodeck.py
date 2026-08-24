@@ -2659,6 +2659,217 @@ def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     log_action_end("update", "errors" if had_errors else "ok")
     return not had_errors
 
+SELF_UPDATE_MANAGERS = ("brew", "nala", "apt-get", "dnf", "zypper", "pacman")
+
+
+def self_update_probe_command(manager: str, version: bool = False) -> Optional[List[str]]:
+    commands = {
+        "brew": ["brew", "list", "--versions" if version else "--formula", "distrodeck"],
+        "nala": ["dpkg-query", "-W", "-f=${Version}" if version else "-f=${db:Status-Status}", "distrodeck"],
+        "apt-get": ["dpkg-query", "-W", "-f=${Version}" if version else "-f=${db:Status-Status}", "distrodeck"],
+        "dnf": ["rpm", "-q", "--qf", "%{VERSION}", "distrodeck"] if version else ["rpm", "-q", "distrodeck"],
+        "zypper": ["rpm", "-q", "--qf", "%{VERSION}", "distrodeck"] if version else ["rpm", "-q", "distrodeck"],
+        "pacman": ["pacman", "-Q", "distrodeck"],
+    }
+    return [part for part in commands[manager] if part]
+
+
+def source_checkout_root() -> Optional[Path]:
+    direct = SCRIPT_FILE.parent
+    if (direct / ".git").exists():
+        return direct
+    source_root_file = (runtime_share_root or SCRIPT_FILE.parent.parent / "share" / "distrodeck") / "SOURCE_ROOT"
+    try:
+        source_root = Path(source_root_file.read_text(encoding="utf-8").strip())
+    except OSError:
+        return None
+    return source_root if (source_root / ".git").exists() else None
+
+
+
+def self_update_owns_running_script(manager: str) -> bool:
+    if manager in {"nala", "apt-get"}:
+        command = ["dpkg-query", "-S", str(SCRIPT_FILE)]
+    elif manager in {"dnf", "zypper"}:
+        command = ["rpm", "-qf", str(SCRIPT_FILE)]
+    elif manager == "pacman":
+        command = ["pacman", "-Qo", str(SCRIPT_FILE)]
+    else:
+        result = run(["brew", "--prefix", "distrodeck"], check=False, capture_output=True)
+        if result.returncode != 0:
+            return False
+        prefix_value = (result.stdout or "").strip()
+        if not prefix_value:
+            return False
+        resolved_prefix = Path(prefix_value).expanduser().resolve()
+        return os.path.commonpath([str(SCRIPT_FILE.resolve()), str(resolved_prefix)]) == str(resolved_prefix)
+    result = run(command, check=False, capture_output=True)
+    return result.returncode == 0
+
+def self_update_methods() -> Dict[str, str]:
+    methods = {}
+    backend = {"nala": "dpkg", "apt-get": "dpkg", "dnf": "rpm", "zypper": "rpm"}
+    for manager in SELF_UPDATE_MANAGERS:
+        if not cmd_exists(manager):
+            continue
+        probe_command = self_update_probe_command(manager)
+        if probe_command is None or not cmd_exists(probe_command[0]):
+            continue
+        probe = run(probe_command, check=False, capture_output=True)
+        if manager in {"nala", "apt-get"} and (probe.stdout or "").strip() != "installed":
+            continue
+        if probe.returncode == 0 and self_update_owns_running_script(manager):
+            key = backend.get(manager, manager)
+            if key == "rpm":
+                preferred = "zypper" if get_os_id() in {"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"} else "dnf"
+                if manager != preferred and cmd_exists(preferred):
+                    continue
+            if key not in methods or manager == "nala":
+                methods[key] = manager
+    if source_checkout_root() is not None:
+        methods["source"] = "source"
+    return methods
+
+
+def self_update_method() -> Optional[str]:
+    methods = self_update_methods()
+    if len(methods) != 1:
+        return None
+    return next(iter(methods.values()))
+
+
+def self_update_command(method: str) -> List[str]:
+    commands = {
+        "brew": ["brew", "upgrade", "distrodeck"],
+        "nala": ["sudo", "nala", "install", "-y", "distrodeck"],
+        "apt-get": ["sudo", "apt-get", "install", "--only-upgrade", "-y", "distrodeck"],
+        "dnf": ["sudo", "dnf", "upgrade", "-y", "distrodeck"],
+        "zypper": ["sudo", "zypper", "update", "-y", "distrodeck"],
+        "pacman": ["sudo", "pacman", "-Syu", "--noconfirm", "distrodeck"],
+    }
+    return commands[method]
+
+
+def source_install_prefix(root: Path) -> Optional[Path]:
+    configured_prefix = os.environ.get("PREFIX")
+    if configured_prefix:
+        return Path(configured_prefix).expanduser()
+    if runtime_share_root is not None:
+        return runtime_share_root.parent.parent
+    installed = shutil.which("distrodeck")
+    if installed:
+        installed_path = Path(installed)
+        if installed_path.parent.name == "bin":
+            prefix = installed_path.parent.parent
+            source_root_file = prefix / "share" / "distrodeck" / "SOURCE_ROOT"
+            try:
+                installed_source_root = Path(source_root_file.read_text(encoding="utf-8").strip())
+            except OSError:
+                return None
+            if installed_source_root.resolve() != root.resolve():
+                return None
+            return prefix
+    return Path("/usr/local")
+
+
+def source_self_update_commands(root: Path, prefix: Path) -> List[List[str]]:
+    return [
+        ["git", "-C", str(root), "pull", "--ff-only"],
+        ["git", "-C", str(root), "submodule", "update", "--init", "--recursive"],
+        [str(root / "build")],
+        (["env", f"PREFIX={prefix}", str(root / "install")]
+         if os.path.commonpath([str(prefix.absolute()), str(Path.home())]) == str(Path.home())
+         else ["sudo", "env", f"PREFIX={prefix}", str(root / "install")]),
+    ]
+
+def run_self_update(_: argparse.Namespace) -> bool:
+    log_action_start("self-update")
+    method = self_update_method()
+    before = VERSION
+    if method and method != "source":
+        version_probe = self_update_probe_command(method, version=True)
+        if version_probe and cmd_exists(version_probe[0]):
+            probe = run(version_probe, check=False, capture_output=True)
+            if probe.returncode == 0 and (probe.stdout or "").strip():
+                before = (probe.stdout or "").strip().split()[-1]
+    if method is None:
+        methods = self_update_methods()
+        if len(methods) > 1:
+            warn(
+                "Multiple distrodeck installations were detected "
+                f"({', '.join(sorted(methods.values()))}). Remove the unwanted installation "
+                "or run the intended installation directly."
+            )
+        else:
+            warn("Unable to detect a supported distrodeck installation. Install from a package manager or run from a git checkout.")
+        log_action_end("self-update", "unsupported")
+        return False
+    log(f"Updating distrodeck via {method} (current version: {before})")
+    if method == "source":
+        root = source_checkout_root()
+        if root is None:
+            warn("Source checkout location is unavailable; refusing self-update.")
+            log_action_end("self-update", "unsupported")
+            return False
+        if not cmd_exists("git"):
+            warn("Git is required to update a source checkout.")
+            log_action_end("self-update", "unsupported")
+            return False
+        status = run(["git", "-C", str(root), "status", "--porcelain"], check=False, capture_output=True)
+        if status.returncode != 0 or (status.stdout or "").strip():
+            warn("Source checkout is dirty or unavailable; refusing self-update.")
+            log_action_end("self-update", "refused")
+            return False
+        fast_forwardable = run(
+            ["git", "-C", str(root), "merge-base", "--is-ancestor", "HEAD", "@{u}"],
+            check=False,
+        )
+        if fast_forwardable.returncode != 0:
+            warn("Source checkout cannot fast-forward; refusing self-update.")
+            log_action_end("self-update", "refused")
+            return False
+        prefix = source_install_prefix(root)
+        if prefix is None:
+            warn("The distrodeck installation on PATH belongs to a different source or package; refusing self-update.")
+            log_action_end("self-update", "refused")
+            return False
+        steps = source_self_update_commands(root, prefix)
+        for command in steps:
+            if run(command, check=False).returncode != 0:
+                warn(f"Self-update failed: {' '.join(command)}")
+                log_action_end("self-update", "failed")
+                return False
+    elif method in {"nala", "apt-get"} and run(
+        ["sudo", method, "update"], check=False
+    ).returncode != 0:
+        warn(f"Self-update via {method} failed while refreshing package metadata.")
+        log_action_end("self-update", "failed")
+        return False
+    elif run(self_update_command(method), check=False).returncode != 0:
+        warn(f"Self-update via {method} failed.")
+        log_action_end("self-update", "failed")
+        return False
+    resulting = "unknown"
+    if method == "source":
+        try:
+            resulting = (root / "VERSION").read_text(encoding="utf-8").strip() or VERSION
+        except OSError:
+            pass
+    else:
+        probe_command = self_update_probe_command(method, version=True)
+        if probe_command and cmd_exists(probe_command[0]):
+            probe = run(probe_command, check=False, capture_output=True)
+            if probe.returncode == 0 and (probe.stdout or "").strip():
+                resulting = (probe.stdout or "").strip().split()[-1]
+    if resulting == "unknown":
+        warn("Self-update completed but the installed version could not be verified.")
+        log_action_end("self-update", "unverified")
+        return False
+    log(f"distrodeck self-update completed (was {before}; now {resulting}).")
+    log_action_end("self-update")
+    return True
+
+
 
 def run_security() -> None:
     log_action_start("security")
@@ -5085,6 +5296,7 @@ def run_tui() -> None:
     os.environ["DISTRODECK_DIALOG"] = "1"
     self_cmd = str(Path(__file__).resolve())
     actions = [
+        ("self-update", "System: Update distrodeck"),
         ("preflight", "Diagnostics: Preflight checks"),
         ("export", "Packages: Export installed packages"),
         ("import", "Packages: Import from export file"),
@@ -5315,6 +5527,11 @@ def run_tui() -> None:
             continue
         elif choice == "net-tools":
             run_network_tools_tui()
+            continue
+        elif choice == "self-update":
+            run(["dialog", "--clear"], check=False)
+            succeeded = run_self_update(argparse.Namespace())
+            dialog_msgbox("Self-update", "Completed." if succeeded else "Did not complete; see the log above.")
             continue
         elif choice == "config-edit":
             run_config_edit_tui()
@@ -5637,6 +5854,11 @@ def build_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--appimage-dirs", default=None)
     import_cmd.set_defaults(func=import_from_file)
 
+    self_update_cmd = sub.add_parser(
+        "self-update", aliases=["self-upgrade"], help="Update distrodeck itself"
+    )
+    self_update_cmd.set_defaults(func=run_self_update)
+
     update_cmd = sub.add_parser("update", help="Update system packages")
     update_cmd.add_argument(
         "--cleanup-kernels",
@@ -5817,7 +6039,9 @@ def main() -> None:
     args = parser.parse_args()
     global VERBOSE
     VERBOSE = args.verbose
-    args.func(args)
+    result = args.func(args)
+    if getattr(args, "command", None) in {"self-update", "self-upgrade"} and result is False:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
