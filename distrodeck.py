@@ -2698,12 +2698,15 @@ def self_update_owns_running_script(manager: str) -> bool:
         result = run(["brew", "--prefix", "distrodeck"], check=False, capture_output=True)
         if result.returncode != 0:
             return False
-        prefix = (result.stdout or "").strip()
-        return bool(prefix) and os.path.commonpath([str(SCRIPT_FILE.absolute()), prefix]) == prefix
+        prefix_value = (result.stdout or "").strip()
+        if not prefix_value:
+            return False
+        resolved_prefix = Path(prefix_value).expanduser().resolve()
+        return os.path.commonpath([str(SCRIPT_FILE.resolve()), str(resolved_prefix)]) == str(resolved_prefix)
     result = run(command, check=False, capture_output=True)
     return result.returncode == 0
 
-def self_update_methods() -> dict[str, str]:
+def self_update_methods() -> Dict[str, str]:
     methods = {}
     backend = {"nala": "dpkg", "apt-get": "dpkg", "dnf": "rpm", "zypper": "rpm"}
     for manager in SELF_UPDATE_MANAGERS:
@@ -2747,17 +2750,25 @@ def self_update_command(method: str) -> List[str]:
     return commands[method]
 
 
-def source_install_prefix() -> Path:
+def source_install_prefix(root: Path) -> Optional[Path]:
     configured_prefix = os.environ.get("PREFIX")
     if configured_prefix:
         return Path(configured_prefix).expanduser()
-    if SCRIPT_FILE.parent.name == "bin":
-        return SCRIPT_FILE.parent.parent
+    if runtime_share_root is not None:
+        return runtime_share_root.parent.parent
     installed = shutil.which("distrodeck")
     if installed:
         installed_path = Path(installed)
         if installed_path.parent.name == "bin":
-            return installed_path.parent.parent
+            prefix = installed_path.parent.parent
+            source_root_file = prefix / "share" / "distrodeck" / "SOURCE_ROOT"
+            try:
+                installed_source_root = Path(source_root_file.read_text(encoding="utf-8").strip())
+            except OSError:
+                return None
+            if installed_source_root.resolve() != root.resolve():
+                return None
+            return prefix
     return Path("/usr/local")
 
 
@@ -2817,7 +2828,12 @@ def run_self_update(_: argparse.Namespace) -> bool:
             warn("Source checkout cannot fast-forward; refusing self-update.")
             log_action_end("self-update", "refused")
             return False
-        steps = source_self_update_commands(root, source_install_prefix())
+        prefix = source_install_prefix(root)
+        if prefix is None:
+            warn("The distrodeck installation on PATH belongs to a different source or package; refusing self-update.")
+            log_action_end("self-update", "refused")
+            return False
+        steps = source_self_update_commands(root, prefix)
         for command in steps:
             if run(command, check=False).returncode != 0:
                 warn(f"Self-update failed: {' '.join(command)}")
