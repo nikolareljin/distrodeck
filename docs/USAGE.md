@@ -131,6 +131,17 @@ JSON shape:
 Config snapshots, service state, and config files are not comparable as lists
 and are therefore outside the scope of `diff`.
 
+### self-update / self-upgrade
+
+Update distrodeck itself through its native package manager or from a clean source checkout.
+
+```
+distrodeck self-update
+distrodeck self-upgrade
+```
+
+Package-managed installs use their native updater and require sudo except Homebrew. Source checkouts must be clean and fast-forwardable. They reinstall with sudo unless the detected prefix is under the current home directory; distrodeck refreshes recursive submodules, builds, and reinstalls with the detected prefix (or `PREFIX` when set). A dirty or non-fast-forwardable checkout is refused without installation.
+
 ### update
 
 Update and upgrade installed packages across apt/nala, snap, and flatpak.
@@ -409,7 +420,7 @@ Recommended aliases (all prefixed with `d`):
 - `git dco` -> checkout
 - `git dcb` -> create branch
 - `git dlr` -> latest 3 branches and latest 3 tags (newest first)
-- `git dhelp` -> list distrodeck aliases
+- `git dhelp` -> detailed distrodeck alias reference (purpose, parameters, requirements, examples)
 
 Example prompt segment:
 

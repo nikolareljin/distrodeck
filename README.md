@@ -69,6 +69,8 @@ distrodeck import --input backup.txt --apply-config
 distrodeck import --input backup.txt --apply-config-files
 
 distrodeck update
+distrodeck self-update
+distrodeck self-upgrade
 
 distrodeck update --cleanup-kernels
 
@@ -124,7 +126,7 @@ Recommended git aliases (prefixed with `d`):
 - `git dco` -> checkout
 - `git dcb` -> create branch
 - `git dlr` -> latest 3 branches and latest 3 tags (newest first)
-- `git dhelp` -> list distrodeck aliases
+- `git dhelp` -> detailed distrodeck alias reference (purpose, parameters, requirements, examples)
 
 distrodeck sysinfo
 

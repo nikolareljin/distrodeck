@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-08-21" "distrodeck 0.9.0" "User Commands"
+.TH DISTRODECK 1 "2026-08-24" "distrodeck 0.10.0" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -22,6 +22,9 @@ Compare an export file against the current system
 .TP
 .B import
 Import packages and sources
+.TP
+.B self-update
+(self-upgrade) Update distrodeck itself
 .TP
 .B update
 Update system packages
@@ -67,6 +70,10 @@ Edit common system config files (TUI)
 .TP
 .B net-tools
 Run installed network tools (TUI)
+.SH GIT ALIAS HELP
+After running \fBdistrodeck git-aliases set\fR, run \fBgit dhelp\fR for a detailed reference of every distrodeck Git alias.
+.PP
+The interactive output uses color when supported; set \fBNO_COLOR\fR or pipe it for plain text.
 .SH COMMAND HELP
 .SS export
 .nf
@@ -137,6 +144,13 @@ options:
                         apt_manual,snap,flatpak)
   --cleanup-extras      Remove snap/flatpak extras not present in the export
   --appimage-dirs APPIMAGE_DIRS
+.fi
+.SS self-update
+.nf
+usage: distrodeck self-update [-h]
+
+options:
+  -h, --help  show this help message and exit
 .fi
 .SS update
 .nf

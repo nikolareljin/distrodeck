@@ -20,6 +20,13 @@ def parse_commands(help_text: str) -> List[Tuple[str, str]]:
             continue
         if in_section and not line.strip():
             break
+        if in_section and line.startswith("                        "):
+            if commands:
+                name, desc = commands[-1]
+                commands[-1] = (name, f"{desc} {line.strip()}".strip())
+            continue
+        if in_section and not line.startswith("    "):
+            continue
         if in_section:
             parts = line.strip().split(None, 1)
             if not parts:
@@ -42,7 +49,7 @@ def main() -> None:
     env["LC_ALL"] = "C"
 
     help_text = run([str(script), "--help"], env=env).stdout
-    version = run([str(script), "--version"], env=env).stdout.strip()
+    version = run([str(script), "--version"], env=env).stdout.strip().split()[-1]
     commands = parse_commands(help_text)
 
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -68,6 +75,14 @@ def main() -> None:
         lines.append(f".B {name}")
         if desc:
             lines.append(desc)
+    lines.extend(
+        [
+            ".SH GIT ALIAS HELP",
+            "After running \\fBdistrodeck git-aliases set\\fR, run \\fBgit dhelp\\fR for a detailed reference of every distrodeck Git alias.",
+            ".PP",
+            "The interactive output uses color when supported; set \\fBNO_COLOR\\fR or pipe it for plain text.",
+        ]
+    )
     lines.append(".SH COMMAND HELP")
     for name, _ in commands:
         cmd_help = run([str(script), name, "--help"], env=env).stdout
