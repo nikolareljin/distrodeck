@@ -1,0 +1,28 @@
+name: Pages
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/pages.yml]
+  pull_request:
+    paths: [site/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: nikolareljin/ci-helpers/.github/workflows/pages-build.yml@production
+    permissions:
+      contents: read
+      pages: read
+    with:
+      fetch_depth: 1
+      pages_path: site
+      configure_pages: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      upload: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  deploy:
+    needs: build
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    uses: nikolareljin/ci-helpers/.github/workflows/pages-deploy.yml@production
+    permissions:
+      pages: write
+      id-token: write
