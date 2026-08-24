@@ -2124,6 +2124,7 @@ is_installed_tool() {
     fd) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1;;
     fzf) command -v fzf >/dev/null 2>&1;;
     git) command -v git >/dev/null 2>&1;;
+    git-lantern) [[ -d "$STATE_DIR/tools/git-lantern/.git" ]];;
     ansible) command -v ansible-pull >/dev/null 2>&1 || command -v ansible >/dev/null 2>&1;;
     adb) command -v adb >/dev/null 2>&1;;
     git-lfs) command -v git-lfs >/dev/null 2>&1;;
@@ -2179,6 +2180,7 @@ is_installed_tool() {
     bfg) command -v bfg >/dev/null 2>&1;;
     gh) command -v gh >/dev/null 2>&1;;
     aider) command -v aider >/dev/null 2>&1;;
+    ai-runner) [[ -d "$STATE_DIR/tools/ai-runner/.git" ]];;
     antigravity) command -v antigravity >/dev/null 2>&1;;
     claude-code) command -v claude >/dev/null 2>&1;;
     codex) command -v codex >/dev/null 2>&1;;
@@ -2213,6 +2215,29 @@ is_installed_tool() {
 # ───────────────────────────────────────────────────────────────────────────────
 # Single source of truth: the interactive checklist, --all, and --tools
 # validation all read this array. Order defines the checklist order.
+managed_source_checkout() {
+  local name="$1" url="$2" dest="$STATE_DIR/tools/$name"
+  mkdir -p "$STATE_DIR/tools"
+  if [[ -d "$dest/.git" ]]; then
+    git -C "$dest" pull --ff-only
+  elif [[ -e "$dest" ]]; then
+    log_warn "$dest exists but is not a managed checkout."
+    return 1
+  else
+    git clone "$url" "$dest"
+  fi
+}
+
+install_git_lantern() {
+  command -v git >/dev/null 2>&1 || install_git "$1" || return 1
+  managed_source_checkout git-lantern https://github.com/nikolareljin/git-lantern.git
+}
+
+install_ai_runner() {
+  command -v git >/dev/null 2>&1 || install_git "$1" || return 1
+  managed_source_checkout ai-runner https://github.com/nikolareljin/ai-runner.git
+}
+
 TOOL_CATALOG=(
   # ── Shell & CLI ──
   bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh
@@ -2225,9 +2250,9 @@ TOOL_CATALOG=(
   # ── Backup & Storage ──
   borgbackup duplicity fdupes lz4 tar unzip
   # ── Development ──
-  bfg build-tools composer delta gh git git-lfs lazygit tokei
+  bfg build-tools composer delta gh git git-lantern git-lfs lazygit tokei
   # ── AI tools ──
-  aider antigravity claude-code codex copilot cursor gemini kiro ollama
+  aider ai-runner antigravity claude-code codex copilot cursor gemini kiro ollama
   # ── Languages & Runtimes ──
   go java node php ruby rust
   # ── DevOps & Containers ──
@@ -2241,7 +2266,7 @@ TOOL_CATALOG=(
 # Tools whose installers fetch and execute upstream scripts. They are held out
 # of --all unless DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true, but an explicit
 # --tools request counts as consent and installs them.
-OPT_IN_TOOLS=(aider antigravity claude-code codex copilot cursor gemini kiro ollama)
+OPT_IN_TOOLS=(aider ai-runner antigravity claude-code codex copilot cursor gemini kiro ollama)
 
 # Return 0 when $1 is a known catalog tool.
 is_catalog_tool() {
@@ -2529,6 +2554,7 @@ main() {
       curl) install_curl "$mgr";;
       wget) install_wget "$mgr";;
       git) install_git "$mgr";;
+      git-lantern) install_git_lantern "$mgr";;
       ansible) install_ansible "$mgr";;
       adb) install_adb "$mgr";;
       git-lfs) install_git_lfs "$mgr";;
@@ -2542,6 +2568,7 @@ main() {
       bfg) install_bfg "$mgr";;
       gh) install_gh "$mgr";;
       aider) install_aider "$mgr";;
+      ai-runner) install_ai_runner "$mgr";;
       antigravity) install_antigravity "$mgr";;
       claude-code) install_claude_code "$mgr";;
       codex) install_codex "$mgr";;
