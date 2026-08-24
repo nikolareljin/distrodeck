@@ -4,6 +4,23 @@ on:
     branches: [ main ]
 
 jobs:
+  auto_tag:
+    permissions:
+      contents: write
+      pull-requests: read
+    uses: nikolareljin/ci-helpers/.github/workflows/auto-tag.yml@production
+    with:
+      update_production_tag: false
+
+  release:
+    needs: auto_tag
+    if: ${{ needs.auto_tag.outputs.version != '' }}
+    permissions:
+      contents: write
+    uses: nikolareljin/ci-helpers/.github/workflows/create-github-release.yml@production
+    with:
+      release_tag: ${{ needs.auto_tag.outputs.version }}
+
   deb:
     # deb-build@production declares `permissions: contents: write` to upload
     # the built .deb to GitHub Releases. A called reusable workflow cannot be
