@@ -49,7 +49,7 @@ def main() -> None:
     env["LC_ALL"] = "C"
 
     help_text = run([str(script), "--help"], env=env).stdout
-    version = run([str(script), "--version"], env=env).stdout.strip()
+    version = run([str(script), "--version"], env=env).stdout.strip().split()[-1]
     commands = parse_commands(help_text)
 
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")

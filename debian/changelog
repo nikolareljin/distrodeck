@@ -1,6 +1,8 @@
 distrodeck (0.10.0) unstable; urgency=medium
 
-  * Release 0.10.0.
+  * Add self-update and self-upgrade for supported package-managed and source installs.
+  * Add managed package and service lifecycle tools.
+  * Expand git dhelp with detailed alias documentation.
 
  -- Nikola Reljin <nikola.reljin@gmail.com>  Sat, 22 Aug 2026 00:00:00 +0000
 
