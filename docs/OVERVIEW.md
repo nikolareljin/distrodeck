@@ -7,7 +7,8 @@ Distrodeck is a Python command-line tool and optional terminal UI for preparing 
 An export records the software sources and installed applications that define a machine:
 
 - manually installed and held apt packages;
-- Launchpad PPAs from legacy `.list` sources and non-official apt sources;
+- Launchpad PPAs from legacy `.list` sources;
+- non-official apt sources, including deb822 `.sources` entries;
 - Snap packages, including channel and classic-confinement metadata;
 - Flatpak applications and their remotes;
 - native package lists for pacman, dnf, and zypper;
@@ -27,7 +28,7 @@ Distrodeck can maintain a machine in addition to capturing it:
 
 - `update` updates installed packages through the available package manager and can clean old automatically installed kernels after success.
 - `upgrade` runs Ubuntu release upgrades; Debian upgrades require an explicit target codename. Other platforms retain package snapshot/restore support but do not receive automated release-upgrade orchestration.
-- `security` applies security-only updates where the package manager supports them; its apt and Nala fallbacks can perform a full package upgrade.
+- `security` uses security-only updates where supported. On apt systems it uses `unattended-upgrade` when available, otherwise performs a regular `apt-get upgrade --with-new-pkgs`; Nala similarly falls back to a regular upgrade when its security mode is unavailable.
 - `doctor` reports system and repository health with severity and remediation hints; `preflight` checks disk capacity, OS support, connectivity, and reboot state.
 - `repo-repair` detects apt repository errors, can disable broken legacy `.list` sources, and refreshes missing keys. It does not yet disable deb822 `.sources` entries.
 
