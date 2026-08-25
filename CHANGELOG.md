@@ -3,6 +3,11 @@
 This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
+## [0.10.2]
+
+### Changed
+- Released the current packaging CI fixes as a patch version.
+
 ## [0.10.1]
 
 ### Fixed
