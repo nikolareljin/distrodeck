@@ -1,5 +1,5 @@
 Name:           distrodeck
-Version:        0.10.0
+Version:        0.10.1
 Release:        1%{?dist}
 Summary:        Export and restore packages before distro upgrades
 License:        MIT
