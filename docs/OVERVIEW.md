@@ -1,25 +1,25 @@
 # What distrodeck does
 
-Distrodeck is a Python command-line tool and optional terminal UI for preparing a Linux machine for an operating-system upgrade, then rebuilding the installed software and selected local state afterward. It creates a plain-text snapshot, lets you compare that snapshot with the current machine, and restores only after you explicitly request an apply operation.
+Distrodeck is a Python command-line tool and optional terminal UI for preparing a Linux machine for an operating-system upgrade, then rebuilding the installed software and selected local state afterward. It creates a plain-text snapshot and lets you compare that snapshot with the current machine. For ordinary imports, package and source changes require `--apply`; separately selected configuration, service, and cleanup flags can also make changes. A successful Ubuntu or Debian `upgrade` restores its own pre-upgrade snapshot of apt packages, holds, PPAs, and sources automatically.
 
 ## Snapshot and restore
 
 An export records the software sources and installed applications that define a machine:
 
 - manually installed and held apt packages;
-- Launchpad PPAs and non-official apt sources;
+- Launchpad PPAs from legacy `.list` sources and non-official apt sources;
 - Snap packages, including channel and classic-confinement metadata;
 - Flatpak applications and their remotes;
 - native package lists for pacman, dnf, and zypper;
 - AppImages found in standard application directories.
 
-An export can additionally include pipx, npm global, Composer global, NuGet global, Cargo, Ruby, and Go user tools; enabled and active systemd services; configuration-directory archives; and selected individual configuration files. The export format is readable plain text, so it can be reviewed, versioned, or stored beside a release-upgrade backup.
+An export can additionally include pipx, npm global, Composer global, NuGet global, Cargo, Ruby, and Go user tools; enabled and active systemd services; configuration-directory archives; and selected individual configuration files. User-tool entries are currently reference-only; service state can be re-enabled with `--apply-services`. The export format is readable plain text, so it can be reviewed, versioned, or stored beside a release-upgrade backup.
 
-`distrodeck import` is a dry run unless `--apply` is provided. The dry run shows the required changes before installation. Applied imports create a backup beside the supplied export and offer a revert if a restore fails. You can restore specific sections only, re-enable recorded services, restore optional configuration data, or reconcile extra Snap/Flatpak applications when that is explicitly requested.
+Without mutating flags, `distrodeck import` is a dry run that shows the package and source changes required before installation. `--apply` enables package and source restoration; `--apply-config`, `--apply-services`, `--apply-config-files`, and `--cleanup-extras` independently make the selected changes. Each import attempt creates a backup in the state export directory (`~/.local/state/distrodeck/exports`, or `$XDG_STATE_HOME/distrodeck/exports`) and interactively offers a revert when a restore fails. You can restore specific sections only, re-enable recorded services, restore optional configuration data, or reconcile extra Snap/Flatpak applications when that is explicitly requested.
 
 ## Compare system drift
 
-`distrodeck diff` compares a snapshot to the current system without changing packages, sources, or files. It reports entries that are missing from the machine and entries that are extra relative to the snapshot. Use `--detailed` for individual entries, `--json` for a stable machine-readable report, and `--exit-code` when a nonzero result should signal drift to a script or CI job.
+`distrodeck diff` compares the package and source sections of a snapshot to the current system without changing packages, sources, or files. It reports entries that are missing from the machine and entries that are extra relative to the snapshot; configuration snapshots, service state, and individual configuration files are not compared. Use `--detailed` for individual entries, `--json` for a stable machine-readable report, and `--exit-code` when a nonzero result should signal drift to a script or CI job.
 
 ## Upgrade, maintenance, and recovery
 
@@ -27,9 +27,9 @@ Distrodeck can maintain a machine in addition to capturing it:
 
 - `update` updates installed packages through the available package manager and can clean old automatically installed kernels after success.
 - `upgrade` runs Ubuntu release upgrades; Debian upgrades require an explicit target codename. Other platforms retain package snapshot/restore support but do not receive automated release-upgrade orchestration.
-- `security` applies security updates when the platform supports them.
+- `security` applies security-only updates where the package manager supports them; its apt and Nala fallbacks can perform a full package upgrade.
 - `doctor` reports system and repository health with severity and remediation hints; `preflight` checks disk capacity, OS support, connectivity, and reboot state.
-- `repo-repair` detects apt repository errors, can disable broken sources, and refreshes missing keys.
+- `repo-repair` detects apt repository errors, can disable broken legacy `.list` sources, and refreshes missing keys. It does not yet disable deb822 `.sources` entries.
 
 ## Workstation setup utilities
 
@@ -45,17 +45,26 @@ The terminal UI also exposes tools that are useful before or after a migration:
 ## Typical workflow
 
 ```bash
-# Snapshot installed software and sources before upgrading.
-distrodeck export --output pre-upgrade.txt
+# `upgrade` creates its own pre-upgrade export and restores apt packages,
+# holds, PPAs, and sources after a successful release upgrade.
+distrodeck upgrade
 
-# Include optional personal tools and service state when needed.
+# Keep a separate record of optional state that `upgrade` does not restore.
+# User-tool entries are reference-only; services can be re-enabled explicitly.
 distrodeck export --output pre-upgrade.txt --include-user-tools --include-services
+distrodeck import --input pre-upgrade.txt --sections services_enabled --apply-services
+```
+
+To use an explicit export/import recovery instead of `distrodeck upgrade`:
+
+```bash
+# Snapshot installed software and sources before the manual upgrade.
+distrodeck export --output pre-upgrade.txt
 
 # Inspect differences without modifying the system.
 distrodeck diff --input pre-upgrade.txt --detailed
 
-# Upgrade, then preview the recovery plan before applying it.
-distrodeck upgrade
+# After completing the upgrade outside distrodeck, preview then apply recovery.
 distrodeck import --input pre-upgrade.txt
 distrodeck import --input pre-upgrade.txt --apply --update-sources
 ```
