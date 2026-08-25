@@ -4,6 +4,7 @@ Release:        1%{?dist}
 Summary:        Export and restore packages before distro upgrades
 License:        MIT
 URL:            https://github.com/nikolareljin/distrodeck
+Source0:        %{name}-%{version}.tar.gz
 BuildArch:      noarch
 
 Requires:       python3
@@ -28,7 +29,7 @@ install -m 0644 docs/man/distrodeck.1 %{buildroot}/usr/share/man/man1/distrodeck
 /usr/bin/distrodeck
 /usr/bin/distrodeck.py
 /usr/share/distrodeck/VERSION
-/usr/share/man/man1/distrodeck.1
+/usr/share/man/man1/distrodeck.1*
 
 %changelog
 * Thu Jan 09 2026 Nikola Reljin <nikola.reljin@gmail.com> - 0.3.0-1
