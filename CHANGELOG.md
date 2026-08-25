@@ -3,6 +3,11 @@
 This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
+## [0.10.1]
+
+### Fixed
+- Prevented recursive Debian and RPM package builds in CI.
+
 
 ## [0.9.0]
 
