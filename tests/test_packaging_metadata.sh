@@ -31,3 +31,7 @@ grep -Eq '^/usr/share/man/man1/distrodeck\.1\*$' packaging/distrodeck.spec \
     || fail "RPM %files must allow debuginfo compression of the man page"
 grep -q '^install -m 0644 distrodeck.py ' packaging/distrodeck.spec \
     || fail "RPM build must install every file declared in %files"
+if ! grep -Fq "build_command: >-" .github/workflows/main.yml; then fail "Debian CI must explicitly stage build artifacts"; fi
+if ! grep -Fq "dpkg-buildpackage -us -uc && mkdir -p dist && cp ../*.deb dist/" .github/workflows/main.yml; then fail "Debian CI must stage .deb artifacts inside the workspace"; fi
+if ! grep -Eq 'artifact_glob:.*dist.*deb' .github/workflows/main.yml; then fail "Debian CI artifact upload must not use a parent-relative path"; fi
+if ! grep -Fq 'github.workspace' .github/workflows/main.yml; then fail "RPM CI must use an absolute workspace path"; fi
