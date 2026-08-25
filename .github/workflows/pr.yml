@@ -14,5 +14,6 @@ jobs:
         git submodule update --init --depth 1 scripts/script-helpers &&
         python3 -m pip install --quiet --disable-pip-version-check pytest &&
         python3 -m pytest tests -q &&
-        bash tests/test_install_tools_args.sh
+        bash tests/test_install_tools_args.sh &&
+        bash tests/test_packaging_metadata.sh
       build_command: "python3 -m py_compile distrodeck.py"

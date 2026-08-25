@@ -2,3 +2,9 @@
 
 %:
 	dh $@ --with python3
+
+# distrodeck has no compiled build or Makefile install target. Without these
+# overrides dh_auto_build runs the Makefile's `deb` target, which re-enters
+# dpkg-buildpackage through debian/rules.
+override_dh_auto_build override_dh_auto_install:
+	@:
