@@ -12,8 +12,14 @@ fail() {
 
 grep -q '^override_dh_auto_build override_dh_auto_install:$' debian/rules \
     || fail "Debian rules must bypass implicit Makefile build/install targets"
-grep -q '^[[:blank:]]*@:$' debian/rules \
-    || fail "Debian build/install overrides must be no-ops"
+awk '
+    $0 == "override_dh_auto_build override_dh_auto_install:" {
+        found = 1
+        getline
+        exit ($0 ~ /^[[:blank:]]*@:$/ ? 0 : 1)
+    }
+    END { if (!found) exit 1 }
+' debian/rules || fail "Debian build/install override must directly use a no-op"
 grep -Eq '^Version:[[:space:]]+[0-9]+(\.[0-9]+)+$' packaging/distrodeck.spec \
     || fail "RPM Version must be a concrete package version"
 grep -Eq '^Source0:[[:space:]]+%\{name\}-%\{version\}\.tar\.gz$' packaging/distrodeck.spec \
