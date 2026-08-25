@@ -34,7 +34,9 @@ jobs:
     with:
       working_directory: "."
       prebuild_command: "./tools/ci-prebuild.sh"
-      artifact_glob: "../*.deb"
+      build_command: >-
+        dpkg-buildpackage -us -uc && mkdir -p dist && cp ../*.deb dist/
+      artifact_glob: "dist/*.deb"
 
   ppa:
     if: ${{ vars.PPA_PUBLISH_ENABLED == 'true' }}
@@ -54,7 +56,7 @@ jobs:
   rpm:
     uses: nikolareljin/ci-helpers/.github/workflows/rpm-build.yml@production
     with:
-      working_directory: "."
+      working_directory: "${{ github.workspace }}"
       prebuild_command: "./tools/ci-prebuild.sh"
       spec_path: "packaging/distrodeck.spec"
       artifact_glob: "dist/*.rpm"

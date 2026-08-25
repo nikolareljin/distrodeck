@@ -1,3 +1,9 @@
+distrodeck (0.10.3) unstable; urgency=medium
+
+  * Fix Debian artifact staging and RPM CI build paths.
+
+ -- Nikola Reljin <nikola.reljin@gmail.com>  Tue, 25 Aug 2026 00:00:00 +0000
+
 distrodeck (0.10.2) unstable; urgency=medium
 
   * Release 0.10.2.

@@ -1,5 +1,5 @@
 Name:           distrodeck
-Version:        0.10.2
+Version:        0.10.3
 Release:        1%{?dist}
 Summary:        Export and restore packages before distro upgrades
 License:        MIT
@@ -32,5 +32,8 @@ install -m 0644 docs/man/distrodeck.1 %{buildroot}/usr/share/man/man1/distrodeck
 /usr/share/man/man1/distrodeck.1*
 
 %changelog
+* Tue Aug 25 2026 Nikola Reljin <nikola.reljin@gmail.com> - 0.10.3-1
+- Fix Debian artifact staging and RPM CI build paths
+
 * Thu Jan 09 2026 Nikola Reljin <nikola.reljin@gmail.com> - 0.3.0-1
 - Initial release
