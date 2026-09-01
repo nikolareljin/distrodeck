@@ -3,6 +3,14 @@
 This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
+
+### Changed
+- `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
+  looks for `~/Projects/iso-forge` first and still accepts an older
+  `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the
+  new site. The `ISOFORGE_*` and legacy `BURN_ISO_*` environment overrides are
+  unchanged, as is the `isoforge` package name.
+
 ## [0.10.2]
 
 ### Changed
