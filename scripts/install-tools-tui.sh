@@ -777,7 +777,14 @@ install_isoforge() {
   fi
 
   if [[ -z "$repo_dir" ]]; then
-    repo_dir="$HOME/Projects/burn-iso"
+    # burn-iso was renamed to iso-forge; keep finding an older checkout.
+    for candidate in "$HOME/Projects/iso-forge" "$HOME/Projects/burn-iso"; do
+      if [[ -d "$candidate" ]]; then
+        repo_dir="$candidate"
+        break
+      fi
+    done
+    repo_dir="${repo_dir:-$HOME/Projects/iso-forge}"
   fi
   if [[ -d "$repo_dir" && -x "$repo_dir/tools/build-deb.sh" ]]; then
     (cd "$repo_dir" && ./tools/build-deb.sh)
