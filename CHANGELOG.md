@@ -99,6 +99,13 @@ This project follows Keep a Changelog and Semantic Versioning.
   rather than descending through it, so one listing of the mount root is the whole
   cost.
 
+  The library entry point **resolves its workspace**, which `run_reclaim` did and
+  `find_reclaimable` did not. Every ancestor question here is answered by climbing
+  the path it was handed, and a relative path has none to climb: `Path(".").parts` is
+  empty, so the `.git` test cannot match, and `Path(".").parent` is `Path(".")`, so
+  the climb stops after one step. Called from inside `repo.git/refs/heads` with
+  `Path(".")`, the bare-repository refusal -- the one no flag waives -- did not run.
+
   A **mount point is bytes** as well. `mountinfo` octal-escapes the four characters
   that would break its own field separation and nothing else, so a mount point whose
   name is not valid UTF-8 arrives raw -- and decoding it strictly raised

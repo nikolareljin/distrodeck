@@ -1552,3 +1552,57 @@ class TestTheMountTableIsNotAssumedToBeUtf8:
     def test_a_missing_table_is_still_the_fallback(self, tmp_path, monkeypatch):
         monkeypatch.setattr(distrodeck, "_MOUNTINFO", str(tmp_path / "not-there"))
         assert distrodeck._mount_points() is None
+
+
+class TestARelativeWorkspaceIsResolvedFirst:
+    """A relative path has no ancestors to climb.
+
+    `Path(".").parts` is empty, so the `.git` test cannot match, and
+    `Path(".").parent` is `Path(".")`, so the climb stops after a single step.
+    Called from inside `repo.git/refs/heads` with `Path(".")`, the bare-repository
+    refusal -- the one no flag waives -- did not run at all. `run_reclaim` resolved
+    its argument; the library entry point did not, and it is the public one.
+    """
+
+    @staticmethod
+    def _bare(at):
+        subprocess.run(["git", "init", "--bare", "-q", str(at)],
+                       check=True, capture_output=True)
+        return at
+
+    def test_a_relative_workspace_inside_a_bare_repository_is_refused(self, tmp_path, monkeypatch):
+        bare = self._bare(tmp_path / "vendor.git")
+        heads = bare / "refs" / "heads"
+        ref = heads / "build"
+        ref.mkdir(parents=True, exist_ok=True)
+        (ref / "main").write_text("0" * 40 + "\n")
+        monkeypatch.chdir(heads)
+        with pytest.raises(ValueError, match="bare repository"):
+            distrodeck.find_reclaimable(Path("."), ARTIFACTS, require_git_ignored=False)
+        assert (ref / "main").exists()
+
+    def test_a_relative_workspace_inside_git_is_refused(self, repo, monkeypatch):
+        inside = repo / ".git" / "objects"
+        monkeypatch.chdir(inside)
+        with pytest.raises(ValueError, match=r"\.git"):
+            distrodeck.find_reclaimable(Path("."), ARTIFACTS, require_git_ignored=False)
+
+    def test_a_relative_workspace_otherwise_works(self, repo, monkeypatch):
+        """The control: resolving must not break the relative case, only fix it."""
+        make_dir(repo, "build")
+        monkeypatch.chdir(repo.parent)
+        found = distrodeck.find_reclaimable(Path("."), ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"], found
+        assert all(p.is_absolute() for p, _, _, _ in found), (
+            "candidates must be absolute, or the deletion loop and git -C disagree"
+        )
+
+    def test_a_tilde_workspace_is_expanded(self, repo, monkeypatch):
+        """`assert isinstance(found, list)` was the first version of this, and it
+        passed with `expanduser` removed: `Path("~").resolve()` becomes a directory
+        that does not exist, the walk yields nothing, and an empty list is a list.
+        It has to assert that the expansion found something."""
+        make_dir(repo, "build")
+        monkeypatch.setenv("HOME", str(repo.parent))
+        found = distrodeck.find_reclaimable(Path("~"), ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"], found

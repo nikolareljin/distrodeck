@@ -3306,6 +3306,15 @@ def find_reclaimable(
     if older_than_days < 0:
         raise ValueError("older_than_days cannot be negative")
 
+    # Resolved here, not only in the caller. Every ancestor question this function
+    # asks is answered by climbing the path it was handed, and a relative path has
+    # no ancestors to climb: `Path(".").parts` is empty, so the `.git` test cannot
+    # match, and `Path(".").parent` is `Path(".")`, so the climb stops after one
+    # step. Called from inside `repo.git/refs/heads` with `Path(".")`, the
+    # unconditional bare-repository refusal simply did not run. It also keeps the
+    # paths handed to `git` absolute, which is what `-C` expects to be unambiguous.
+    workspace = pathlib.Path(workspace).expanduser().resolve()
+
     storage = _git_storage_above(workspace)
     if storage:
         raise ValueError(
