@@ -446,8 +446,8 @@ class TestEligibilityIsRecheckedBeforeDeleting:
         real_measure = distrodeck._measure
         state = {"scanned": False}
 
-        def measure_then_plant(path, linked_seen=None):
-            result = real_measure(path, linked_seen)
+        def measure_then_plant(path):
+            result = real_measure(path)
             if not state["scanned"]:
                 state["scanned"] = True
                 nested = path / "vendor"
@@ -474,7 +474,7 @@ class TestEligibilityIsRecheckedBeforeDeleting:
         way it means what it says.
         """
         target = make_dir(repo, "build")
-        assert distrodeck._still_eligible(target, None, True) == ""
+        assert distrodeck._still_eligible(target, None, True).reason == ""
 
         real = distrodeck._git
 
@@ -484,11 +484,11 @@ class TestEligibilityIsRecheckedBeforeDeleting:
             return real(worktree, *args, **kwargs)
 
         monkeypatch.setattr(distrodeck, "_git", break_only_ls_files)
-        reason = distrodeck._still_eligible(target, None, True)
+        reason = distrodeck._still_eligible(target, None, True).reason
         assert reason == "git could not be consulted again", reason
 
     def test_still_eligible_refuses_a_vanished_directory(self, repo):
-        assert distrodeck._still_eligible(repo / "gone", None, True) != ""
+        assert distrodeck._still_eligible(repo / "gone", None, True).reason != ""
 
     def test_an_unchanged_candidate_is_still_deleted(self, repo, capsys):
         import argparse
@@ -523,20 +523,26 @@ class TestTheExcludedHardLinkFigureIsAccurate:
         _, _, linked, _, _ = distrodeck._measure(target)
         assert linked <= one_copy * 1.5, f"{linked} looks like more than one copy of {one_copy}"
 
-    def test_the_same_inode_across_two_candidates_is_counted_once(self, repo):
+    def test_a_measurement_reports_its_own_tree_and_leaves_the_ledger_alone(self, repo):
         first = make_dir(repo, "build", size=64 * 1024)
         second = make_dir(repo, "target", size=16)
         try:
             os.link(first / "blob", second / "linked-in")
         except OSError:
             pytest.skip("filesystem does not support hard links")
-        shared: set = set()
-        first_measured = distrodeck._measure(first, shared)
-        shared |= first_measured.claimed
-        a = first_measured.linked
-        b = distrodeck._measure(second, shared).linked
-        # Whichever is measured first accounts for it; the other adds nothing.
-        assert (a > 0) != (b > 0), f"counted in both: {a} and {b}"
+        # `_measure` keeps no ledger: each tree reports its own multiply-linked
+        # bytes, and de-duplicating across candidates is the caller's job.
+        first_measured = distrodeck._measure(first)
+        second_measured = distrodeck._measure(second)
+        shared_inodes = set(first_measured.linked_inodes) & set(second_measured.linked_inodes)
+        assert shared_inodes, "the test did not actually share an inode"
+        # Both report it, on purpose: a measurement cannot know whether its
+        # candidate will survive the age filter, so it is not the place that
+        # decides which of the two accounts for the inode. It hands back the
+        # inodes it saw and `find_reclaimable` counts each one once -- see
+        # `test_find_reclaimable_shares_one_set_across_candidates`.
+        assert first_measured.linked > 0 and second_measured.linked > 0
+        assert set(first_measured.linked_inodes) >= shared_inodes
 
     def test_find_reclaimable_shares_one_set_across_candidates(self, repo):
         """Through the real entry point, not by handing `_measure` a set.
@@ -622,7 +628,7 @@ class TestATreeItCannotReadIsNotOffered:
         """
         target = make_dir(repo, "build", age_days=30)
         unreadable(make_dir(repo, "build/nested", age_days=30))
-        reason = distrodeck._still_eligible(target, None, True)
+        reason = distrodeck._still_eligible(target, None, True).reason
         assert reason, "an unreadable tree must not be approved for deletion"
         assert "repository inside it cannot be ruled out" in reason, reason
 
@@ -677,7 +683,7 @@ class TestATreeItCannotReadIsNotOffered:
         os.utime(target, (old, old))
         assert distrodeck._contains_nested_git(target) == (False, True)
         assert distrodeck._measure(target).complete is True
-        assert distrodeck._still_eligible(target, time.time() - 7 * 86400, True) == ""
+        assert distrodeck._still_eligible(target, time.time() - 7 * 86400, True).reason == ""
         assert [p.name for p, _, _, _ in
                 distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]
 
@@ -767,5 +773,88 @@ class TestApplyReportsFailureInItsExitStatus:
         """
         make_dir(repo, "build")
         monkeypatch.setattr(distrodeck, "_still_eligible",
-                            lambda *a, **k: "a clone appeared inside it")
+                            lambda *a, **k: distrodeck.Recheck("a clone appeared inside it"))
         distrodeck.run_reclaim(self._args(repo))  # no SystemExit
+
+
+class TestADescendantSurvivesAnAncestorTheCutoffRejects:
+    """Containment de-duplication must come after the age filter, not before.
+
+    A candidate absorbs the candidates inside it only if it is itself going to be
+    deleted. De-duplicating first meant `build/node_modules` was discarded because
+    `build` matched, and then `build` was rejected for a fresh file somewhere else
+    inside it -- so an old, reclaimable `node_modules` was never offered at all.
+    The same mistake as pruning matched trees from the walk, one stage later.
+    """
+
+    def test_the_old_inner_candidate_is_still_offered(self, repo):
+        build = make_dir(repo, "build", age_days=30)
+        inner = make_dir(repo, "build/node_modules", age_days=30)
+        # Something else in `build` is being worked on right now, so `build`
+        # itself must not be deleted.
+        (build / "fresh.o").write_bytes(b"x" * 1024)
+        old = time.time() - 30 * 86400
+        os.utime(inner, (old, old))
+
+        names = [p.name for p, _, _, _ in
+                 distrodeck.find_reclaimable(repo.parent, ARTIFACTS, older_than_days=7)]
+        assert names == ["node_modules"], names
+
+    def test_an_accepted_ancestor_still_absorbs_it(self, repo):
+        """The control: when the ancestor does survive, the descendant is not
+        reported separately, or the same bytes would be counted twice."""
+        make_dir(repo, "build", age_days=30)
+        make_dir(repo, "build/node_modules", age_days=30)
+        old = time.time() - 30 * 86400
+        os.utime(repo / "build", (old, old))
+
+        names = [p.name for p, _, _, _ in
+                 distrodeck.find_reclaimable(repo.parent, ARTIFACTS, older_than_days=7)]
+        assert names == ["build"], names
+
+
+class TestFreedBytesDescribeWhatWasRemoved:
+    """The summary used the size the *scan* measured, minutes earlier.
+
+    A `target/` that kept compiling between the report and the deletion is not
+    the size it was found at, so "N GB freed" was a figure about the past. The
+    pre-delete re-check already walks the tree; it now hands its measurement back
+    and that is what the total accumulates.
+    """
+
+    @staticmethod
+    def _args(repo):
+        return argparse.Namespace(workspace=str(repo.parent), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+
+    def test_it_reports_the_size_at_deletion_not_at_scan(self, repo, capsys, monkeypatch):
+        target = make_dir(repo, "build", size=4096)
+        real_recheck = distrodeck._still_eligible
+
+        def grow_then_check(path, *a, **k):
+            # The build carried on after the scan: 2 MiB more than was reported.
+            extra = path / "late.o"
+            if not extra.exists():
+                extra.write_bytes(b"x" * 2 * 1024 * 1024)
+            return real_recheck(path, *a, **k)
+
+        monkeypatch.setattr(distrodeck, "_still_eligible", grow_then_check)
+        distrodeck.run_reclaim(self._args(repo))
+        assert not target.exists()
+        freed = [line for line in capsys.readouterr().out.splitlines() if "freed" in line]
+        assert freed, "no freed summary was printed"
+        assert "2.0MB" in freed[0] or "2.1MB" in freed[0], freed[0]
+
+    def test_the_recheck_hands_back_its_measurement(self, repo):
+        make_dir(repo, "build", size=4096)
+        check = distrodeck._still_eligible(repo / "build", None, True)
+        assert check.reason == ""
+        assert check.measured is not None, (
+            "the freed total has nothing current to add without it"
+        )
+        assert check.measured.total > 0
+
+    def test_a_refusal_carries_no_measurement(self, repo):
+        check = distrodeck._still_eligible(repo / "gone", None, True)
+        assert check.reason and check.measured is None

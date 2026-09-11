@@ -175,7 +175,12 @@ Options:
   across a hundred repositories in a second, so the safe direction is the
   default and acting is the flag.
 - `--older-than DAYS`: only directories whose newest file inside is older than
-  this. Protects work in progress. A negative value is refused.
+  this. Protects work in progress. A negative value is refused. On the measured
+  machine the default 59.5 GB falls to 46.1 GB at seven days and 29.4 GB at
+  thirty. The age of a directory is the newest file **anywhere inside it**, and a
+  directory is only absorbed into an ancestor that itself survives this filter --
+  so an old `build/node_modules` is still offered when `build` is rejected for
+  something fresh elsewhere inside it.
 - `--list N`: also list the N largest candidates individually.
 - `--include-environments`: also Python virtualenvs. Off by default because
   restoring one needs a network and a `pip install`, and a virtualenv holding

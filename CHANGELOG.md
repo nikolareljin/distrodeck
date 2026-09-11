@@ -21,9 +21,12 @@ This project follows Keep a Changelog and Semantic Versioning.
   one holding torch and whisper is a multi-gigabyte download that fails entirely
   without a network -- so virtualenvs are behind `--include-environments` rather
   than offered as free.
-  `--older-than DAYS` protects work in progress: on the measured machine, 63.9 GB
-  total falls to 57.2 GB at seven days and 43.3 GB at thirty, the difference
-  being projects actively being built.
+  `--older-than DAYS` protects work in progress. Measured on the same machine and
+  the same default set as the 59.5 GB above: **59.5 GB falls to 46.1 GB at seven
+  days and 29.4 GB at thirty**, the difference being projects actively being
+  built. (`--include-environments` is the flag that raises the baseline, to
+  69.0 GB -- an earlier draft of this entry quoted figures from that wider set
+  against the default total, which cannot be compared.)
   A candidate must be **ignored by the Git repository that contains it**. The
   name is not evidence: `build/` and `target/` are ordinary names for authored
   code, and on the measured machine 8 of 101 `build/` directories were tracked
@@ -67,6 +70,19 @@ This project follows Keep a Changelog and Semantic Versioning.
   Matching directories are **not pruned before eligibility is known**. An
   authored `scripts/build/` can hold an ignored `target/`; pruning at the match
   rejected the outer candidate while never visiting the reclaimable inner one.
+  Containment de-duplication happens **after** the age filter for the same
+  reason: a candidate absorbs what is inside it only if it is itself going to be
+  deleted, so an old `build/node_modules` is still offered when `build` is
+  rejected for a fresh file elsewhere inside it. The cost is that a nested
+  candidate is traversed as well as its ancestor -- tens of seconds rather than a
+  few on a hundred-repository workspace, and the alternative is reporting less
+  than is reclaimable.
+
+  `--apply` reports **the size it measures at deletion**, not the one the scan
+  printed. The pre-delete re-check already walks the tree, so it hands its
+  measurement back rather than the total being accumulated from figures that can
+  be minutes old -- a `target/` that kept compiling in between was not the size
+  it was found at.
 
   Age comes from the **newest file anywhere inside**, not the directory's own
   mtime, which changes only when its immediate entries do -- so an actively

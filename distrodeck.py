@@ -2686,11 +2686,11 @@ class Measurement(NamedTuple):
     total: int
     newest: float
     linked: int
-    claimed: frozenset
+    linked_inodes: dict
     complete: bool
 
 
-def _measure(path: pathlib.Path, linked_seen: set = None) -> Measurement:
+def _measure(path: pathlib.Path) -> Measurement:
     """Measure *path*: bytes freed, newest mtime inside, hard-linked bytes, and
     whether the traversal managed to read all of it.
 
@@ -2702,12 +2702,14 @@ def _measure(path: pathlib.Path, linked_seen: set = None) -> Measurement:
     measurement that never saw the work in progress it exists to protect. An
     unreadable tree is also one `shutil.rmtree` will abandon half-done.
 
-    **`claimed` is returned rather than committed.** Sharing one inode ledger
-    across the scan is what stops a hard-linked file being counted once per name
-    -- but a candidate the age filter then rejects would have consumed those
-    inodes on its way out, so a later accepted candidate sharing them reported
-    them as already-seen and excluded them from nobody's figures. The caller
-    merges this set only once the candidate survives every filter.
+    **It keeps no ledger of its own.** `linked` is the multiply-linked bytes in
+    *this* tree, de-duplicated by inode within it. De-duplicating across
+    candidates is the caller's job, from `linked_inodes`, and deliberately so:
+    when this function wrote into a shared set, a candidate the age filter later
+    rejected had already consumed the inodes it shared, so the accepted candidate
+    that shared them read them as already counted and the bytes appeared in
+    nobody's figures. A measurement cannot know whether its candidate will
+    survive, so it is not the place that decides.
 
     **Allocated blocks, not apparent size.** `st_size` is the file's length, not
     the space on disk: a sparse build artifact reports far more than deleting it
@@ -2733,12 +2735,10 @@ def _measure(path: pathlib.Path, linked_seen: set = None) -> Measurement:
     compiling `target/` whose root entry is weeks old would otherwise look weeks
     old. Taken from the same traversal, so it costs nothing extra.
     """
-    if linked_seen is None:
-        linked_seen = set()
     total = 0
     linked = 0
     newest = 0.0
-    claimed: set = set()
+    linked_inodes: dict = {}
     complete = True
 
     def unreadable(_error):
@@ -2772,12 +2772,12 @@ def _measure(path: pathlib.Path, linked_seen: set = None) -> Measurement:
             size = info.st_size if blocks is None else blocks * 512
             if info.st_nlink > 1:
                 key = (info.st_dev, info.st_ino)
-                if key not in linked_seen and key not in claimed:
-                    claimed.add(key)
+                if key not in linked_inodes:
+                    linked_inodes[key] = size
                     linked += size
                 continue
             total += size
-    return Measurement(total, newest, linked, frozenset(claimed), complete)
+    return Measurement(total, newest, linked, linked_inodes, complete)
 
 
 def _human_bytes(count: int) -> str:
@@ -2897,8 +2897,22 @@ def _contains_nested_git(path: pathlib.Path) -> tuple:
     return False, complete
 
 
-def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> str:
-    """An empty string if *path* may still be deleted, else why not.
+class Recheck(NamedTuple):
+    """The verdict of the pre-delete re-check, and the measurement behind it.
+
+    `measured` is None when the refusal came before there was anything to
+    measure. It is carried out of the check rather than taken again afterwards
+    because the freed-space total must describe the tree as it is *now*: the scan
+    that produced the report can be minutes old, and a `target/` that kept
+    compiling in between is not the size it was measured at.
+    """
+
+    reason: str
+    measured: Measurement = None
+
+
+def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Recheck:
+    """A `Recheck` whose `reason` is empty if *path* may still be deleted.
 
     Re-run immediately before deletion, because everything known about a
     candidate was learned during a scan that can take minutes across a large
@@ -2911,39 +2925,44 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> st
     a refusal rather than a pass.
     """
     if not path.is_dir():
-        return "it is no longer there"
+        return Recheck("it is no longer there")
 
     if require_git_ignored:
         worktree = _worktree_of(path)
         if worktree is None:
-            return "it is no longer inside a git worktree"
+            return Recheck("it is no longer inside a git worktree")
         ignored, tracked, complete = _worktree_facts(worktree, [path])
         if not complete:
-            return "git could not be consulted again"
+            return Recheck("git could not be consulted again")
         if path not in ignored:
-            return "it is no longer ignored by its repository"
+            return Recheck("it is no longer ignored by its repository")
         if any(str(t).startswith(str(path) + os.sep) for t in tracked):
-            return "it now holds a tracked file"
+            return Recheck("it now holds a tracked file")
 
     nested, readable = _contains_nested_git(path)
     if nested:
-        return "it now contains a repository"
+        return Recheck("it now contains a repository")
     if not readable:
-        return "it can no longer be read in full, so a repository inside it cannot be ruled out"
+        return Recheck(
+            "it can no longer be read in full, so a repository inside it "
+            "cannot be ruled out"
+        )
 
-    if cutoff is not None:
-        measured = _measure(path)
-        # A second completeness check over the same tree, and deliberately not
-        # folded into the one above: these are two separate walks, and a subtree
-        # can become unreadable between them. Unreachable in the common case
-        # rather than covered by a test -- provoking a failure in exactly the
-        # window between two traversals is not something a test can arrange.
-        if not measured.complete:
-            return "it can no longer be read in full, so its age cannot be trusted"
-        if measured.newest > cutoff:
-            return "something inside it changed during the scan"
+    # Measured whether or not there is a cutoff to check it against, because the
+    # caller needs a current size for the freed total either way, and one
+    # traversal answers both questions.
+    measured = _measure(path)
+    # A second completeness check over the same tree, and deliberately not folded
+    # into the one above: these are two separate walks, and a subtree can become
+    # unreadable between them. Unreachable in the common case rather than covered
+    # by a test -- provoking a failure in exactly the window between two
+    # traversals is not something a test can arrange.
+    if not measured.complete:
+        return Recheck("it can no longer be read in full, so it cannot be trusted")
+    if cutoff is not None and measured.newest > cutoff:
+        return Recheck("something inside it changed during the scan")
 
-    return ""
+    return Recheck("", measured)
 
 
 def find_reclaimable(
@@ -3031,20 +3050,23 @@ def find_reclaimable(
         searched.append(path)
     candidates = searched
 
-    # De-duplicated only now that eligibility is settled: a descendant of an
-    # accepted candidate is already inside what will be deleted.
-    accepted: list = []
-    for path in sorted(candidates, key=lambda p: len(p.parts)):
-        prefix = str(path) + os.sep
-        if any(str(path).startswith(str(a) + os.sep) for a in accepted):
-            continue
-        accepted.append(path)
-
-    found = []
-    linked_seen: set = set()
-    for path in accepted:
-        measured = _measure(path, linked_seen)
-        if not measured.complete:
+    # Measured and age-filtered **before** containment de-duplication, because
+    # a candidate only absorbs its descendants if it is itself going to be
+    # deleted. Discarding `build/node_modules` because `build` matched, and then
+    # rejecting `build` for a fresh file somewhere else inside it, loses the
+    # reclaimable directory entirely -- the same mistake as pruning matched trees
+    # from the walk, made one stage later.
+    #
+    # The cost is real and accepted: a nested candidate is measured as well as
+    # the ancestor that contains it, so bytes inside both are traversed twice.
+    # Measured on one workspace of roughly a hundred repositories, where most of
+    # the 8,000-odd `__pycache__` directories sit inside a matched `build`, the
+    # scan takes tens of seconds rather than a few. The alternative is reporting
+    # less than is reclaimable, which is the bug this ordering fixes.
+    measured: dict = {}
+    for path in candidates:
+        m = _measure(path)
+        if not m.complete:
             # Refused whether or not `--older-than` is in play. With it, an
             # unreadable fresh file leaves `newest` old and defeats the
             # protection; without it the figure is merely wrong -- but a tree
@@ -3058,12 +3080,27 @@ def find_reclaimable(
             continue
         # Checked against the newest thing inside, so an actively compiling tree
         # is never old however stale its root entry looks.
-        if cutoff is not None and measured.newest > cutoff:
+        if cutoff is not None and m.newest > cutoff:
             continue
-        # Only now: a candidate rejected above must not have consumed the inodes
-        # it shares with one that is accepted later.
-        linked_seen |= measured.claimed
-        found.append((path, measured.total, measured.newest, measured.linked))
+        measured[path] = m
+
+    accepted: list = []
+    for path in sorted(measured, key=lambda p: len(p.parts)):
+        if any(str(path).startswith(str(a) + os.sep) for a in accepted):
+            continue
+        accepted.append(path)
+
+    # One hard-linked inode, counted once across the whole scan -- and only for
+    # trees that survived every filter above, so a rejected candidate cannot
+    # spend what an accepted one shares with it.
+    found = []
+    ledger: set = set()
+    for path in accepted:
+        m = measured[path]
+        linked = sum(size for inode, size in m.linked_inodes.items()
+                     if inode not in ledger)
+        ledger.update(m.linked_inodes)
+        found.append((path, m.total, m.newest, linked))
 
     return sorted(found, key=lambda item: item[1], reverse=True)
 
@@ -3127,13 +3164,13 @@ def run_reclaim(args: argparse.Namespace) -> None:
     freed = 0
     skipped = 0
     failed = 0
-    for path, size, _, _ in found:
+    for path, _, _, _ in found:
         # Checked again here, not only during the scan. Between the two, a build
         # can start, a file can be force-added, a clone can appear -- and the
         # scan of a large workspace takes minutes.
-        reason = _still_eligible(path, cutoff, not args.any_directory)
-        if reason:
-            print(f"  skipping {path}: {reason}")
+        check = _still_eligible(path, cutoff, not args.any_directory)
+        if check.reason:
+            print(f"  skipping {path}: {check.reason}")
             skipped += 1
             continue
         try:
@@ -3143,7 +3180,10 @@ def run_reclaim(args: argparse.Namespace) -> None:
             failed += 1
             continue
         removed += 1
-        freed += size
+        # The size that check just measured, not the one the report printed: a
+        # tree that kept compiling through a minutes-long scan is not the size it
+        # was found at, and this figure claims to say what was freed.
+        freed += check.measured.total
     print()
     print(f"  Removed {removed} directory(ies), {_human_bytes(freed)} freed.")
     if skipped:
