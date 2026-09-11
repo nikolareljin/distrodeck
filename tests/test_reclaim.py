@@ -1183,3 +1183,77 @@ class TestASymlinkNamedLikeAnArtifactIsNotOne:
         make_dir(repo, "build")
         assert [p.name for p, _, _, _ in
                 distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]
+
+
+class TestItNeverTreatsRepositoryStorageAsBuildOutput:
+    """Two ways into a repository's own storage that the `.git` filter misses.
+
+    Dropping `.git` from the children a walk descends into protects the common
+    case and nothing else. It cannot help when the walk is *rooted* inside `.git`,
+    because the root is never a child; and a bare repository has no `.git` entry at
+    all, so the walk went straight into its object and ref storage.
+
+    A loose ref is a path. A branch called `build/main` is a directory named
+    `build` under `refs/heads` -- matched by name, ignored by the outer repository
+    for the same reason every other `build/` is, and immune to
+    `_contains_nested_git`, which only looks *below* a candidate. Deleting it
+    deletes the branch.
+    """
+
+    def test_a_branch_named_like_an_artifact_inside_a_bare_repository(self, repo):
+        bare = repo / "vendor.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)],
+                       check=True, capture_output=True)
+        ref = bare / "refs" / "heads" / "build"
+        ref.mkdir(parents=True)
+        (ref / "main").write_text("0" * 40 + "\n")
+        assert ref.is_dir() and ref.name in ARTIFACTS, "the premise"
+
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS,
+                                            require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [], found
+        assert ref.exists()
+
+    def test_nothing_inside_a_bare_repository_is_offered(self, repo):
+        bare = repo / "vendor.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(bare)],
+                       check=True, capture_output=True)
+        for name in ("build", "target", "node_modules"):
+            (bare / "objects" / name).mkdir(parents=True, exist_ok=True)
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS,
+                                           require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [], found
+
+    def test_a_scan_rooted_inside_git_is_refused(self, repo):
+        inside = repo / ".git"
+        (inside / "build").mkdir(exist_ok=True)
+        with pytest.raises(ValueError, match=r"\.git"):
+            distrodeck.find_reclaimable(inside, ARTIFACTS, require_git_ignored=False)
+
+    def test_a_scan_rooted_below_git_is_refused(self, repo):
+        deeper = repo / ".git" / "objects"
+        with pytest.raises(ValueError, match=r"\.git"):
+            distrodeck.find_reclaimable(deeper, ARTIFACTS, require_git_ignored=False)
+
+    def test_the_command_refuses_it_with_a_message(self, repo, capsys):
+        args = argparse.Namespace(workspace=str(repo / ".git"), apply=False,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=True)
+        with pytest.raises(SystemExit) as exit_status:
+            distrodeck.run_reclaim(args)
+        assert exit_status.value.code == 1
+        assert ".git" in capsys.readouterr().err
+
+    def test_an_ordinary_workspace_is_still_scanned(self, repo):
+        """The control: the refusal is about `.git`, not about scanning at all."""
+        make_dir(repo, "build")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"]
+
+    def test_a_bare_repository_alongside_does_not_stop_the_scan(self, repo):
+        """Pruning the bare repository must not prune its siblings."""
+        subprocess.run(["git", "init", "--bare", "-q", str(repo / "vendor.git")],
+                       check=True, capture_output=True)
+        make_dir(repo, "build")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"], found

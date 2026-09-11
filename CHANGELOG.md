@@ -44,6 +44,14 @@ This project follows Keep a Changelog and Semantic Versioning.
   kind of repository somebody vendors into a build directory invisible to the
   check meant to protect it.
 
+  **Nothing inside a bare repository, and no scan rooted inside `.git`.** A loose
+  ref is a path: a branch called `build/main` is a directory named `build` under
+  `refs/heads`, ignored by the outer repository for the same reason every other
+  `build/` is, and invisible to the nested-repository check, which only looks
+  *below* a candidate -- so deleting it would have deleted the branch. Dropping
+  `.git` from the children a walk descends into helps with neither case: a bare
+  repository has no `.git` child, and the root handed to the walk is never a child.
+
   A **symlink named like an artifact is not one**. `os.walk` lists a symlink to a
   directory in `dirs` even with `followlinks=False`, so a symlink called `build`
   arrived as a candidate and was then measured as its *target*, because handing a
