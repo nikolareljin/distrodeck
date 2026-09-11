@@ -54,7 +54,14 @@ This project follows Keep a Changelog and Semantic Versioning.
   Nor does pruning a bare repository when the walk *reaches* its root, if the
   workspace is `repo.git/refs/heads` and the walk starts below it -- so the
   workspace's ancestors are examined before any walking, and a workspace at or
-  inside a bare repository is refused outright.
+  inside a bare repository is refused outright. The markers are **probed by path
+  rather than listed**: `os.listdir` needs read permission where reaching a
+  workspace below `refs/heads` needs only search, so a bare repository granting `x`
+  without `r` read as an ordinary directory -- and a probe that cannot answer counts
+  as a marker being present, since failing closed costs a directory that is not
+  reclaimed while failing open costs a branch. The same question is asked again
+  immediately before each deletion, because `git init --bare` in a directory that
+  already existed is enough to turn an ancestor into one mid-scan.
 
   A **symlink named like an artifact is not one**. `os.walk` lists a symlink to a
   directory in `dirs` even with `followlinks=False`, so a symlink called `build`

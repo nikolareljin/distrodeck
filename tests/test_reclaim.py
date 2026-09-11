@@ -1321,3 +1321,82 @@ class TestAWorkspaceBelowABareRepositoryIsRefused:
         make_dir(repo, "build")
         found = distrodeck.find_reclaimable(repo, ARTIFACTS)
         assert [p.name for p, _, _, _ in found] == ["build"], found
+
+
+class TestRepositoryStorageChecksFailClosed:
+    """Both halves of the repository-storage refusal could fail open.
+
+    Listing an ancestor to look for `HEAD`/`objects`/`refs` needs read permission;
+    reaching a workspace *below* that ancestor needs only search. A bare repository
+    root with `x` and no `r` therefore read as an ordinary directory while
+    `refs/heads` stayed perfectly reachable -- and the answer was `[]`, which looks
+    like a directory with nothing in it rather than like a question that could not
+    be answered.
+
+    And the question was asked of the workspace once, before the scan. A directory
+    that becomes a bare repository during a minutes-long scan -- `git init --bare`
+    in a directory that already existed is enough -- left an already-found
+    `refs/heads/build` candidate eligible.
+    """
+
+    @staticmethod
+    def _bare(at):
+        subprocess.run(["git", "init", "--bare", "-q", str(at)],
+                       check=True, capture_output=True)
+        return at
+
+    def test_markers_are_probed_not_listed(self, tmp_path, monkeypatch):
+        """Search permission is enough, so a failing `listdir` must not decide."""
+        bare = self._bare(tmp_path / "vendor.git")
+
+        def refuse(*_args, **_kwargs):
+            raise PermissionError(13, "denied")
+
+        monkeypatch.setattr(os, "listdir", refuse)
+        assert distrodeck._probe_bare_repository(bare) is True
+        assert "bare repository" in distrodeck._git_storage_above(bare / "refs" / "heads")
+
+    def test_an_unanswerable_probe_counts_as_a_marker(self, tmp_path, unreadable):
+        """Fail closed: not-permitted-to-look is not the same as absent."""
+        hidden = tmp_path / "maybe"
+        hidden.mkdir()
+        (hidden / "HEAD").write_text("ref: refs/heads/main\n")
+        (hidden / "objects").mkdir()
+        (hidden / "refs").mkdir()
+        unreadable(hidden)
+        assert distrodeck._marker_present(hidden / "HEAD") is None
+        assert distrodeck._probe_bare_repository(hidden) is True
+
+    def test_an_ordinary_directory_is_still_ordinary(self, repo):
+        assert distrodeck._probe_bare_repository(repo) is False
+        assert distrodeck._git_storage_above(repo) == ""
+
+    def test_a_missing_marker_is_false_not_unknown(self, tmp_path):
+        half = tmp_path / "half"
+        (half / "objects").mkdir(parents=True)
+        (half / "refs").mkdir()
+        assert distrodeck._marker_present(half / "HEAD") is False
+        assert distrodeck._probe_bare_repository(half) is False
+
+    def test_the_pre_delete_check_asks_the_ancestor_question(self, tmp_path):
+        bare = self._bare(tmp_path / "vendor.git")
+        ref = bare / "refs" / "heads" / "build"
+        ref.mkdir(parents=True, exist_ok=True)
+        check = distrodeck._still_eligible(ref, None, False)
+        assert "bare repository" in check.reason, check.reason
+
+    def test_a_repository_appearing_mid_scan_still_protects_the_branch(self, repo):
+        """Discovery finds an ordinary `build/`; an ancestor becomes a bare
+        repository before the deletion loop reaches it."""
+        heads = repo / "refs" / "heads"
+        target = make_dir(repo, "refs/heads/build")
+        (target / "main").write_text("0" * 40 + "\n")
+        found = distrodeck.find_reclaimable(repo, ARTIFACTS, require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [str(target)], found
+
+        # `git init --bare` over the directory that was already scanned.
+        (repo / "HEAD").write_text("ref: refs/heads/main\n")
+        (repo / "objects").mkdir(exist_ok=True)
+        check = distrodeck._still_eligible(target, None, False)
+        assert "bare repository" in check.reason, check.reason
+        assert heads.exists()

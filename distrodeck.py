@@ -3038,6 +3038,40 @@ def _is_bare_repository(entries) -> bool:
     return all(marker in here for marker in _BARE_REPOSITORY_MARKERS)
 
 
+def _marker_present(path: pathlib.Path):
+    """True, False, or None when the answer cannot be obtained.
+
+    `os.path.exists` collapses "absent" and "not permitted to look" into False,
+    which is the wrong direction for a check that decides whether something is a
+    repository.
+    """
+    try:
+        os.lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        return False
+    except OSError:
+        return None
+
+
+def _probe_bare_repository(path: pathlib.Path) -> bool:
+    """Whether *path* is a bare repository's root, by probing its markers.
+
+    **Probed by path rather than listed.** `os.listdir` needs read (`r`) permission
+    and this needs only search (`x`), and a directory that grants `x` without `r` is
+    exactly the case a listing-based check read as an ordinary directory -- while a
+    workspace below its `refs/heads` stayed perfectly reachable, because reaching
+    through a directory is what `x` grants.
+
+    A probe that cannot answer counts as a marker being present. Fail-closed here
+    costs a directory that is not reclaimed; failing open costs a branch.
+    """
+    answers = [_marker_present(path / marker) for marker in _BARE_REPOSITORY_MARKERS]
+    return all(answer is not False for answer in answers)
+
+
 def _git_storage_above(path: pathlib.Path) -> str:
     """Why *path* is inside a repository's own storage, or "".
 
@@ -3057,11 +3091,7 @@ def _git_storage_above(path: pathlib.Path) -> str:
         return "it is inside a .git directory"
     here = path
     while True:
-        try:
-            entries = os.listdir(here)
-        except OSError:
-            entries = []
-        if _is_bare_repository(entries):
+        if _probe_bare_repository(here):
             return f"it is inside the bare repository at {here}"
         if here.parent == here:
             return ""
@@ -3133,6 +3163,15 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Re
     Fails closed: anything unreadable, or any git call that does not answer, is
     a refusal rather than a pass.
     """
+    storage = _git_storage_above(path)
+    if storage:
+        # Asked again here, not only of the workspace at the start of the scan: an
+        # ancestor can become a bare repository in between -- `git init --bare` in
+        # a directory that already existed is enough -- and the candidate would
+        # then be a ref directory. No flag waives this one, so the last check
+        # before `rmtree` has to make it too.
+        return Recheck(storage)
+
     if path.is_symlink():
         # Checked before `is_dir`, which follows the link and answers about the
         # target. A symlink appearing where a directory was is not the thing that

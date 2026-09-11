@@ -202,9 +202,13 @@ What it will not offer, ever -- no flag lifts these:
   bare repository -- at its root or below it. A loose ref is a path: a branch called
   `build/main` is a directory named `build` under `refs/heads`, so deleting it would
   delete the branch. The workspace's own ancestors are checked before the scan
-  begins, because a workspace of `repo.git/refs/heads` never walks past the entries
-  that identify the repository above it. Refused whatever the flags say, since a
-  repository's own storage is not build output.
+  begins, and again immediately before each deletion, because `git init --bare` in
+  an existing directory is enough to turn an ancestor into one mid-scan. A workspace
+  of `repo.git/refs/heads` never walks past the entries that identify the repository
+  above it, and those entries are probed by path rather than listed, so a repository
+  that allows directories to be traversed but not listed is still recognised.
+  Refused whatever the flags say, since a repository's own storage is not build
+  output.
 - a symlink, however it is named. `os.walk` lists a symlink to a directory among
   directories, so one called `build` was offered and measured as its target --
   space that removing the link would not free. Removing it would free only the
