@@ -399,3 +399,103 @@ class TestSparseFilesAreNotCountedAsSpace:
             pytest.skip("filesystem does not support sparse files")
         size, _, _ = distrodeck._measure(target)
         assert size < info.st_size, "apparent size must not be reported as reclaimable"
+
+
+class TestBareRepositoriesAreProtectedToo:
+    """`git clone --bare` has no `.git` entry at all.
+
+    `HEAD`, `objects` and `refs` sit at the root. Looking only for `.git` missed
+    exactly the kind of repository somebody vendors into a build directory --
+    ignored, and irreplaceable.
+    """
+
+    def test_a_bare_clone_inside_a_candidate_protects_it(self, repo):
+        vendor = repo / "build" / "vendor.git"
+        vendor.mkdir(parents=True)
+        subprocess.run(["git", "init", "--bare", "-q", str(vendor)],
+                       check=True, capture_output=True)
+        assert not (vendor / ".git").exists(), "a bare repo has no .git to find"
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_the_three_markers_together_are_what_counts(self, repo):
+        # A directory that merely contains a file called HEAD is not a repository.
+        target = make_dir(repo, "build")
+        (target / "HEAD").write_text("not a repo\n")
+        assert len(distrodeck.find_reclaimable(repo.parent, ARTIFACTS)) == 1
+
+
+class TestEligibilityIsRecheckedBeforeDeleting:
+    """Everything known about a candidate was learned minutes earlier.
+
+    A scan across a large workspace takes time. A build started in that window
+    creates fresh files; somebody can force-add into the directory; a clone can
+    appear inside it. `--older-than` exists to protect work in progress and was
+    evaluated before that work resumed.
+    """
+
+    def test_a_candidate_that_gained_a_repository_is_skipped(self, repo, capsys):
+        import argparse
+
+        target = make_dir(repo, "build", age_days=30)
+        args = argparse.Namespace(workspace=str(repo.parent), apply=True,
+                                  include_environments=False, older_than=7,
+                                  list=0, any_directory=False)
+        # Simulate the race: eligible at scan time, a clone appears before the
+        # deletion loop reaches it.
+        real_measure = distrodeck._measure
+        state = {"scanned": False}
+
+        def measure_then_plant(path):
+            result = real_measure(path)
+            if not state["scanned"]:
+                state["scanned"] = True
+                nested = path / "vendor"
+                nested.mkdir(exist_ok=True)
+                subprocess.run(["git", "-C", str(nested), "init", "-q"],
+                               check=True, capture_output=True)
+            return result
+
+        distrodeck._measure = measure_then_plant
+        try:
+            distrodeck.run_reclaim(args)
+        finally:
+            distrodeck._measure = real_measure
+
+        assert target.exists(), "a candidate that gained a repository must survive"
+        assert "skipping" in capsys.readouterr().out
+
+    def test_still_eligible_refuses_when_only_ls_files_fails(self, repo, monkeypatch):
+        """Isolated to `ls-files`, so an earlier guard cannot pass this for it.
+
+        Breaking every git call makes `_worktree_of` return None, and the "no
+        longer inside a worktree" check refuses first -- so the assertion would
+        hold with the completeness check deleted. One call at a time is the only
+        way it means what it says.
+        """
+        target = make_dir(repo, "build")
+        assert distrodeck._still_eligible(target, None, True) == ""
+
+        real = distrodeck._git
+
+        def break_only_ls_files(worktree, *args, **kwargs):
+            if args[0] == "ls-files":
+                return None
+            return real(worktree, *args, **kwargs)
+
+        monkeypatch.setattr(distrodeck, "_git", break_only_ls_files)
+        reason = distrodeck._still_eligible(target, None, True)
+        assert reason == "git could not be consulted again", reason
+
+    def test_still_eligible_refuses_a_vanished_directory(self, repo):
+        assert distrodeck._still_eligible(repo / "gone", None, True) != ""
+
+    def test_an_unchanged_candidate_is_still_deleted(self, repo, capsys):
+        import argparse
+
+        target = make_dir(repo, "build", age_days=30)
+        args = argparse.Namespace(workspace=str(repo.parent), apply=True,
+                                  include_environments=False, older_than=7,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        assert not target.exists()
+        assert "freed" in capsys.readouterr().out

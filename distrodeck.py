@@ -2797,18 +2797,71 @@ def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
     return ignored, tracked, True
 
 
+# A bare repository has no `.git` at all: its contents sit at the root. These
+# three together are what `git` itself looks for, and what distinguishes one from
+# a directory that merely happens to contain a file called HEAD.
+_BARE_REPOSITORY_MARKERS = ("HEAD", "objects", "refs")
+
+
 def _contains_nested_git(path: pathlib.Path) -> bool:
-    """Whether a repository lives inside *path*.
+    """Whether a repository lives inside *path*, bare ones included.
 
     An outer repository can ignore `build/`, and `build/vendor` can itself be a
     clone. The candidate passes `check-ignore`, and `shutil.rmtree` would then
     take that repository's history with it. Filtering `.git` out of the *walk*
     does not protect against this -- it is the opposite containment.
+
+    `git clone --bare` has no `.git` entry: `HEAD`, `objects` and `refs` are at
+    the root. Looking only for `.git` therefore missed exactly the kind of
+    repository somebody vendors into a build directory, which is the case most
+    likely to be both ignored and irreplaceable.
     """
     for root, dirs, files in os.walk(path, onerror=lambda _: None):
         if ".git" in dirs or ".git" in files:  # a file, for worktrees and submodules
             return True
+        here = set(dirs) | set(files)
+        if all(marker in here for marker in _BARE_REPOSITORY_MARKERS):
+            return True
     return False
+
+
+def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> str:
+    """"" if *path* may still be deleted, else why not.
+
+    Re-run immediately before deletion, because everything known about a
+    candidate was learned during a scan that can take minutes across a large
+    workspace. A build started in that window creates fresh files, a colleague
+    can `git add -f` something into it, a clone can appear inside it -- and
+    `--older-than`, whose entire purpose is to protect work in progress, was
+    evaluated against a measurement taken before that work resumed.
+
+    Fails closed: anything unreadable, or any git call that does not answer, is
+    a refusal rather than a pass.
+    """
+    if not path.is_dir():
+        return "it is no longer there"
+
+    if require_git_ignored:
+        worktree = _worktree_of(path)
+        if worktree is None:
+            return "it is no longer inside a git worktree"
+        ignored, tracked, complete = _worktree_facts(worktree, [path])
+        if not complete:
+            return "git could not be consulted again"
+        if path not in ignored:
+            return "it is no longer ignored by its repository"
+        if any(str(t).startswith(str(path) + os.sep) for t in tracked):
+            return "it now holds a tracked file"
+
+    if _contains_nested_git(path):
+        return "it now contains a repository"
+
+    if cutoff is not None:
+        _, newest, _ = _measure(path)
+        if newest > cutoff:
+            return "something inside it changed during the scan"
+
+    return ""
 
 
 def find_reclaimable(
@@ -2958,9 +3011,19 @@ def run_reclaim(args: argparse.Namespace) -> None:
             print("  restoring one needs a network and a pip install.")
         return
 
+    cutoff = time.time() - (args.older_than * 86400) if args.older_than else None
     removed = 0
     freed = 0
+    skipped = 0
     for path, size, _, _ in found:
+        # Checked again here, not only during the scan. Between the two, a build
+        # can start, a file can be force-added, a clone can appear -- and the
+        # scan of a large workspace takes minutes.
+        reason = _still_eligible(path, cutoff, not args.any_directory)
+        if reason:
+            print(f"  skipping {path}: {reason}")
+            skipped += 1
+            continue
         try:
             shutil.rmtree(path)
         except OSError as exc:
@@ -2970,6 +3033,8 @@ def run_reclaim(args: argparse.Namespace) -> None:
         freed += size
     print()
     print(f"  Removed {removed} directory(ies), {_human_bytes(freed)} freed.")
+    if skipped:
+        print(f"  Skipped {skipped} that stopped being eligible during the scan.")
 
 
 def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:

@@ -36,7 +36,17 @@ This project follows Keep a Changelog and Semantic Versioning.
   can ignore `build/` while `build/vendor` is itself a clone, and filtering
   `.git` out of the walk is the opposite containment -- it would not have saved
   that history from `rmtree`. A `.git` file counts as well as a directory, since
-  that is how submodules and linked worktrees appear.
+  that is how submodules and linked worktrees appear, and a **bare** repository
+  counts as well: `git clone --bare` has no `.git` entry at all, which made the
+  kind of repository somebody vendors into a build directory invisible to the
+  check meant to protect it.
+
+  Every one of those questions is asked **again immediately before each
+  deletion**, and any refusal or unanswered git call skips the directory.
+  Everything learned during a scan is minutes old by the time deletion starts on
+  a large workspace: a build can resume, a file can be force-added, a clone can
+  appear -- and `--older-than`, whose whole purpose is to protect work in
+  progress, was evaluated before that work restarted.
 
   Matching directories are **not pruned before eligibility is known**. An
   authored `scripts/build/` can hold an ignored `target/`; pruning at the match
