@@ -57,6 +57,13 @@ This project follows Keep a Changelog and Semantic Versioning.
   appear -- and `--older-than`, whose whole purpose is to protect work in
   progress, was evaluated before that work restarted.
 
+  With `--apply` a failed removal now **exits nonzero**, after every remaining
+  candidate has been attempted. It printed `could not remove ...` and exited 0
+  before, so anything scripting this -- a cron entry, a CI step -- was told the
+  disk had been freed when it had not. A *skip* stays a success: it is the
+  pre-delete re-check working, and counting it as an error would make a caller
+  choose between reading the exit status and keeping the protection.
+
   Matching directories are **not pruned before eligibility is known**. An
   authored `scripts/build/` can hold an ignored `target/`; pruning at the match
   rejected the outer candidate while never visiting the reclaimable inner one.

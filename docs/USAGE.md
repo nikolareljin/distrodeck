@@ -205,6 +205,12 @@ lifts both:
 - anything at all in a worktree where `git` could not be consulted. Both the
   ignore check and the index check must succeed, or nothing there is offered.
 
+With `--apply`, a removal that fails is reported on stderr and the command exits
+**nonzero** once every other candidate has been attempted -- one unreadable tree
+does not cost the rest of the run, and a cron entry or CI step can tell that the
+disk was not actually freed. A *skip* is not a failure: that is the pre-delete
+re-check doing its job, and the exit status stays zero for it.
+
 Reported sizes are **allocated blocks**, not apparent file length, and
 hard-linked content is excluded from the total and reported separately: removing
 one name for an inode frees nothing while another survives, so the figure is a

@@ -11,6 +11,7 @@ deletes by directory name is one `build/` away from removing somebody's source,
 so most of this file is about what it declines to offer.
 """
 
+import argparse
 import importlib.util
 import os
 import subprocess
@@ -708,3 +709,63 @@ class TestARejectedCandidateDoesNotConsumeAnInode:
         assert linked > 0, (
             "the inode was claimed by the candidate the age filter rejected"
         )
+
+
+class TestApplyReportsFailureInItsExitStatus:
+    """`--apply` printed "could not remove" and exited 0.
+
+    A caller scripting this -- a cron entry, a CI step, the TUI -- had no way to
+    learn that some or all of the deletion failed, because `run_reclaim` returned
+    normally and the dispatcher ignores its return value. A command that reports
+    success while freeing nothing is worse than one that fails.
+
+    Skips are deliberately *not* failures: they are the pre-delete re-check doing
+    its job, and conflating them would force a caller to choose between reading
+    the exit status and keeping the protection.
+    """
+
+    @staticmethod
+    def _args(repo, **over):
+        base = dict(workspace=str(repo.parent), apply=True, include_environments=False,
+                    older_than=0, list=0, any_directory=False)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def test_a_failed_removal_exits_nonzero(self, repo, monkeypatch):
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck.shutil, "rmtree",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError(13, "denied")))
+        with pytest.raises(SystemExit) as exit_status:
+            distrodeck.run_reclaim(self._args(repo))
+        assert exit_status.value.code == 1
+
+    def test_it_attempts_every_candidate_before_exiting(self, repo, monkeypatch):
+        """The nonzero exit comes after the work, not instead of it."""
+        make_dir(repo, "build")
+        make_dir(repo, "target")
+        attempted = []
+
+        def refuse(path, *a, **k):
+            attempted.append(str(path))
+            raise OSError(13, "denied")
+
+        monkeypatch.setattr(distrodeck.shutil, "rmtree", refuse)
+        with pytest.raises(SystemExit):
+            distrodeck.run_reclaim(self._args(repo))
+        assert len(attempted) == 2, attempted
+
+    def test_a_successful_removal_exits_zero(self, repo):
+        target = make_dir(repo, "build")
+        distrodeck.run_reclaim(self._args(repo))  # no SystemExit
+        assert not target.exists()
+
+    def test_a_skip_is_not_a_failure(self, repo, monkeypatch):
+        """A candidate the re-check refuses must not make the run fail.
+
+        Without this, the two outcomes would be indistinguishable to a caller and
+        the safety re-check would start looking like a malfunction.
+        """
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_still_eligible",
+                            lambda *a, **k: "a clone appeared inside it")
+        distrodeck.run_reclaim(self._args(repo))  # no SystemExit

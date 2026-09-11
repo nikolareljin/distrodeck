@@ -3126,6 +3126,7 @@ def run_reclaim(args: argparse.Namespace) -> None:
     removed = 0
     freed = 0
     skipped = 0
+    failed = 0
     for path, size, _, _ in found:
         # Checked again here, not only during the scan. Between the two, a build
         # can start, a file can be force-added, a clone can appear -- and the
@@ -3139,6 +3140,7 @@ def run_reclaim(args: argparse.Namespace) -> None:
             shutil.rmtree(path)
         except OSError as exc:
             print(f"  could not remove {path}: {exc}", file=sys.stderr)
+            failed += 1
             continue
         removed += 1
         freed += size
@@ -3146,6 +3148,18 @@ def run_reclaim(args: argparse.Namespace) -> None:
     print(f"  Removed {removed} directory(ies), {_human_bytes(freed)} freed.")
     if skipped:
         print(f"  Skipped {skipped} that stopped being eligible during the scan.")
+    if failed:
+        # Nonzero only for removals that *failed*, and only after every other
+        # candidate has been attempted: one unreadable tree must not cost the
+        # rest of the run. Skips are deliberately not failures -- they are the
+        # safety re-check doing its job, and a caller that treated them as errors
+        # would have to choose between reading the exit status and keeping the
+        # protection.
+        print(
+            f"  {failed} could not be removed; see the errors above.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
