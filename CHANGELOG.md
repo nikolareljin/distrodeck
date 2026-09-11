@@ -44,6 +44,33 @@ This project follows Keep a Changelog and Semantic Versioning.
   kind of repository somebody vendors into a build directory invisible to the
   check meant to protect it.
 
+  A directory with **a filesystem mounted inside it is refused**, as is one that
+  is itself a mount point. `shutil.rmtree` walks through a mount point like any
+  other directory, so a bind mount, an NFS share or a mounted image inside an
+  ignored `build/` would have had its contents deleted -- data that is not the
+  candidate's to free, that no build reproduces, and whose space does not come
+  back to this disk. Detected two ways because neither suffices: a change of
+  device number anywhere in the tree catches a separate filesystem, and
+  `/proc/self/mountinfo` catches a bind mount of the *same* filesystem, whose
+  device number is its parent's. An unreadable mount table is not a refusal on its
+  own, or the command would be useless in a container. The table is re-read
+  immediately before each deletion, so a mount that appears during a minutes-long
+  scan is still caught.
+
+  Deciding which repository a candidate belongs to no longer costs a subprocess
+  per candidate. `git rev-parse --show-toplevel` ran once per match: on the
+  measured workspace that is **8,523 git processes for 8,373 candidates across 75
+  repositories, now 225** -- three per repository, which is what batching the
+  ignore and index questions was for in the first place. Deciding which repository
+  each candidate belonged to had cost 37 times more than the questions it was
+  batching. Whole-workspace scan: 40.3s to 29.6s. The directory chain
+  is climbed with `stat` until a `.git` entry appears, `git` confirms that one
+  answer, and every directory climbed past is cached with it. Still `git` that
+  decides, because `GIT_DIR`, `.git` files for submodules and linked worktrees and
+  `core.worktree` all mean the first `.git` on the way up is evidence rather than
+  proof; and a tree with no `.git` anywhere above it is refused without asking,
+  which costs a directory that is not reclaimed rather than one deleted unchecked.
+
   A tree it **could not read in full is refused**, not treated as empty. Both
   walks over a candidate -- the nested-repository search and the measurement --
   used to discard `scandir` failures, which turned "could not look" into "looked

@@ -177,10 +177,13 @@ Options:
 - `--older-than DAYS`: only directories whose newest file inside is older than
   this. Protects work in progress. A negative value is refused. On the measured
   machine the default 59.5 GB falls to 46.1 GB at seven days and 29.4 GB at
-  thirty. The age of a directory is the newest file **anywhere inside it**, and a
-  directory is only absorbed into an ancestor that itself survives this filter --
-  so an old `build/node_modules` is still offered when `build` is rejected for
-  something fresh elsewhere inside it.
+  thirty. A tree's age is the newest mtime of **anything inside it, file or
+  directory** -- so creating or removing even an empty directory in a build tree
+  makes it recent. That is deliberate: it is activity, and the mistake it causes
+  is refusing to delete something, not deleting something in use. A directory is
+  only absorbed into an ancestor that itself survives this filter, so an old
+  `build/node_modules` is still offered when `build` is rejected for something
+  fresh elsewhere inside it.
 - `--list N`: also list the N largest candidates individually.
 - `--include-environments`: also Python virtualenvs. Off by default because
   restoring one needs a network and a `pip install`, and a virtualenv holding
@@ -195,6 +198,14 @@ What it will not offer, ever -- no flag lifts these:
   history. A `.git` file counts as well as a directory, since that is how
   submodules and linked worktrees appear, and a bare clone counts too: it has no
   `.git` entry at all, only `HEAD`, `objects` and `refs` at its root.
+- a directory with a filesystem mounted inside it, or which is itself a mount
+  point. `rm -r` walks through a mount like any other directory, so a bind mount,
+  an NFS share or a mounted image inside an ignored `build/` would have its
+  *contents* deleted -- data no build reproduces, whose space does not return to
+  this disk anyway. Detected from both the mount table and a change of device
+  number during the scan, because a bind mount of the same filesystem has the
+  same device number as its parent and a separate filesystem need not appear in a
+  table this process can read.
 - a directory it could not read in full. A subtree the scan cannot enter is
   "could not look", not "looked and found nothing" -- it could hold a clone, and
   with `--older-than` it could hold the very file that says somebody is working

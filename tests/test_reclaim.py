@@ -191,14 +191,15 @@ class TestSizeIsWhatDeletionWouldFree:
             os.link(target / "blob", target / "second-name.o")
         except OSError:
             pytest.skip("filesystem does not support hard links")
-        size, _, linked, _, _ = distrodeck._measure(target)
+        m = distrodeck._measure(target)
+        size, linked = m.total, m.linked
         assert linked > 0, "the linked inode should be reported separately"
         assert size == 0, "and excluded from the total that deletion would free"
 
     def test_ordinary_files_are_counted(self, repo):
         target = make_dir(repo, "build", size=64 * 1024)
-        size, _, linked, _, _ = distrodeck._measure(target)
-        assert size > 0 and linked == 0
+        m = distrodeck._measure(target)
+        assert m.total > 0 and m.linked == 0
 
     def test_it_reports_something_for_a_real_directory(self, repo):
         make_dir(repo, "build", size=16 * 1024)
@@ -398,7 +399,7 @@ class TestSparseFilesAreNotCountedAsSpace:
             pytest.skip("platform does not report st_blocks")
         if info.st_blocks * 512 >= info.st_size:
             pytest.skip("filesystem does not support sparse files")
-        size, _, _, _, _ = distrodeck._measure(target)
+        size = distrodeck._measure(target).total
         assert size < info.st_size, "apparent size must not be reported as reclaimable"
 
 
@@ -520,7 +521,7 @@ class TestTheExcludedHardLinkFigureIsAccurate:
             pytest.skip("filesystem does not support hard links")
         info = os.lstat(target / "blob")
         one_copy = (info.st_blocks * 512) if getattr(info, "st_blocks", None) else info.st_size
-        _, _, linked, _, _ = distrodeck._measure(target)
+        linked = distrodeck._measure(target).linked
         assert linked <= one_copy * 1.5, f"{linked} looks like more than one copy of {one_copy}"
 
     def test_a_measurement_reports_its_own_tree_and_leaves_the_ledger_alone(self, repo):
@@ -858,3 +859,161 @@ class TestFreedBytesDescribeWhatWasRemoved:
     def test_a_refusal_carries_no_measurement(self, repo):
         check = distrodeck._still_eligible(repo / "gone", None, True)
         assert check.reason and check.measured is None
+
+
+class TestItRefusesToDeleteThroughAMountPoint:
+    """`rmtree` walks through a mount point like any other directory.
+
+    An ignored `build/` holding a bind mount, an NFS share or a mounted image
+    would have the *mounted* filesystem's contents deleted -- data that is not the
+    candidate's to free, that no build reproduces, and whose space does not come
+    back to this disk anyway. Mounting needs root, so the detection is tested
+    through both of its signals rather than by mounting something.
+    """
+
+    def test_a_differing_device_inside_the_tree_is_a_crossing(self, repo):
+        target = make_dir(repo, "build")
+        real = distrodeck._measure(target)
+        assert real.crosses_mount is False, "nothing is mounted in a temp dir"
+        two_devices = real._replace(crosses_mount=True)
+        assert distrodeck._crosses_a_mount(target, two_devices, set()) is True
+
+    def test_a_mount_point_inside_the_tree_is_a_crossing(self, repo):
+        target = make_dir(repo, "build")
+        inside = str(target / "data")
+        assert distrodeck._crosses_a_mount(target, None, {inside}) is True
+
+    def test_the_candidate_itself_being_a_mount_is_a_crossing(self, repo):
+        """`rmtree` empties it and leaves the mount behind: nothing is reclaimed."""
+        target = make_dir(repo, "build")
+        assert distrodeck._crosses_a_mount(target, None, {str(target)}) is True
+
+    def test_a_sibling_mount_is_not(self, repo):
+        """The prefix test must not match a directory that merely starts the same."""
+        target = make_dir(repo, "build")
+        assert distrodeck._crosses_a_mount(target, None, {str(target) + "-output"}) is False
+
+    def test_an_unreadable_mount_table_does_not_refuse_on_its_own(self, repo):
+        """`None` means that half of the check did not run, not "no mounts".
+
+        Refusing every candidate when `/proc` is unavailable would make the
+        command useless in a container; the `st_dev` signal still covers a
+        separate filesystem, which is the common case.
+        """
+        target = make_dir(repo, "build")
+        assert distrodeck._crosses_a_mount(target, distrodeck._measure(target), None) is False
+
+    def test_the_scan_skips_a_candidate_with_a_mount_inside(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target / "share")})
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_the_pre_delete_check_refuses_one(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target / "share")})
+        check = distrodeck._still_eligible(target, None, True)
+        assert check.reason == "a filesystem is mounted inside it", check.reason
+
+    def test_a_mount_appearing_after_the_scan_is_still_caught(self, repo, monkeypatch):
+        """The scan and the deletion are minutes apart; the table is re-read."""
+        target = make_dir(repo, "build")
+        # The table is clean while the scan reads it and dirty by the time the
+        # deletion loop re-reads it. Patching it before `run_reclaim` would let the
+        # scan's own refusal answer, and this test would pass with the pre-delete
+        # check removed -- which it did, the first time it was written.
+        reads = {"n": 0}
+
+        def table_then_mount():
+            reads["n"] += 1
+            return set() if reads["n"] == 1 else {str(target / "share")}
+
+        monkeypatch.setattr(distrodeck, "_mount_points", table_then_mount)
+        args = argparse.Namespace(workspace=str(repo.parent), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        assert reads["n"] >= 2, "the mount table was not re-read before deleting"
+        assert target.exists(), "it was deleted through a mount that appeared late"
+
+    def test_the_real_mount_table_is_read(self, repo):
+        """Against this machine, not a fixture: `/` has mounts under it."""
+        points = distrodeck._mount_points()
+        if points is None:
+            pytest.skip("no /proc/self/mountinfo on this platform")
+        assert len(points) > 1
+        assert distrodeck._crosses_a_mount(Path("/"), None, points) is True
+
+    def test_escaped_paths_are_decoded(self):
+        """A mount under a directory with a space would otherwise compare against
+        a truncated string and match nothing."""
+        line = "22 1 0:5 / /mnt/my\\040disk rw,relatime shared:2 - tmpfs tmpfs rw"
+        assert distrodeck._parse_mountinfo([line]) == {"/mnt/my disk"}
+
+
+class TestWorktreeLookupCostsOneCallPerRepository:
+    """A `rev-parse` per candidate made the per-worktree batching pointless.
+
+    The git calls were batched two-per-repository precisely because subprocesses
+    are the expensive part -- and then deciding which repository each candidate
+    belonged to spent one subprocess per candidate, thousands of them on a real
+    workspace. Counted here rather than timed, because a timing assertion on a
+    shared machine fails for reasons that have nothing to do with this.
+    """
+
+    def test_many_candidates_in_one_repository_ask_git_once(self, repo, monkeypatch):
+        for name in ("build", "target", "node_modules", ".dart_tool", ".gradle"):
+            make_dir(repo, name)
+        make_dir(repo, "deep/nested/further/build")
+
+        calls = []
+        real_git = distrodeck._git
+
+        def counted(worktree, *args, **kwargs):
+            if args and args[0] == "rev-parse":
+                calls.append(str(worktree))
+            return real_git(worktree, *args, **kwargs)
+
+        monkeypatch.setattr(distrodeck, "_git", counted)
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        # Five: the fixture's .gitignore does not list `.gradle`, so that one is
+        # correctly not offered -- which is itself worth asserting on.
+        assert len(found) == 5, [str(path) for path, _, _, _ in found]
+        assert len(calls) == 1, (
+            f"{len(calls)} rev-parse calls for {len(found)} candidates: {calls}"
+        )
+
+    def test_two_repositories_ask_twice(self, repo, tmp_path):
+        """The control: the cache must not collapse distinct repositories."""
+        other = tmp_path / "other"
+        other.mkdir()
+        git(other, "init", "-q")
+        (other / ".gitignore").write_text("build/\n")
+        make_dir(repo, "build")
+        make_dir(other, "build")
+        found = distrodeck.find_reclaimable(tmp_path, ARTIFACTS)
+        roots = {str(p.parent) for p, _, _, _ in found}
+        assert roots == {str(repo), str(other)}, roots
+
+    def test_a_submodule_resolves_to_the_submodule(self, repo, tmp_path):
+        """Innermost wins, as `git` itself does -- the cache must not hand a
+        nested repository its parent's worktree, or the ignore question would be
+        asked of the wrong `.gitignore`."""
+        inner = repo / "vendor" / "lib"
+        inner.mkdir(parents=True)
+        git(inner, "init", "-q")
+        (inner / ".gitignore").write_text("build/\n")
+        target = make_dir(inner, "build")
+        assert distrodeck._worktree_of(target) == inner
+        # and through the cache, with the outer repository resolved first
+        cache: dict = {}
+        assert distrodeck._worktree_of(make_dir(repo, "build"), cache) == repo
+        assert distrodeck._worktree_of(target, cache) == inner
+
+    def test_a_directory_outside_any_repository_asks_nothing(self, tmp_path, monkeypatch):
+        loose = tmp_path / "loose" / "build"
+        loose.mkdir(parents=True)
+        calls = []
+        monkeypatch.setattr(distrodeck, "_git",
+                            lambda *a, **k: calls.append(a) or None)
+        assert distrodeck._worktree_of(loose) is None
+        assert calls == [], f"asked git about a tree with no .git anywhere: {calls}"
