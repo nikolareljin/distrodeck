@@ -2,57 +2,47 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
-## Unreleased
+## [Unreleased]
 
+
+### Added
 - **`distrodeck reclaim`: disk that a build can make again.** A workspace of
   development checkouts is mostly not source. Measured on one machine, 90 GB
-  across roughly a hundred repositories: **33.4 GB of `build/`, 20.2 GB of Rust
-  `target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/`** -- 63.9 GB in
-  total, about three quarters of the workspace, none of it authored by anybody.
-
+  across roughly a hundred repositories: **33.8 GB of `build/`, 17.9 GB of Rust
+  `target/`, 5.2 GB of `.dart_tool/`, 4.0 GB of `node_modules/`** -- 62.8 GB in
+  total, about two thirds of the workspace, none of it authored by anybody.
   Reports by default and deletes only with `--apply`. That is the reverse of its
   sibling `cleanup-kernels`, deliberately: this command can remove tens of
   gigabytes across a hundred repositories in a second, so the safe direction is
   the default and acting is the flag.
-
   The distinction it is built around is **regenerable versus
   reproducible-at-a-cost**. A `target/` is the output of a command that runs
   again offline in minutes. A virtualenv is also "rebuildable", and rebuilding
   one holding torch and whisper is a multi-gigabyte download that fails entirely
   without a network -- so virtualenvs are behind `--include-environments` rather
   than offered as free.
-
   `--older-than DAYS` protects work in progress: on the measured machine, 63.9 GB
   total falls to 57.2 GB at seven days and 43.3 GB at thirty, the difference
   being projects actively being built.
+  A candidate must be **ignored by the Git repository that contains it**. The
+  name is not evidence: `build/` and `target/` are ordinary names for authored
+  code, and on the measured machine 8 of 101 `build/` directories were tracked
+  or unignored -- including a `scripts/build` and a `src/.../build`. Git already
+  knows which is which, because somebody wrote it in `.gitignore`. A directory
+  outside any worktree is not offered either; `--any-directory` waives the
+  requirement explicitly.
+
+  Age comes from the **newest file anywhere inside**, not the directory's own
+  mtime, which changes only when its immediate entries do -- so an actively
+  compiling `target/` whose root entry is weeks old is no longer mistaken for
+  stale. Size is **allocated blocks**, not apparent length, with hard-linked
+  inodes counted once, so the figure is what deletion actually returns.
+  `--older-than` refuses a negative value, which would put the cutoff in the
+  future and silently disable the protection.
 
   It never enters `.git` -- a repository's history is not build output however
   large it grows -- and it prunes as it walks, so a `node_modules` inside a
   `build` is counted once rather than twice.
-
-## [Unreleased]
-
-### Changed
-- `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
-  looks for `~/Projects/iso-forge` first and still accepts an older
-  `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the
-  new site. The `ISOFORGE_*` and legacy `BURN_ISO_*` environment overrides are
-  unchanged, as is the `isoforge` package name.
-
-## [0.10.2]
-
-### Changed
-- Released the current packaging CI fixes as a patch version.
-
-## [0.10.1]
-
-### Fixed
-- Prevented recursive Debian and RPM package builds in CI.
-
-
-## [0.9.0]
-
-### Added
 - `distrodeck diff --input FILE` compares an export file against the current
   system without changing anything. Reports `missing` (in the export, not
   installed here) and `extra` (installed here, not in the export) per section,
@@ -74,6 +64,25 @@ This project follows Keep a Changelog and Semantic Versioning.
   switched per shell.
 - The PR CI gate now runs the test suite (pytest plus the installer argument
   tests); previously only `py_compile` ran, so tests never gated a PR.
+### Changed
+- `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
+  looks for `~/Projects/iso-forge` first and still accepts an older
+  `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the
+  new site. The `ISOFORGE_*` and legacy `BURN_ISO_*` environment overrides are
+  unchanged, as is the `isoforge` package name.
+
+## [0.10.2]
+
+### Changed
+- Released the current packaging CI fixes as a patch version.
+
+## [0.10.1]
+
+### Fixed
+- Prevented recursive Debian and RPM package builds in CI.
+
+
+## [0.9.0]
 
 ### Changed
 - Default Node.js major installed by the `node` tool is now 24. Node 20 reached
