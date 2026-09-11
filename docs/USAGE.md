@@ -222,7 +222,9 @@ What it will not offer, ever -- no flag lifts these:
   the candidate is a mount point itself -- everything under a mount is one device),
   and the mount table, which is what catches a bind mount of the *same* filesystem.
   Only the last needs `/proc`, so where it cannot be read the same-device bind
-  mount is the one case that goes undetected.
+  mount is the one case that goes undetected. The first two are checked before the
+  candidate is read at all, so a slow or dead mount is skipped rather than measured,
+  and the scan stops at a device boundary rather than descending through one.
 - a directory it could not read in full. A subtree the scan cannot enter is
   "could not look", not "looked and found nothing" -- it could hold a clone, and
   with `--older-than` it could hold the very file that says somebody is working

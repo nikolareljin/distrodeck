@@ -90,6 +90,23 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  The table and the parent comparison are consulted **before the candidate is
+  traversed**, not after. Rejecting a mount from its measurement meant the
+  measurement had already happened: on a slow share, minutes spent sizing somebody
+  else's storage for a candidate that is then skipped; on a dead one, no answer at
+  all. For a mount the table does not list -- which on Linux means `/proc` could not
+  be read -- the measurement stops at the device boundary and records the crossing
+  rather than descending through it, so one listing of the mount root is the whole
+  cost.
+
+  **A path is bytes.** `subprocess.run(..., text=True)` decodes strictly, so one
+  tracked filename that is not valid UTF-8 made `git ls-files -z` raise
+  `UnicodeDecodeError` -- neither `OSError` nor `SubprocessError`, so it escaped the
+  wrapper that exists to turn a failed `git` call into a refusal for that worktree,
+  and aborted the whole scan. The filesystem encoding with `surrogateescape` is used
+  instead, so those bytes round-trip and a path read out of `git` can still be
+  compared against the walk's own.
+
   Deciding which repository a candidate belongs to no longer costs a subprocess
   per candidate. `git rev-parse --show-toplevel` ran once per match: on the
   measured workspace that is **8,523 git processes for 8,373 candidates across 75
