@@ -1606,3 +1606,130 @@ class TestARelativeWorkspaceIsResolvedFirst:
         monkeypatch.setenv("HOME", str(repo.parent))
         found = distrodeck.find_reclaimable(Path("~"), ARTIFACTS)
         assert [p.name for p, _, _, _ in found] == ["build"], found
+
+
+class TestNothingBelowAMountIsEverACandidate:
+    """A `target/` inside a mounted tree has the mount as an *ancestor*.
+
+    `_mount_refusal` answers about mounts at or below the path it is given, so the
+    refusal that protects a candidate *containing* a mount did nothing for one the
+    walk found *inside* one -- it was an ordinary candidate on its own merits, on
+    somebody else's storage, and `--apply` would have deleted it. The discovery walk
+    therefore does not descend past a mount at all, rather than refusing afterwards.
+
+    `holder/` is not an artifact name, so the inner `target/` is a candidate in its
+    own right and not absorbed into an accepted ancestor -- otherwise de-duplication
+    would hide whether this works.
+    """
+
+    @staticmethod
+    def _tree(repo):
+        mounted = repo / "holder" / "mounted"
+        inner = mounted / "target"
+        inner.mkdir(parents=True)
+        (inner / "blob").write_bytes(b"x" * 256 * 1024)
+        deeper = mounted / "deep" / "node_modules"
+        deeper.mkdir(parents=True)
+        (deeper / "blob").write_bytes(b"x" * 128 * 1024)
+        return mounted, inner
+
+    def test_the_control_finds_it_when_nothing_is_mounted(self, repo, monkeypatch):
+        """Without the mount, these are ordinary candidates -- so the test below is
+        about the mount and not about the tree being unreachable."""
+        mounted, inner = self._tree(repo)
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: set())
+        names = sorted(p.name for p, _, _, _ in
+                       distrodeck.find_reclaimable(repo, ARTIFACTS,
+                                                   require_git_ignored=False))
+        assert names == ["node_modules", "target"], names
+
+    def test_a_candidate_below_a_mount_is_not_offered(self, repo, monkeypatch):
+        mounted, inner = self._tree(repo)
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(mounted)})
+        found = distrodeck.find_reclaimable(repo, ARTIFACTS, require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [], found
+        assert inner.exists()
+
+    def test_apply_does_not_delete_it(self, repo, monkeypatch):
+        mounted, inner = self._tree(repo)
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(mounted)})
+        args = argparse.Namespace(workspace=str(repo), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=True)
+        distrodeck.run_reclaim(args)
+        assert (inner / "blob").exists(), "deleted a directory on mounted storage"
+
+    def test_a_mount_named_like_an_artifact_is_still_reported(self, repo, monkeypatch, capsys):
+        """Pruning happens after collecting, so this is refused with a message
+        rather than vanishing from the scan unexplained."""
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target)})
+        assert distrodeck.find_reclaimable(repo, ARTIFACTS,
+                                           require_git_ignored=False) == []
+        assert "mount point" in capsys.readouterr().err
+
+    def test_the_walk_does_not_enter_the_mounted_tree(self, repo, monkeypatch):
+        """Counted, not inferred: entering a dead NFS mount is the cost being
+        avoided, and an empty result would look the same either way."""
+        mounted, _ = self._tree(repo)
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(mounted)})
+        seen = []
+        real_walk = os.walk
+
+        def watched(top, *args, **kwargs):
+            for root, dirs, files in real_walk(top, *args, **kwargs):
+                seen.append(root)
+                yield root, dirs, files
+
+        monkeypatch.setattr(os, "walk", watched)
+        distrodeck.find_reclaimable(repo, ARTIFACTS, require_git_ignored=False)
+        inside = [r for r in seen if r.startswith(str(mounted))]
+        assert inside == [], f"walked into the mounted tree: {inside}"
+
+    def test_without_a_mount_table_a_device_boundary_is_pruned(self, repo, monkeypatch):
+        """The degraded path: `/proc` unreadable, so devices decide."""
+        mounted, inner = self._tree(repo)
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: None)
+        real_device = distrodeck._device_of
+        other = real_device(repo) + 1
+        monkeypatch.setattr(distrodeck, "_device_of",
+                            lambda p: other if str(p).startswith(str(mounted))
+                            else real_device(p))
+        found = distrodeck.find_reclaimable(repo, ARTIFACTS, require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [], found
+
+    def test_an_unreadable_device_is_kept_not_pruned(self, repo, monkeypatch):
+        """"Cannot tell" must not prune: asserted on `_descendable` itself.
+
+        Through `find_reclaimable` it cannot be asserted, because `_mount_refusal`
+        fails closed on an unreadable device and refuses the candidate anyway -- with
+        a message, which is the point. Pruning silently during the walk would remove
+        it with no message at all, and those two outcomes are what this
+        distinguishes.
+        """
+        (repo / "holder").mkdir()
+        real_device = distrodeck._device_of
+        # Only the child is unreadable. Making *everything* unreadable was the first
+        # version, and it returned early on the parent's own unknown device without
+        # reaching the line this is about -- so the sabotage run came back NOT CAUGHT.
+        monkeypatch.setattr(distrodeck, "_device_of",
+                            lambda p: None if str(p).endswith("holder")
+                            else real_device(p))
+        assert distrodeck._device_of(str(repo)) is not None, "the premise"
+        assert distrodeck._descendable(str(repo), ["holder"], None) == ["holder"]
+
+    def test_an_unreadable_parent_keeps_everything(self, repo, monkeypatch):
+        """The early return, asserted on purpose rather than relied on: with no
+        reference device there is nothing to compare a child against."""
+        (repo / "holder").mkdir()
+        monkeypatch.setattr(distrodeck, "_device_of", lambda p: None)
+        assert distrodeck._descendable(str(repo), ["holder"], None) == ["holder"]
+
+    def test_a_device_boundary_is_pruned_by_descendable(self, repo, monkeypatch):
+        """The positive half of the same function, with no table."""
+        (repo / "holder").mkdir()
+        real_device = distrodeck._device_of
+        monkeypatch.setattr(distrodeck, "_device_of",
+                            lambda p: real_device(p) + 1 if str(p).endswith("holder")
+                            else real_device(p))
+        assert distrodeck._descendable(str(repo), ["holder"], None) == []

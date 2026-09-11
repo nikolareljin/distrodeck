@@ -213,6 +213,9 @@ What it will not offer, ever -- no flag lifts these:
   directories, so one called `build` was offered and measured as its target --
   space that removing the link would not free. Removing it would free only the
   link, and somebody made it deliberately.
+- anything at or below a mount point. The scan does not descend past one, so a
+  `target/` inside a mounted tree is never a candidate -- it would have been judged on
+  its own merits, with the mount an ancestor that nothing was looking at.
 - a directory with a filesystem mounted inside it, or which is itself a mount
   point. `rm -r` walks through a mount like any other directory, so a bind mount,
   an NFS share or a mounted image inside an ignored `build/` would have its

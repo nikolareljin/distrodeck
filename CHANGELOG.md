@@ -90,6 +90,18 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  **The discovery walk does not descend past a mount at all.** Refusing afterwards
+  protected a candidate that *contains* a mount and did nothing for one found
+  *inside* one: a `target/` below a mount has the mount as an ancestor, and the
+  refusal answers about mounts at or below the path it is given, so that directory
+  was offered as an ordinary candidate on its own merits -- on somebody else's
+  storage -- and `--apply` would have deleted it. Pruning happens after a directory
+  is collected rather than before, so a mount that is itself named like an artifact is
+  still refused with a message instead of vanishing from the scan unexplained. With a
+  mount table this costs no syscalls; without one it compares device numbers, and a
+  device it cannot read is kept rather than dropped, because the measurement refuses
+  an unreadable tree later *with* a message.
+
   The table and the parent comparison are consulted **before the candidate is
   traversed**, not after. Rejecting a mount from its measurement meant the
   measurement had already happened: on a slow share, minutes spent sizing somebody

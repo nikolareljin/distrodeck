@@ -3027,6 +3027,39 @@ def _device_of(path):
         return None
 
 
+def _descendable(root, dirs, points) -> list:
+    """Which of *dirs* the discovery walk may enter: not mounts, not other devices.
+
+    Pruning here rather than refusing afterwards, because what is below a mount
+    cannot be refused afterwards: `_mount_refusal` answers about mounts at or below
+    the path it is given, and for a `target/` found inside a mounted tree the mount
+    is an *ancestor*. It would have been offered as an ordinary candidate on its own
+    merits, and deleted.
+
+    With a mount table this is a set lookup per directory and costs no syscalls,
+    which matters over a whole workspace. Without one -- `/proc` unreadable -- it
+    falls back to comparing device numbers, which costs a `stat` per directory and is
+    the price of the degraded path rather than of the normal one.
+    """
+    if points is not None:
+        return [d for d in dirs if os.path.join(root, d) not in points]
+
+    here = _device_of(root)
+    if here is None:
+        return list(dirs)
+    kept = []
+    for name in dirs:
+        child = _device_of(os.path.join(root, name))
+        # An unreadable device is kept rather than pruned: the measurement refuses
+        # it later for being unreadable, and treating "cannot tell" as "is a mount"
+        # here would silently drop ordinary directories on a machine with one
+        # awkward permission.
+        if child is not None and child != here:
+            continue
+        kept.append(name)
+    return kept
+
+
 def _mount_refusal(path: pathlib.Path, measured, points) -> str:
     """Why deleting *path* would reach storage that is not its own, or "".
 
@@ -3063,8 +3096,13 @@ def _mount_refusal(path: pathlib.Path, measured, points) -> str:
     if points is None:
         return ""
     here = str(path)
+    if here in points:
+        # A same-device bind mount of the candidate itself: the device comparison
+        # above cannot see it, and saying "mounted inside it" would be wrong about
+        # which directory is the mount.
+        return "it is itself a mount point"
     prefix = here + os.sep
-    if any(point == here or point.startswith(prefix) for point in points):
+    if any(point.startswith(prefix) for point in points):
         return "a filesystem is mounted inside it"
     return ""
 
@@ -3324,6 +3362,15 @@ def find_reclaimable(
 
     cutoff = time.time() - (older_than_days * 86400) if older_than_days else None
 
+    # Read once, before discovery. The walk needs it: descending past a mount put
+    # directories on *other* storage into the candidate list, and a `target/` below
+    # a mount has the mount as an **ancestor**, which `_mount_refusal` does not look
+    # at -- it answers about mounts at or below the path it is given. So the
+    # refusal that protects a candidate containing a mount did nothing for a
+    # candidate the walk found inside one, and `--apply` would have deleted somebody
+    # else's directory.
+    points = _mount_points()
+
     candidates = []
     for root, dirs, files in os.walk(workspace, onerror=lambda _: None):
         dirs[:] = [d for d in dirs if d != ".git"]
@@ -3349,6 +3396,11 @@ def find_reclaimable(
             if path.is_symlink():
                 continue
             candidates.append(path)
+
+        # Pruned *after* collecting, so a mount that is itself named like an
+        # artifact is still collected and then refused by name, with a message,
+        # rather than disappearing from the scan unexplained.
+        dirs[:] = _descendable(root, dirs, points)
 
     if require_git_ignored:
         by_worktree: dict = {}
@@ -3387,7 +3439,6 @@ def find_reclaimable(
     # else's storage on a slow mount, or no answer at all on a dead one. What is
     # left for the measurement to catch is a mount the table does not list, which
     # on Linux means `/proc` could not be read.
-    points = _mount_points()
     unmounted = []
     for path in candidates:
         mounted = _mount_refusal(path, None, points)
