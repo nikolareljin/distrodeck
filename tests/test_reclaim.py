@@ -190,13 +190,13 @@ class TestSizeIsWhatDeletionWouldFree:
             os.link(target / "blob", target / "second-name.o")
         except OSError:
             pytest.skip("filesystem does not support hard links")
-        size, _, linked = distrodeck._measure(target)
+        size, _, linked, _, _ = distrodeck._measure(target)
         assert linked > 0, "the linked inode should be reported separately"
         assert size == 0, "and excluded from the total that deletion would free"
 
     def test_ordinary_files_are_counted(self, repo):
         target = make_dir(repo, "build", size=64 * 1024)
-        size, _, linked = distrodeck._measure(target)
+        size, _, linked, _, _ = distrodeck._measure(target)
         assert size > 0 and linked == 0
 
     def test_it_reports_something_for_a_real_directory(self, repo):
@@ -397,7 +397,7 @@ class TestSparseFilesAreNotCountedAsSpace:
             pytest.skip("platform does not report st_blocks")
         if info.st_blocks * 512 >= info.st_size:
             pytest.skip("filesystem does not support sparse files")
-        size, _, _ = distrodeck._measure(target)
+        size, _, _, _, _ = distrodeck._measure(target)
         assert size < info.st_size, "apparent size must not be reported as reclaimable"
 
 
@@ -519,7 +519,7 @@ class TestTheExcludedHardLinkFigureIsAccurate:
             pytest.skip("filesystem does not support hard links")
         info = os.lstat(target / "blob")
         one_copy = (info.st_blocks * 512) if getattr(info, "st_blocks", None) else info.st_size
-        _, _, linked = distrodeck._measure(target)
+        _, _, linked, _, _ = distrodeck._measure(target)
         assert linked <= one_copy * 1.5, f"{linked} looks like more than one copy of {one_copy}"
 
     def test_the_same_inode_across_two_candidates_is_counted_once(self, repo):
@@ -530,8 +530,10 @@ class TestTheExcludedHardLinkFigureIsAccurate:
         except OSError:
             pytest.skip("filesystem does not support hard links")
         shared: set = set()
-        _, _, a = distrodeck._measure(first, shared)
-        _, _, b = distrodeck._measure(second, shared)
+        first_measured = distrodeck._measure(first, shared)
+        shared |= first_measured.claimed
+        a = first_measured.linked
+        b = distrodeck._measure(second, shared).linked
         # Whichever is measured first accounts for it; the other adds nothing.
         assert (a > 0) != (b > 0), f"counted in both: {a} and {b}"
 
@@ -552,4 +554,157 @@ class TestTheExcludedHardLinkFigureIsAccurate:
         linked_totals = [linked for _, _, _, linked in found]
         assert len([x for x in linked_totals if x > 0]) == 1, (
             f"the shared inode was accounted for more than once: {linked_totals}"
+        )
+
+
+@pytest.fixture
+def unreadable():
+    """Make a directory impossible to enumerate, and put it back afterwards.
+
+    Skipped as root, which ignores the mode bits entirely -- a test that cannot
+    create the condition it asserts about would otherwise pass by doing nothing,
+    which is the failure shape this whole file is written against.
+    """
+    restore = []
+
+    def block(path: Path):
+        if os.geteuid() == 0:
+            pytest.skip("running as root: permission bits do not apply")
+        restore.append((path, os.stat(path).st_mode))
+        os.chmod(path, 0o000)
+        if os.access(path, os.R_OK):
+            pytest.skip("filesystem ignores the read bit")
+        return path
+
+    yield block
+    for path, mode in restore:
+        os.chmod(path, mode)
+
+
+class TestATreeItCannotReadIsNotOffered:
+    """An unreadable subtree is "could not look", not "looked and found nothing".
+
+    Both walks over a candidate -- the nested-repository search and the
+    measurement -- used to discard `scandir` failures. A directory the walk
+    cannot enter can hold a clone, and with `--older-than` it can hold the fresh
+    file whose whole job is to say "somebody is working in here"; neither reached
+    the decision. The candidate was then deleted on the strength of a search that
+    never happened.
+    """
+
+    def test_an_unreadable_subtree_blocks_the_candidate(self, repo, unreadable):
+        target = make_dir(repo, "build")
+        unreadable(make_dir(repo, "build/nested"))
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == [], (
+            f"{target} was offered although part of it could not be read"
+        )
+
+    def test_the_nested_repository_search_reports_incompleteness(self, repo, unreadable):
+        target = make_dir(repo, "build")
+        unreadable(make_dir(repo, "build/nested"))
+        nested, readable = distrodeck._contains_nested_git(target)
+        assert nested is False, "nothing was found, which is exactly the problem"
+        assert readable is False, "and the search must say it could not look"
+
+    def test_the_measurement_reports_incompleteness(self, repo, unreadable):
+        target = make_dir(repo, "build")
+        unreadable(make_dir(repo, "build/nested"))
+        assert distrodeck._measure(target).complete is False
+
+    def test_the_pre_delete_check_refuses_it(self, repo, unreadable):
+        """With no cutoff, so only the nested-repository search can refuse.
+
+        Passing `--older-than` here would let the measurement's own completeness
+        check answer instead, and both produce a message containing the same
+        words -- a test that cannot tell which of two guards fired does not
+        establish that either of them does.
+        """
+        target = make_dir(repo, "build", age_days=30)
+        unreadable(make_dir(repo, "build/nested", age_days=30))
+        reason = distrodeck._still_eligible(target, None, True)
+        assert reason, "an unreadable tree must not be approved for deletion"
+        assert "repository inside it cannot be ruled out" in reason, reason
+
+    def test_a_subtree_that_becomes_unreadable_between_the_two_walks(self, repo):
+        """The measurement's own refusal, which nothing else can reach.
+
+        A candidate is walked twice -- once to rule out a nested repository, once
+        to measure -- and the first refusal filters out everything the second
+        would have caught, so removing the measurement's guard broke no test. Its
+        real subject is the window *between* the walks, which is also the only
+        thing that distinguishes it from the first guard. Provoked here rather
+        than waited for.
+        """
+        make_dir(repo, "build")
+        nested = make_dir(repo, "build/nested")
+        if os.geteuid() == 0:
+            pytest.skip("running as root: permission bits do not apply")
+
+        mode = os.stat(nested).st_mode
+        os.chmod(nested, 0o000)
+        ignores_the_bit = os.access(nested, os.R_OK)
+        os.chmod(nested, mode)
+        if ignores_the_bit:
+            pytest.skip("filesystem ignores the read bit")
+
+        real_search = distrodeck._contains_nested_git
+
+        def search_then_block(path):
+            result = real_search(path)
+            os.chmod(nested, 0o000)
+            return result
+
+        distrodeck._contains_nested_git = search_then_block
+        try:
+            found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        finally:
+            distrodeck._contains_nested_git = real_search
+            os.chmod(nested, mode)
+        assert found == [], (
+            "a tree that stopped being readable after the repository search "
+            "was still offered"
+        )
+
+    def test_a_readable_tree_still_passes(self, repo):
+        """The same assertions with nothing blocked, so the refusal above is
+        attributable to the unreadable subtree and not to the nesting itself."""
+        target = make_dir(repo, "build", age_days=30)
+        make_dir(repo, "build/nested", age_days=30)
+        # Creating the child bumped the parent's own mtime to now; re-stamp it,
+        # or this control fails for a reason that has nothing to do with reading.
+        old = time.time() - 30 * 86400
+        os.utime(target, (old, old))
+        assert distrodeck._contains_nested_git(target) == (False, True)
+        assert distrodeck._measure(target).complete is True
+        assert distrodeck._still_eligible(target, time.time() - 7 * 86400, True) == ""
+        assert [p.name for p, _, _, _ in
+                distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]
+
+
+class TestARejectedCandidateDoesNotConsumeAnInode:
+    """The inode ledger is shared across the scan, so it must only record
+    candidates that survive.
+
+    Measuring claims a hard-linked inode so it is not counted once per name. A
+    candidate the age filter then rejects used to claim on its way out, and the
+    accepted candidate that shared the inode found it already seen -- so the
+    excluded-hard-link figure lost content that belonged to a tree actually being
+    offered. Wrong in the one number whose only job is to explain the total.
+    """
+
+    def test_the_accepted_candidate_still_reports_the_shared_inode(self, repo):
+        # `build` sorts first (fewer path parts) so it is measured first, and it
+        # holds a fresh file, so `--older-than 7` rejects it.
+        fresh = make_dir(repo, "build")
+        old = make_dir(repo, "sub/target", age_days=30)
+        try:
+            os.link(old / "blob", fresh / "linked-in")
+        except OSError:
+            pytest.skip("filesystem does not support hard links")
+        # The link shares the old inode's mtime, so it does not make `old` fresh.
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS, older_than_days=7)
+        assert [p.name for p, _, _, _ in found] == ["target"], found
+        linked = found[0][3]
+        assert linked > 0, (
+            "the inode was claimed by the candidate the age filter rejected"
         )

@@ -16,6 +16,7 @@ import threading
 import time
 import shutil
 from functools import lru_cache
+from typing import NamedTuple
 from datetime import datetime, timezone
 from pathlib import Path
 from glob import glob
@@ -2672,8 +2673,41 @@ def _nonnegative_int(raw: str) -> int:
     return value
 
 
-def _measure(path: pathlib.Path, linked_seen: set = None) -> tuple:
-    """(bytes deletion would free, newest mtime inside, multiply-linked bytes seen).
+class Measurement(NamedTuple):
+    """What one traversal of a candidate learned.
+
+    A tuple rather than four return values because `complete` and `claimed` are
+    only meaningful next to the figures they qualify: a size read off an
+    incomplete traversal is not a smaller size, it is an unknown one, and the
+    inodes a measurement consumed must not be charged to the scan until the
+    candidate it came from is actually accepted.
+    """
+
+    total: int
+    newest: float
+    linked: int
+    claimed: frozenset
+    complete: bool
+
+
+def _measure(path: pathlib.Path, linked_seen: set = None) -> Measurement:
+    """Measure *path*: bytes freed, newest mtime inside, hard-linked bytes, and
+    whether the traversal managed to read all of it.
+
+    **`complete` is load-bearing, not diagnostic.** Discarding `scandir` and
+    `stat` failures made an unreadable subtree indistinguishable from an empty
+    one, which is the dangerous direction: with `--older-than`, a fresh file in a
+    directory the walk could not enter never raises `newest`, so the tree reads
+    as untouched for weeks and is offered for deletion on the strength of a
+    measurement that never saw the work in progress it exists to protect. An
+    unreadable tree is also one `shutil.rmtree` will abandon half-done.
+
+    **`claimed` is returned rather than committed.** Sharing one inode ledger
+    across the scan is what stops a hard-linked file being counted once per name
+    -- but a candidate the age filter then rejects would have consumed those
+    inodes on its way out, so a later accepted candidate sharing them reported
+    them as already-seen and excluded them from nobody's figures. The caller
+    merges this set only once the candidate survives every filter.
 
     **Allocated blocks, not apparent size.** `st_size` is the file's length, not
     the space on disk: a sparse build artifact reports far more than deleting it
@@ -2704,19 +2738,30 @@ def _measure(path: pathlib.Path, linked_seen: set = None) -> tuple:
     total = 0
     linked = 0
     newest = 0.0
+    claimed: set = set()
+    complete = True
+
+    def unreadable(_error):
+        nonlocal complete
+        complete = False
+
     try:
         newest = path.stat().st_mtime
     except OSError:
-        pass
-    for root, _, files in os.walk(path, onerror=lambda _: None):
+        complete = False
+    for root, _, files in os.walk(path, onerror=unreadable):
         try:
             newest = max(newest, os.stat(root).st_mtime)
         except OSError:
-            pass
+            complete = False
         for name in files:
             try:
                 info = os.lstat(os.path.join(root, name))
             except OSError:
+                # A name the directory listed but could not be stat'd is a file
+                # whose size and mtime are both unknown, so neither figure can
+                # be trusted afterwards.
+                complete = False
                 continue
             newest = max(newest, info.st_mtime)
             # `st_blocks` absent is a platform without the field; `st_blocks`
@@ -2727,12 +2772,12 @@ def _measure(path: pathlib.Path, linked_seen: set = None) -> tuple:
             size = info.st_size if blocks is None else blocks * 512
             if info.st_nlink > 1:
                 key = (info.st_dev, info.st_ino)
-                if key not in linked_seen:
-                    linked_seen.add(key)
+                if key not in linked_seen and key not in claimed:
+                    claimed.add(key)
                     linked += size
                 continue
             total += size
-    return total, newest, linked
+    return Measurement(total, newest, linked, frozenset(claimed), complete)
 
 
 def _human_bytes(count: int) -> str:
@@ -2813,8 +2858,19 @@ def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
 _BARE_REPOSITORY_MARKERS = ("HEAD", "objects", "refs")
 
 
-def _contains_nested_git(path: pathlib.Path) -> bool:
-    """Whether a repository lives inside *path*, bare ones included.
+def _contains_nested_git(path: pathlib.Path) -> tuple:
+    """(a repository lives inside *path*, the traversal read all of *path*).
+
+    The second value is why this returns a pair. `onerror` that discards the
+    failure turned "could not look" into "looked and found nothing": one subtree
+    the walk cannot enter is enough to hide a nested clone, and the candidate
+    then passes both this check and the pre-delete re-check on the strength of a
+    search that never happened. Bare repositories make that worse, because the
+    marker set can only be recognised by listing the directory that holds it.
+
+    Callers must treat an incomplete traversal as ineligible. A repository found
+    is reported with whatever completeness the walk had reached, since the answer
+    is already a refusal.
 
     An outer repository can ignore `build/`, and `build/vendor` can itself be a
     clone. The candidate passes `check-ignore`, and `shutil.rmtree` would then
@@ -2826,17 +2882,23 @@ def _contains_nested_git(path: pathlib.Path) -> bool:
     repository somebody vendors into a build directory, which is the case most
     likely to be both ignored and irreplaceable.
     """
-    for root, dirs, files in os.walk(path, onerror=lambda _: None):
+    complete = True
+
+    def unreadable(_error):
+        nonlocal complete
+        complete = False
+
+    for root, dirs, files in os.walk(path, onerror=unreadable):
         if ".git" in dirs or ".git" in files:  # a file, for worktrees and submodules
-            return True
+            return True, complete
         here = set(dirs) | set(files)
         if all(marker in here for marker in _BARE_REPOSITORY_MARKERS):
-            return True
-    return False
+            return True, complete
+    return False, complete
 
 
 def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> str:
-    """"" if *path* may still be deleted, else why not.
+    """An empty string if *path* may still be deleted, else why not.
 
     Re-run immediately before deletion, because everything known about a
     candidate was learned during a scan that can take minutes across a large
@@ -2863,12 +2925,22 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> st
         if any(str(t).startswith(str(path) + os.sep) for t in tracked):
             return "it now holds a tracked file"
 
-    if _contains_nested_git(path):
+    nested, readable = _contains_nested_git(path)
+    if nested:
         return "it now contains a repository"
+    if not readable:
+        return "it can no longer be read in full, so a repository inside it cannot be ruled out"
 
     if cutoff is not None:
-        _, newest, _ = _measure(path)
-        if newest > cutoff:
+        measured = _measure(path)
+        # A second completeness check over the same tree, and deliberately not
+        # folded into the one above: these are two separate walks, and a subtree
+        # can become unreadable between them. Unreachable in the common case
+        # rather than covered by a test -- provoking a failure in exactly the
+        # window between two traversals is not something a test can arrange.
+        if not measured.complete:
+            return "it can no longer be read in full, so its age cannot be trusted"
+        if measured.newest > cutoff:
             return "something inside it changed during the scan"
 
     return ""
@@ -2944,7 +3016,20 @@ def find_reclaimable(
                 eligible.append(path)
         candidates = eligible
 
-    candidates = [c for c in candidates if not _contains_nested_git(c)]
+    searched = []
+    for path in candidates:
+        nested, readable = _contains_nested_git(path)
+        if nested:
+            continue
+        if not readable:
+            print(
+                f"  skipping {path}: it could not be read in full, so a "
+                "repository inside it cannot be ruled out",
+                file=sys.stderr,
+            )
+            continue
+        searched.append(path)
+    candidates = searched
 
     # De-duplicated only now that eligibility is settled: a descendant of an
     # accepted candidate is already inside what will be deleted.
@@ -2958,12 +3043,27 @@ def find_reclaimable(
     found = []
     linked_seen: set = set()
     for path in accepted:
-        size, newest, linked = _measure(path, linked_seen)
+        measured = _measure(path, linked_seen)
+        if not measured.complete:
+            # Refused whether or not `--older-than` is in play. With it, an
+            # unreadable fresh file leaves `newest` old and defeats the
+            # protection; without it the figure is merely wrong -- but a tree
+            # this process cannot finish reading is also one `rmtree` cannot
+            # finish removing, so offering it promises something it cannot do.
+            print(
+                f"  skipping {path}: it could not be read in full, so neither "
+                "its size nor its age can be trusted",
+                file=sys.stderr,
+            )
+            continue
         # Checked against the newest thing inside, so an actively compiling tree
         # is never old however stale its root entry looks.
-        if cutoff is not None and newest > cutoff:
+        if cutoff is not None and measured.newest > cutoff:
             continue
-        found.append((path, size, newest, linked))
+        # Only now: a candidate rejected above must not have consumed the inodes
+        # it shares with one that is accepted later.
+        linked_seen |= measured.claimed
+        found.append((path, measured.total, measured.newest, measured.linked))
 
     return sorted(found, key=lambda item: item[1], reverse=True)
 

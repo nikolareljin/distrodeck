@@ -41,6 +41,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   kind of repository somebody vendors into a build directory invisible to the
   check meant to protect it.
 
+  A tree it **could not read in full is refused**, not treated as empty. Both
+  walks over a candidate -- the nested-repository search and the measurement --
+  used to discard `scandir` failures, which turned "could not look" into "looked
+  and found nothing": one unreadable subtree is enough to hide a clone, and under
+  `--older-than` it is enough to hide the fresh file whose whole job is to say
+  somebody is working in there, leaving the tree reading as stale for weeks. It
+  is also a tree `rmtree` would abandon half-done, so the refusal does not depend
+  on a day count being given, and the skipped path is named on stderr.
+
   Every one of those questions is asked **again immediately before each
   deletion**, and any refusal or unanswered git call skips the directory.
   Everything learned during a scan is minutes old by the time deletion starts on
@@ -60,6 +69,11 @@ This project follows Keep a Changelog and Semantic Versioning.
   frees nothing while another survives, and proving every name is inside the
   deletion set would mean indexing the filesystem. 3.3 GB fell out of the
   measured total that way, and the command now says so -- the figure is a floor.
+  That excluded figure is de-duplicated by inode, and the ledger records a
+  candidate only **after** it survives every filter: a tree the age filter
+  rejects used to consume the inodes it shared on its way out, so an accepted
+  candidate sharing them reported them as already counted and they vanished from
+  every figure.
   `--older-than` and `--list` both refuse a negative value; the first would put
   the cutoff in the future and disable the protection, the second would quietly
   print every entry but the smallest.

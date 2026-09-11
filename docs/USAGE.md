@@ -184,15 +184,24 @@ Options:
 - `--any-directory`: offer matching directories even when Git does not consider
   them ignored. Off by default, and the most important default here:
 
-What it will not offer, regardless of flags:
+What it will not offer, ever -- no flag lifts these:
+- a directory containing a repository. An outer repository can ignore `build/`
+  while `build/vendor` is itself a clone, and deleting it would take that
+  history. A `.git` file counts as well as a directory, since that is how
+  submodules and linked worktrees appear, and a bare clone counts too: it has no
+  `.git` entry at all, only `HEAD`, `objects` and `refs` at its root.
+- a directory it could not read in full. A subtree the scan cannot enter is
+  "could not look", not "looked and found nothing" -- it could hold a clone, and
+  with `--older-than` it could hold the very file that says somebody is working
+  in there. It is also a tree `rm` would abandon half-done, so it is refused
+  whether or not a day count was given, and the skip is reported on stderr.
+
+What it will not offer by default, where `--any-directory` is the flag that
+lifts both:
 - a directory the containing repository does not ignore. `build/` and `target/`
   are ordinary names for authored code, and being gitignored is the evidence
   that a directory is output rather than source. On the measured machine, 8 of
   101 `build/` directories were tracked or unignored.
-- a directory containing a repository. An outer repository can ignore `build/`
-  while `build/vendor` is itself a clone, and deleting it would take that
-  history. A `.git` file counts as well as a directory, since that is how
-  submodules and linked worktrees appear.
 - anything at all in a worktree where `git` could not be consulted. Both the
   ignore check and the index check must succeed, or nothing there is offered.
 
