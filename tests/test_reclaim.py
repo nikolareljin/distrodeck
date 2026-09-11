@@ -483,7 +483,7 @@ class TestEligibilityIsRecheckedBeforeDeleting:
         way it means what it says.
         """
         target = make_dir(repo, "build")
-        assert distrodeck._still_eligible(target, None, True).reason == ""
+        assert distrodeck._still_eligible(target, None, True, repo.parent).reason == ""
 
         real = distrodeck._git
 
@@ -493,11 +493,11 @@ class TestEligibilityIsRecheckedBeforeDeleting:
             return real(worktree, *args, **kwargs)
 
         monkeypatch.setattr(distrodeck, "_git", break_only_ls_files)
-        reason = distrodeck._still_eligible(target, None, True).reason
+        reason = distrodeck._still_eligible(target, None, True, repo.parent).reason
         assert reason == "git could not be consulted again", reason
 
     def test_still_eligible_refuses_a_vanished_directory(self, repo):
-        assert distrodeck._still_eligible(repo / "gone", None, True).reason != ""
+        assert distrodeck._still_eligible(repo / "gone", None, True, repo.parent).reason != ""
 
     def test_an_unchanged_candidate_is_still_deleted(self, repo, capsys):
         import argparse
@@ -637,7 +637,7 @@ class TestATreeItCannotReadIsNotOffered:
         """
         target = make_dir(repo, "build", age_days=30)
         unreadable(make_dir(repo, "build/nested", age_days=30))
-        reason = distrodeck._still_eligible(target, None, True).reason
+        reason = distrodeck._still_eligible(target, None, True, repo.parent).reason
         assert reason, "an unreadable tree must not be approved for deletion"
         assert "repository inside it cannot be ruled out" in reason, reason
 
@@ -692,7 +692,7 @@ class TestATreeItCannotReadIsNotOffered:
         os.utime(target, (old, old))
         assert distrodeck._contains_nested_git(target) == (False, True)
         assert distrodeck._measure(target).complete is True
-        assert distrodeck._still_eligible(target, time.time() - 7 * 86400, True).reason == ""
+        assert distrodeck._still_eligible(target, time.time() - 7 * 86400, True, repo.parent).reason == ""
         assert [p.name for p, _, _, _ in
                 distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]
 
@@ -857,7 +857,7 @@ class TestFreedBytesDescribeWhatWasRemoved:
 
     def test_the_recheck_hands_back_its_measurement(self, repo):
         make_dir(repo, "build", size=4096)
-        check = distrodeck._still_eligible(repo / "build", None, True)
+        check = distrodeck._still_eligible(repo / "build", None, True, repo.parent)
         assert check.reason == ""
         assert check.measured is not None, (
             "the freed total has nothing current to add without it"
@@ -865,7 +865,7 @@ class TestFreedBytesDescribeWhatWasRemoved:
         assert check.measured.total > 0
 
     def test_a_refusal_carries_no_measurement(self, repo):
-        check = distrodeck._still_eligible(repo / "gone", None, True)
+        check = distrodeck._still_eligible(repo / "gone", None, True, repo.parent)
         assert check.reason and check.measured is None
 
 
@@ -921,7 +921,7 @@ class TestItRefusesToDeleteThroughAMountPoint:
     def test_the_pre_delete_check_refuses_one(self, repo, monkeypatch):
         target = make_dir(repo, "build")
         monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target / "share")})
-        check = distrodeck._still_eligible(target, None, True)
+        check = distrodeck._still_eligible(target, None, True, repo.parent)
         assert check.reason == "a filesystem is mounted inside it", check.reason
 
     def test_a_mount_appearing_after_the_scan_is_still_caught(self, repo, monkeypatch):
@@ -1176,7 +1176,7 @@ class TestASymlinkNamedLikeAnArtifactIsNotOne:
         elsewhere.mkdir()
         link = repo / "build"
         link.symlink_to(elsewhere, target_is_directory=True)
-        check = distrodeck._still_eligible(link, None, True)
+        check = distrodeck._still_eligible(link, None, True, repo.parent)
         assert check.reason == "it is a symbolic link now", check.reason
 
     def test_a_real_directory_of_the_same_name_still_is(self, repo):
@@ -1382,7 +1382,7 @@ class TestRepositoryStorageChecksFailClosed:
         bare = self._bare(tmp_path / "vendor.git")
         ref = bare / "refs" / "heads" / "build"
         ref.mkdir(parents=True, exist_ok=True)
-        check = distrodeck._still_eligible(ref, None, False)
+        check = distrodeck._still_eligible(ref, None, False, bare.parent)
         assert "bare repository" in check.reason, check.reason
 
     def test_a_repository_appearing_mid_scan_still_protects_the_branch(self, repo):
@@ -1397,7 +1397,7 @@ class TestRepositoryStorageChecksFailClosed:
         # `git init --bare` over the directory that was already scanned.
         (repo / "HEAD").write_text("ref: refs/heads/main\n")
         (repo / "objects").mkdir(exist_ok=True)
-        check = distrodeck._still_eligible(target, None, False)
+        check = distrodeck._still_eligible(target, None, False, repo.parent)
         assert "bare repository" in check.reason, check.reason
         assert heads.exists()
 
@@ -1475,7 +1475,7 @@ class TestAMountIsRefusedBeforeItIsTraversed:
         real_search = distrodeck._contains_nested_git
         monkeypatch.setattr(distrodeck, "_contains_nested_git",
                             lambda p: walked.append(str(p)) or real_search(p))
-        assert distrodeck._still_eligible(target, None, True).reason
+        assert distrodeck._still_eligible(target, None, True, repo.parent).reason
         assert walked == [], f"walked before refusing: {walked}"
 
     def test_a_device_boundary_stops_the_measurement_descending(self, repo, monkeypatch):
@@ -1733,3 +1733,119 @@ class TestNothingBelowAMountIsEverACandidate:
                             lambda p: real_device(p) + 1 if str(p).endswith("holder")
                             else real_device(p))
         assert distrodeck._descendable(str(repo), ["holder"], None) == []
+
+
+class TestAMountAppearingAboveACandidate:
+    """The upward direction, at the last possible moment.
+
+    Discovery refuses to descend past a mount, using one snapshot of the table. A
+    mount that appears *after* that walk leaves a candidate already collected whose
+    ancestor is now a mount point -- and from inside the mounted filesystem its own
+    device and its parent's match perfectly, so nothing but the table can see it, and
+    only by looking up. `_mount_refusal` answers about mounts at or below the path it
+    is given, which is the wrong half.
+    """
+
+    def test_a_later_table_read_with_an_ancestor_mount_refuses(self, repo, monkeypatch):
+        holder = repo / "holder"
+        target = make_dir(repo, "holder/target")
+        reads = {"n": 0}
+
+        def clean_then_mounted():
+            reads["n"] += 1
+            return set() if reads["n"] == 1 else {str(holder)}
+
+        monkeypatch.setattr(distrodeck, "_mount_points", clean_then_mounted)
+        found = distrodeck.find_reclaimable(repo, ARTIFACTS, require_git_ignored=False)
+        assert [p.name for p, _, _, _ in found] == ["target"], "the scan saw no mount"
+        check = distrodeck._still_eligible(target, None, False, repo)
+        assert "now mounted" in check.reason, check.reason
+
+    def test_apply_does_not_delete_through_it(self, repo, monkeypatch):
+        holder = repo / "holder"
+        target = make_dir(repo, "holder/target")
+        (target / "blob").write_bytes(b"x" * 64 * 1024)
+        reads = {"n": 0}
+
+        def clean_then_mounted():
+            reads["n"] += 1
+            # Clean for the scan -- discovery and its pre-walk screen share one read
+            # -- and mounted by the time the deletion loop asks.
+            return set() if reads["n"] == 1 else {str(holder)}
+
+        monkeypatch.setattr(distrodeck, "_mount_points", clean_then_mounted)
+        args = argparse.Namespace(workspace=str(repo), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=True)
+        distrodeck.run_reclaim(args)
+        assert (target / "blob").exists(), "deleted through a mount that appeared late"
+
+    def test_the_workspace_itself_being_a_mount_is_not_a_refusal(self, repo, monkeypatch):
+        """A workspace on its own partition is ordinary -- `/home` often is one --
+        and refusing every candidate inside it would refuse the normal case."""
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(repo)})
+        assert distrodeck._mount_above(target, repo, {str(repo)}) == ""
+        assert distrodeck._still_eligible(target, None, False, repo).reason == ""
+
+    def test_a_mount_outside_the_workspace_is_not_a_refusal(self, repo):
+        """The climb stops at the workspace, so `/` being a mount is irrelevant."""
+        target = make_dir(repo, "build")
+        assert distrodeck._mount_above(target, repo, {"/", str(repo.parent)}) == ""
+
+    def test_without_a_table_it_cannot_be_seen(self, repo):
+        """Stated rather than implied: inside a mounted filesystem the candidate and
+        its parent share a device, so `st_dev` has nothing to notice."""
+        target = make_dir(repo, "holder/target")
+        assert distrodeck._mount_above(target, repo, None) == ""
+
+
+class TestADirectorySymlinkInsideACandidateIsAccountedFor:
+    """`os.walk` lists a directory symlink in `dirs` and never yields it as a root.
+
+    Accounting only for `files` therefore missed it completely: no allocation, and --
+    the part that matters -- no mtime. A symlink created or repointed a minute ago
+    left the tree reading as untouched for weeks, against the documented rule that age
+    comes from anything inside.
+    """
+
+    def test_its_mtime_counts(self, repo, tmp_path):
+        target = make_dir(repo, "build", age_days=30)
+        elsewhere = tmp_path / "other"
+        elsewhere.mkdir()
+        old = time.time() - 30 * 86400
+        os.utime(target, (old, old))
+        assert distrodeck._measure(target).newest <= old + 1, "the premise"
+
+        (target / "recent-link").symlink_to(elsewhere, target_is_directory=True)
+        os.utime(target, (old, old), follow_symlinks=True)
+        assert distrodeck._measure(target).newest > old + 86400, (
+            "a symlink made moments ago left the tree looking weeks old"
+        )
+
+    def test_a_fresh_symlink_protects_the_tree_from_older_than(self, repo, tmp_path):
+        target = make_dir(repo, "build", age_days=30)
+        elsewhere = tmp_path / "other"
+        elsewhere.mkdir()
+        (target / "recent-link").symlink_to(elsewhere, target_is_directory=True)
+        old = time.time() - 30 * 86400
+        os.utime(target, (old, old))
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS, older_than_days=7)
+        assert found == [], "offered a tree somebody had just linked into"
+
+    def test_it_does_not_charge_the_targets_contents(self, repo, tmp_path):
+        """A property, not a regression test -- labelled honestly.
+
+        `lstat` rather than `stat`, so the link is measured and not what it points
+        at. No single-line change reaches this: swapping in `os.stat` makes
+        `S_ISLNK` false and the symlink is skipped entirely, which the two mtime
+        tests above catch instead. Charging the target's contents would need the
+        walk to follow the link, which `os.walk` does not do. Kept because the
+        property is the one that matters if anybody ever adds `followlinks=True`.
+        """
+        target = make_dir(repo, "build", size=1024)
+        elsewhere = tmp_path / "other"
+        elsewhere.mkdir()
+        (elsewhere / "huge").write_bytes(b"x" * 512 * 1024)
+        (target / "link").symlink_to(elsewhere, target_is_directory=True)
+        assert distrodeck._measure(target).total < 256 * 1024

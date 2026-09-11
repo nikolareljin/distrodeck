@@ -90,6 +90,22 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  **And a mount appearing *above* a candidate is refused before deletion.** Every
+  other mount check looks at or below the path it is given, and discovery's refusal to
+  descend uses one snapshot of the table -- so a mount appearing after that walk left a
+  candidate already collected whose ancestor was now a mount point, with its own device
+  and its parent's matching perfectly from inside the mounted filesystem. Only the
+  table can see that, and only upward. The climb stops at the workspace, deliberately:
+  a workspace on its own partition is ordinary -- `/home` frequently is one -- and
+  refusing every candidate inside it would refuse the normal case. Without the table
+  this one is undetectable, which is stated rather than implied.
+
+  A **directory symlink inside a candidate** is measured too. `os.walk` lists one in
+  `dirs` and never yields it as a root, so accounting for files alone missed it
+  entirely: no allocation, and no mtime -- a symlink created or repointed a minute ago
+  left a tree reading as untouched for weeks, against the rule that age comes from
+  anything inside. Measured with `lstat`, so it is the link and not what it points at.
+
   **The discovery walk does not descend past a mount at all.** Refusing afterwards
   protected a candidate that *contains* a mount and did nothing for one found
   *inside* one: a `target/` below a mount has the mount as an ancestor, and the

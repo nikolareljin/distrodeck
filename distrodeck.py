@@ -9,6 +9,7 @@ import re
 import shlex
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2799,6 +2800,28 @@ def _measure(path: pathlib.Path) -> Measurement:
         # and treating it as one would move real space into the excluded figure.
         blocks = getattr(info, "st_blocks", None)
         total += info.st_size if blocks is None else blocks * 512
+
+        # A directory symlink is listed in `dirs` and never yielded as a root, so
+        # accounting for `files` alone missed it entirely: it contributed no
+        # allocation and, worse, no mtime -- a symlink created or repointed a minute
+        # ago left a tree reading as untouched for weeks, against the rule that age
+        # comes from anything inside. Counted here by `lstat`, which is the link
+        # itself and not what it points at: following it would charge another
+        # directory's contents to this candidate, which is what the symlink
+        # candidates refused at discovery were doing.
+        for name in dirs:
+            link = os.path.join(root, name)
+            try:
+                info = os.lstat(link)
+            except OSError:
+                complete = False
+                continue
+            if not stat.S_ISLNK(info.st_mode):
+                continue
+            newest = max(newest, info.st_mtime)
+            blocks = getattr(info, "st_blocks", None)
+            total += info.st_size if blocks is None else blocks * 512
+
         for name in files:
             try:
                 info = os.lstat(os.path.join(root, name))
@@ -3060,6 +3083,38 @@ def _descendable(root, dirs, points) -> list:
     return kept
 
 
+def _mount_above(path: pathlib.Path, workspace: pathlib.Path, points) -> str:
+    """A mount point strictly between *workspace* and *path*, or "".
+
+    The direction every other mount check misses. `_mount_refusal` answers about
+    mounts at or below the path it is given, and the discovery walk refuses to
+    descend past one -- but a mount that appears *after* that walk leaves a
+    candidate already collected whose ancestor is now a mount point, and from
+    inside the mounted filesystem its own device and its parent's match perfectly.
+    Only the table can see it, and only by looking upward.
+
+    The workspace itself is excluded deliberately. A workspace on its own partition
+    is ordinary -- `/home` frequently is one -- and refusing every candidate in it
+    would refuse the normal case. What must not happen is storage appearing
+    *between* the directory the user named and the directory about to be deleted.
+    """
+    if points is None:
+        # Undetectable without the table: inside a mounted filesystem the candidate
+        # and its parent share a device, so there is nothing for `st_dev` to notice.
+        return ""
+    boundary = str(workspace)
+    here = path.parent
+    while True:
+        current = str(here)
+        if current == boundary:
+            return ""
+        if current in points:
+            return f"a filesystem is now mounted at {here}, above it"
+        if here.parent == here:
+            return ""
+        here = here.parent
+
+
 def _mount_refusal(path: pathlib.Path, measured, points) -> str:
     """Why deleting *path* would reach storage that is not its own, or "".
 
@@ -3231,7 +3286,9 @@ class Recheck(NamedTuple):
     measured: Measurement = None
 
 
-def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Recheck:
+def _still_eligible(
+    path: pathlib.Path, cutoff, require_git_ignored: bool, workspace: pathlib.Path
+) -> Recheck:
     """A `Recheck` whose `reason` is empty if *path* may still be deleted.
 
     Re-run immediately before deletion, because everything known about a
@@ -3276,7 +3333,8 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Re
     # Before the walks, for the same reason as in the scan: answering from the
     # mount table costs nothing, and traversing a mount to find out it was a mount
     # can cost everything.
-    mounted = _mount_refusal(path, None, _mount_points())
+    points = _mount_points()
+    mounted = _mount_refusal(path, None, points) or _mount_above(path, workspace, points)
     if mounted:
         return Recheck(mounted)
 
@@ -3301,7 +3359,7 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Re
         return Recheck("it can no longer be read in full, so it cannot be trusted")
     # Re-read here rather than carried from the scan: a mount can appear in the
     # minutes between, and this is the last check before `rmtree`.
-    mounted = _mount_refusal(path, measured, _mount_points())
+    mounted = _mount_refusal(path, measured, points)
     if mounted:
         return Recheck(mounted)
     if cutoff is not None and measured.newest > cutoff:
@@ -3597,7 +3655,7 @@ def run_reclaim(args: argparse.Namespace) -> None:
         # Checked again here, not only during the scan. Between the two, a build
         # can start, a file can be force-added, a clone can appear -- and the
         # scan of a large workspace takes minutes.
-        check = _still_eligible(path, cutoff, not args.any_directory)
+        check = _still_eligible(path, cutoff, not args.any_directory, workspace)
         if check.reason:
             print(f"  skipping {path}: {check.reason}")
             skipped += 1

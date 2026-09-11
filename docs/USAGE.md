@@ -213,6 +213,11 @@ What it will not offer, ever -- no flag lifts these:
   directories, so one called `build` was offered and measured as its target --
   space that removing the link would not free. Removing it would free only the
   link, and somebody made it deliberately.
+- anything with a filesystem mounted *above* it, between the workspace and the
+  candidate, as checked again immediately before deletion -- from inside a mounted
+  filesystem a directory and its parent share a device, so only the mount table sees
+  this, and only by looking up. The workspace itself being a mount is fine: a
+  workspace on its own partition is ordinary.
 - anything at or below a mount point. The scan does not descend past one, so a
   `target/` inside a mounted tree is never a candidate -- it would have been judged on
   its own merits, with the mount an ancestor that nothing was looking at.
