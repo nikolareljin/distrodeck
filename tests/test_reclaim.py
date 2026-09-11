@@ -3,7 +3,7 @@
 A workspace of checkouts is mostly not source. Measured on one machine, 90 GB
 across roughly a hundred repositories: 33.8 GB of `build/`, 15.5 GB of Rust
 `target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/` -- 59.5 GB in
-total, plus a further 5.8 GB of hard-linked content deliberately excluded from
+total, plus a further 3.3 GB of hard-linked content deliberately excluded from
 that figure. About two thirds of the workspace, none of it authored by anybody.
 
 What is worth testing is not the arithmetic but the refusals. A command that
@@ -445,8 +445,8 @@ class TestEligibilityIsRecheckedBeforeDeleting:
         real_measure = distrodeck._measure
         state = {"scanned": False}
 
-        def measure_then_plant(path):
-            result = real_measure(path)
+        def measure_then_plant(path, linked_seen=None):
+            result = real_measure(path, linked_seen)
             if not state["scanned"]:
                 state["scanned"] = True
                 nested = path / "vendor"
@@ -499,3 +499,57 @@ class TestEligibilityIsRecheckedBeforeDeleting:
         distrodeck.run_reclaim(args)
         assert not target.exists()
         assert "freed" in capsys.readouterr().out
+
+
+class TestTheExcludedHardLinkFigureIsAccurate:
+    """The one number whose only job is to explain the gap must not overstate it.
+
+    Adding a linked file's size once per *name* reports an inode with three links
+    as three times its size. It is excluded from the total either way, so this
+    does not affect what gets deleted -- but a figure offered as the reason the
+    total is lower than expected is worthless if it is itself inflated.
+    """
+
+    def test_an_inode_with_three_names_is_counted_once(self, repo):
+        target = make_dir(repo, "build", size=64 * 1024)
+        try:
+            os.link(target / "blob", target / "second")
+            os.link(target / "blob", target / "third")
+        except OSError:
+            pytest.skip("filesystem does not support hard links")
+        info = os.lstat(target / "blob")
+        one_copy = (info.st_blocks * 512) if getattr(info, "st_blocks", None) else info.st_size
+        _, _, linked = distrodeck._measure(target)
+        assert linked <= one_copy * 1.5, f"{linked} looks like more than one copy of {one_copy}"
+
+    def test_the_same_inode_across_two_candidates_is_counted_once(self, repo):
+        first = make_dir(repo, "build", size=64 * 1024)
+        second = make_dir(repo, "target", size=16)
+        try:
+            os.link(first / "blob", second / "linked-in")
+        except OSError:
+            pytest.skip("filesystem does not support hard links")
+        shared: set = set()
+        _, _, a = distrodeck._measure(first, shared)
+        _, _, b = distrodeck._measure(second, shared)
+        # Whichever is measured first accounts for it; the other adds nothing.
+        assert (a > 0) != (b > 0), f"counted in both: {a} and {b}"
+
+    def test_find_reclaimable_shares_one_set_across_candidates(self, repo):
+        """Through the real entry point, not by handing `_measure` a set.
+
+        A test that passes the shared set in itself proves only that `_measure`
+        can de-duplicate, not that `find_reclaimable` gives it the chance --
+        which is the part that would silently regress.
+        """
+        first = make_dir(repo, "build", size=256 * 1024)
+        second = make_dir(repo, "target", size=16)
+        try:
+            os.link(first / "blob", second / "linked-in")
+        except OSError:
+            pytest.skip("filesystem does not support hard links")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        linked_totals = [linked for _, _, _, linked in found]
+        assert len([x for x in linked_totals if x > 0]) == 1, (
+            f"the shared inode was accounted for more than once: {linked_totals}"
+        )

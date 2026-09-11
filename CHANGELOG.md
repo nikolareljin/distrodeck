@@ -58,7 +58,7 @@ This project follows Keep a Changelog and Semantic Versioning.
   stale. Size is **allocated blocks**, not apparent length, and **hard-linked
   content is excluded rather than counted once**: removing one name for an inode
   frees nothing while another survives, and proving every name is inside the
-  deletion set would mean indexing the filesystem. 5.8 GB fell out of the
+  deletion set would mean indexing the filesystem. 3.3 GB fell out of the
   measured total that way, and the command now says so -- the figure is a floor.
   `--older-than` and `--list` both refuse a negative value; the first would put
   the cutoff in the future and disable the protection, the second would quietly

@@ -2610,7 +2610,7 @@ def maybe_cleanup_kernels(keep: int) -> None:
 # machine, 90 GB across roughly a hundred repositories: 33.8 GB of `build/`,
 # 15.5 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/`
 # -- 59.5 GB in total, about two thirds, none of it authored by anybody. A
-# further 5.8 GB is hard-linked and deliberately left out of that figure,
+# further 3.3 GB is hard-linked and deliberately left out of that figure,
 # because removing one name for an inode frees nothing while another survives.
 #
 # Those are the figures *after* the gitignored requirement below. Before it, a
@@ -2672,7 +2672,7 @@ def _nonnegative_int(raw: str) -> int:
     return value
 
 
-def _measure(path: pathlib.Path) -> tuple:
+def _measure(path: pathlib.Path, linked_seen: set = None) -> tuple:
     """(bytes deletion would free, newest mtime inside, multiply-linked bytes seen).
 
     **Allocated blocks, not apparent size.** `st_size` is the file's length, not
@@ -2688,12 +2688,19 @@ def _measure(path: pathlib.Path) -> tuple:
     figure is then an **underestimate**, which is the safe direction for a
     promise about space.
 
+    The *excluded* figure is de-duplicated by inode through `linked_seen`, shared
+    across the whole scan. Adding a linked file's size once per name would report
+    an inode with three links as three times its size -- an overstatement in the
+    one number whose only job is to explain why the total is lower than expected.
+
     **The newest mtime of anything inside, not the directory's own.** A
     directory's mtime changes only when its immediate entries are added or
     removed; editing a file three levels down does not touch it. An actively
     compiling `target/` whose root entry is weeks old would otherwise look weeks
     old. Taken from the same traversal, so it costs nothing extra.
     """
+    if linked_seen is None:
+        linked_seen = set()
     total = 0
     linked = 0
     newest = 0.0
@@ -2719,7 +2726,10 @@ def _measure(path: pathlib.Path) -> tuple:
             blocks = getattr(info, "st_blocks", None)
             size = info.st_size if blocks is None else blocks * 512
             if info.st_nlink > 1:
-                linked += size
+                key = (info.st_dev, info.st_ino)
+                if key not in linked_seen:
+                    linked_seen.add(key)
+                    linked += size
                 continue
             total += size
     return total, newest, linked
@@ -2946,8 +2956,9 @@ def find_reclaimable(
         accepted.append(path)
 
     found = []
+    linked_seen: set = set()
     for path in accepted:
-        size, newest, linked = _measure(path)
+        size, newest, linked = _measure(path, linked_seen)
         # Checked against the newest thing inside, so an actively compiling tree
         # is never old however stale its root entry looks.
         if cutoff is not None and newest > cutoff:
