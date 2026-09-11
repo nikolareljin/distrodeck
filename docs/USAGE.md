@@ -156,6 +156,51 @@ Options:
 - `--cleanup-kernels`: clean old auto-installed kernels after a successful update
 - `--keep-kernels N`: previous kernel versions to keep when cleanup is enabled
 
+### reclaim
+
+Report, and with `--apply` remove, build output under a workspace of checkouts.
+A workspace is mostly not source: measured on one machine, 59.5 GB of 90 GB was
+regenerable output in `build/`, `target/`, `.dart_tool/` and `node_modules/`.
+
+```
+distrodeck reclaim                            # report on ~/Projects
+distrodeck reclaim ~/work --list 10           # a different workspace, name the ten largest
+distrodeck reclaim --older-than 30            # only what has not been touched in a month
+distrodeck reclaim --older-than 30 --apply    # and reclaim it
+```
+
+Options:
+- `--apply`: actually delete. Without it nothing is removed, which is the
+  reverse of `cleanup-kernels` on purpose: this can remove tens of gigabytes
+  across a hundred repositories in a second, so the safe direction is the
+  default and acting is the flag.
+- `--older-than DAYS`: only directories whose newest file inside is older than
+  this. Protects work in progress. A negative value is refused.
+- `--list N`: also list the N largest candidates individually.
+- `--include-environments`: also Python virtualenvs. Off by default because
+  restoring one needs a network and a `pip install`, and a virtualenv holding
+  large machine-learning wheels is a multi-gigabyte download -- which is exactly
+  the situation where somebody most wants the disk back.
+- `--any-directory`: offer matching directories even when Git does not consider
+  them ignored. Off by default, and the most important default here:
+
+What it will not offer, regardless of flags:
+- a directory the containing repository does not ignore. `build/` and `target/`
+  are ordinary names for authored code, and being gitignored is the evidence
+  that a directory is output rather than source. On the measured machine, 8 of
+  101 `build/` directories were tracked or unignored.
+- a directory containing a repository. An outer repository can ignore `build/`
+  while `build/vendor` is itself a clone, and deleting it would take that
+  history. A `.git` file counts as well as a directory, since that is how
+  submodules and linked worktrees appear.
+- anything at all in a worktree where `git` could not be consulted. Both the
+  ignore check and the index check must succeed, or nothing there is offered.
+
+Reported sizes are **allocated blocks**, not apparent file length, and
+hard-linked content is excluded from the total and reported separately: removing
+one name for an inode frees nothing while another survives, so the figure is a
+floor rather than an estimate.
+
 ### upgrade
 
 Run a distro upgrade. On Ubuntu this uses `do-release-upgrade`.

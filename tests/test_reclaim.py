@@ -1,9 +1,10 @@
 """Reclaiming disk that a build can make again.
 
 A workspace of checkouts is mostly not source. Measured on one machine, 90 GB
-across roughly a hundred repositories: 33.4 GB of `build/`, 20.2 GB of Rust
-`target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/` -- about three
-quarters of the total, none of it authored by anybody.
+across roughly a hundred repositories: 33.8 GB of `build/`, 15.5 GB of Rust
+`target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/` -- 59.5 GB in
+total, plus a further 5.8 GB of hard-linked content deliberately excluded from
+that figure. About two thirds of the workspace, none of it authored by anybody.
 
 What is worth testing is not the arithmetic but the refusals. A command that
 deletes by directory name is one `build/` away from removing somebody's source,
@@ -320,3 +321,81 @@ class TestListCountIsValidated:
     def test_zero_and_positive_are_accepted(self):
         assert distrodeck._nonnegative_int("0") == 0
         assert distrodeck._nonnegative_int("10") == 10
+
+
+class TestItFailsClosedWhenGitCannotBeAsked:
+    """An unanswered question must not be read as a yes.
+
+    `git ls-files` timing out on a huge repository is exactly when the "holds no
+    tracked file" half of the promise is most likely to be skipped and least
+    likely to be noticed -- and the candidate would still be deleted on the
+    strength of the ignore check alone.
+    """
+
+    def test_nothing_is_offered_when_only_ls_files_fails(self, repo, monkeypatch):
+        """Isolated to `ls-files`, so the ignore guard cannot pass this for it.
+
+        A first version of this test broke every git call, which meant
+        `check-ignore` refused the candidate and the test passed while the
+        `ls-files` guard was removed. Breaking one call at a time is the only
+        way the assertion means what it says.
+        """
+        make_dir(repo, "build")
+        assert len(distrodeck.find_reclaimable(repo.parent, ARTIFACTS)) == 1
+
+        real = distrodeck._git
+
+        def break_only_ls_files(worktree, *args, **kwargs):
+            if args[0] == "ls-files":
+                return None
+            return real(worktree, *args, **kwargs)
+
+        monkeypatch.setattr(distrodeck, "_git", break_only_ls_files)
+        # check-ignore still answers, and still says the directory is ignored --
+        # so only the completeness flag stands between it and deletion.
+        ignored, _, complete = distrodeck._worktree_facts(repo, [repo / "build"])
+        assert (repo / "build") in ignored and complete is False
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_nothing_is_offered_when_check_ignore_fails(self, repo, monkeypatch):
+        make_dir(repo, "build")
+        real = distrodeck._git
+
+        def break_check_ignore(worktree, *args, **kwargs):
+            if args[0] == "check-ignore":
+                return None
+            return real(worktree, *args, **kwargs)
+
+        monkeypatch.setattr(distrodeck, "_git", break_check_ignore)
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_worktree_facts_reports_incompleteness(self, repo, monkeypatch):
+        make_dir(repo, "build")
+        ignored, tracked, complete = distrodeck._worktree_facts(repo, [repo / "build"])
+        assert complete is True
+        monkeypatch.setattr(distrodeck, "_git", lambda *a, **k: None)
+        _, _, complete = distrodeck._worktree_facts(repo, [repo / "build"])
+        assert complete is False
+
+
+class TestSparseFilesAreNotCountedAsSpace:
+    def test_a_fully_sparse_file_reports_its_allocation_not_its_length(self, repo):
+        """`st_blocks == 0` with a huge `st_size` is a hole, not reclaimable space.
+
+        Falling back to apparent size whenever `st_blocks` is zero -- rather than
+        only when the field is absent -- would report gigabytes of nothing.
+        """
+        target = repo / "build"
+        target.mkdir()
+        sparse = target / "sparse.img"
+        with open(sparse, "wb") as handle:
+            handle.truncate(512 * 1024 * 1024)  # half a gigabyte of hole
+        import os as _os
+
+        info = _os.lstat(sparse)
+        if getattr(info, "st_blocks", None) is None:
+            pytest.skip("platform does not report st_blocks")
+        if info.st_blocks * 512 >= info.st_size:
+            pytest.skip("filesystem does not support sparse files")
+        size, _, _ = distrodeck._measure(target)
+        assert size < info.st_size, "apparent size must not be reported as reclaimable"

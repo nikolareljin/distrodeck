@@ -81,6 +81,11 @@ distrodeck upgrade
 
 distrodeck upgrade --cleanup-kernels
 
+distrodeck reclaim
+(Reports build output under ~/Projects. Deletes nothing without `--apply`.)
+
+distrodeck reclaim --older-than 30 --apply
+
 distrodeck cleanup-kernels --dry-run
 
 distrodeck cleanup-kernels

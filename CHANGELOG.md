@@ -55,8 +55,10 @@ This project follows Keep a Changelog and Semantic Versioning.
   print every entry but the smallest.
 
   It never enters `.git` -- a repository's history is not build output however
-  large it grows -- and it prunes as it walks, so a `node_modules` inside a
-  `build` is counted once rather than twice.
+  large it grows. It does **not** prune matched trees from the walk: eligibility
+  cannot be known without asking Git, so the scan descends through them and
+  de-duplicates accepted candidates afterwards, which keeps a `node_modules`
+  inside an accepted `build` counted once. Correctness over a single pass.
 - `distrodeck diff --input FILE` compares an export file against the current
   system without changing anything. Reports `missing` (in the export, not
   installed here) and `extra` (installed here, not in the export) per section,

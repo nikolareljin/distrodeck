@@ -2712,7 +2712,12 @@ def _measure(path: pathlib.Path) -> tuple:
             except OSError:
                 continue
             newest = max(newest, info.st_mtime)
-            size = getattr(info, "st_blocks", 0) * 512 or info.st_size
+            # `st_blocks` absent is a platform without the field; `st_blocks`
+            # *zero* is a fully sparse file, whose apparent size is exactly what
+            # deleting it does not return. Falling back on zero would report
+            # gigabytes of hole as reclaimable.
+            blocks = getattr(info, "st_blocks", None)
+            size = info.st_size if blocks is None else blocks * 512
             if info.st_nlink > 1:
                 linked += size
                 continue
@@ -2749,7 +2754,7 @@ def _worktree_of(path: pathlib.Path):
 
 
 def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
-    """(ignored paths, tracked paths) for one worktree.
+    """(ignored paths, tracked paths, both_checks_succeeded) for one worktree.
 
     Two calls per worktree rather than per directory: a workspace has a hundred
     repositories and several hundred candidates, and a subprocess each would make
@@ -2770,16 +2775,26 @@ def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
     """
     ignored: set = set()
     tracked: set = set()
-    if candidates:
-        result = _git(worktree, "check-ignore", "--stdin", "-z",
-                      stdin="\0".join(str(c) for c in candidates))
-        # 0 means some were ignored, 1 means none were; both are normal.
-        if result is not None and result.returncode in (0, 1):
-            ignored = {pathlib.Path(x) for x in result.stdout.split("\0") if x}
+
+    result = _git(worktree, "check-ignore", "--stdin", "-z",
+                  stdin="\0".join(str(c) for c in candidates))
+    # 0 means some were ignored, 1 means none were; both are normal answers.
+    if result is None or result.returncode not in (0, 1):
+        return set(), set(), False
+    ignored = {pathlib.Path(x) for x in result.stdout.split("\0") if x}
+
     listed = _git(worktree, "ls-files", "-z")
-    if listed is not None and listed.returncode == 0:
-        tracked = {worktree / x for x in listed.stdout.split("\0") if x}
-    return ignored, tracked
+    if listed is None or listed.returncode != 0:
+        # The ignore answer is returned as found, and the flag says it is only
+        # half the story -- deliberately, so that a caller which forgets to check
+        # the flag is visibly wrong rather than accidentally safe. Failing open
+        # here would be the worst kind of bug: a candidate accepted by
+        # `check-ignore` deleted while the "holds no tracked file" half of the
+        # promise never ran, which a timeout on a huge repository makes both
+        # likely and quiet.
+        return ignored, set(), False
+    tracked = {worktree / x for x in listed.stdout.split("\0") if x}
+    return ignored, tracked, True
 
 
 def _contains_nested_git(path: pathlib.Path) -> bool:
@@ -2814,12 +2829,18 @@ def find_reclaimable(
     for authored code. A candidate outside any worktree is not offered either --
     there is nothing to ask.
 
-    Matching directories are **not pruned from the walk before eligibility is
-    known**. An unignored authored `scripts/build/` can contain an ignored
-    `target/`, and pruning at the match would reject the outer candidate while
-    never having visited the reclaimable inner one. Accepted candidates are
-    de-duplicated afterwards instead, so a `node_modules` inside an accepted
-    `build` is still counted once.
+    Matching directories are **not pruned from the walk**, and that is a
+    deliberate trade rather than an oversight. Pruning at the match was faster
+    and wrong: an unignored authored `scripts/build/` can contain an ignored
+    `target/`, and stopping at the outer match rejected it while never visiting
+    the reclaimable inner one. Eligibility cannot be known during the walk
+    without a `git` call per directory, which would cost more than the traversal
+    it saves.
+
+    So the discovery walk descends through matched trees, and each accepted
+    candidate is then traversed again -- once for nested-repository detection,
+    once to measure. Correctness over a single pass. De-duplication afterwards is
+    what keeps a `node_modules` inside an accepted `build` counted once.
     """
     if older_than_days < 0:
         raise ValueError("older_than_days cannot be negative")
@@ -2841,7 +2862,15 @@ def find_reclaimable(
             by_worktree.setdefault(worktree, []).append(path)
         eligible = []
         for worktree, paths in by_worktree.items():
-            ignored, tracked = _worktree_facts(worktree, paths)
+            ignored, tracked, complete = _worktree_facts(worktree, paths)
+            if not complete:
+                # Neither question was answered, so nothing here is offered.
+                print(
+                    f"  skipping {worktree}: git could not be consulted, "
+                    "so nothing there is offered",
+                    file=sys.stderr,
+                )
+                continue
             for path in paths:
                 if path not in ignored:
                     continue
