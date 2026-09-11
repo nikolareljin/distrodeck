@@ -2608,8 +2608,10 @@ def maybe_cleanup_kernels(keep: int) -> None:
 #
 # A workspace of development checkouts is mostly not source. Measured on one
 # machine, 90 GB across roughly a hundred repositories: 33.8 GB of `build/`,
-# 17.9 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 4.0 GB of `node_modules/`
-# -- 62.8 GB in total, about two thirds, none of it authored by anybody.
+# 15.5 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/`
+# -- 59.5 GB in total, about two thirds, none of it authored by anybody. A
+# further 5.8 GB is hard-linked and deliberately left out of that figure,
+# because removing one name for an inode frees nothing while another survives.
 #
 # Those are the figures *after* the gitignored requirement below. Before it, a
 # basename match offered 101 `build/` directories; 8 of them were tracked or
@@ -2647,51 +2649,53 @@ RECLAIM_ENVIRONMENTS = {
 }
 
 
-def _nonnegative_days(raw: str) -> int:
-    """An argparse type that refuses a negative day count.
+def _nonnegative_int(raw: str) -> int:
+    """An argparse type that refuses a negative count.
 
     `--older-than -1` puts the cutoff in the *future*, so every candidate
-    qualifies as old -- and with `--apply` a single mistyped sign turns the
-    work-in-progress protection off entirely while appearing to use it. Refused
-    at parse time, where the message can name the flag.
+    qualifies as old -- one mistyped sign turns the work-in-progress protection
+    off entirely while appearing to use it. `--list -1` is quieter still: the
+    value is truthy, so `found[:-1]` prints every candidate except the smallest
+    rather than refusing an impossible count. Both are refused at parse time,
+    where the message can name the flag.
     """
     try:
         value = int(raw)
     except ValueError:
-        raise argparse.ArgumentTypeError(f"{raw!r} is not a whole number of days")
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a whole number")
     if value < 0:
         raise argparse.ArgumentTypeError(
-            "--older-than cannot be negative: a negative cutoff is in the future, "
-            "which would mark every directory old and disable the protection"
+            "cannot be negative: a negative day count puts the cutoff in the "
+            "future and disables the protection, and a negative list count "
+            "silently prints all but the smallest entry"
         )
     return value
 
 
-def _measure(path: pathlib.Path, seen_inodes: set) -> tuple:
-    """(bytes that deletion would free, newest mtime anywhere inside).
+def _measure(path: pathlib.Path) -> tuple:
+    """(bytes deletion would free, newest mtime inside, multiply-linked bytes seen).
 
     **Allocated blocks, not apparent size.** `st_size` is the file's length, not
     the space on disk: a sparse build artifact reports far more than deleting it
-    returns, and a compressed filesystem far less. `st_blocks * 512` is what the
-    filesystem actually gave out, which is the number a reclaim report is
-    promising.
+    returns.
 
-    **Hard links counted once.** A build tree that links rather than copies --
-    node_modules with a shared store, ccache, a Rust target with hardlinked
-    outputs -- would otherwise have the same inode billed to every path that
-    names it, inflating both the estimate and the "freed" total afterwards.
-    `seen_inodes` is shared across the whole scan, so a link from one candidate
-    into another is counted for whichever is measured first.
+    **Hard-linked inodes are excluded entirely, not counted once.** Counting the
+    first occurrence still overstates the total whenever another link to the
+    same inode survives outside everything being deleted -- removing one of two
+    names frees nothing. Establishing that every `st_nlink` name is inside the
+    deletion set would mean indexing the whole filesystem, so the conservative
+    reading is taken: such inodes are left out and reported separately. The
+    figure is then an **underestimate**, which is the safe direction for a
+    promise about space.
 
     **The newest mtime of anything inside, not the directory's own.** A
     directory's mtime changes only when its immediate entries are added or
     removed; editing a file three levels down does not touch it. An actively
-    compiling `target/` whose root entry was last created weeks ago therefore
-    looks weeks old, and `--older-than` would have offered it for deletion
-    mid-build. Taken from the same traversal that measures size, so it costs
-    nothing extra.
+    compiling `target/` whose root entry is weeks old would otherwise look weeks
+    old. Taken from the same traversal, so it costs nothing extra.
     """
     total = 0
+    linked = 0
     newest = 0.0
     try:
         newest = path.stat().st_mtime
@@ -2708,13 +2712,12 @@ def _measure(path: pathlib.Path, seen_inodes: set) -> tuple:
             except OSError:
                 continue
             newest = max(newest, info.st_mtime)
-            key = (info.st_dev, info.st_ino)
+            size = getattr(info, "st_blocks", 0) * 512 or info.st_size
             if info.st_nlink > 1:
-                if key in seen_inodes:
-                    continue
-                seen_inodes.add(key)
-            total += getattr(info, "st_blocks", 0) * 512 or info.st_size
-    return total, newest
+                linked += size
+                continue
+            total += size
+    return total, newest, linked
 
 
 def _human_bytes(count: int) -> str:
@@ -2726,50 +2729,71 @@ def _human_bytes(count: int) -> str:
     return f"{value:.1f}TB"
 
 
-def _worktree_of(path: pathlib.Path):
-    """The Git worktree containing *path*, or None if it is not in one."""
+def _git(worktree, *args, stdin: str = None, timeout: int = 60):
     try:
-        result = subprocess.run(
-            ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10, check=False,
+        return subprocess.run(
+            ["git", "-C", str(worktree), *args],
+            input=stdin, capture_output=True, text=True, timeout=timeout, check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0:
+
+
+def _worktree_of(path: pathlib.Path):
+    """The Git worktree containing *path*, or None if it is not in one."""
+    result = _git(path.parent, "rev-parse", "--show-toplevel", timeout=10)
+    if result is None or result.returncode != 0:
         return None
     top = result.stdout.strip()
     return pathlib.Path(top) if top else None
 
 
-def _ignored_by_git(worktree: pathlib.Path, candidates: list) -> set:
-    """Which of *candidates* Git considers ignored in *worktree*.
+def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
+    """(ignored paths, tracked paths) for one worktree.
 
-    One `git check-ignore` per worktree rather than per directory: a workspace
-    has a hundred repositories and several hundred candidates, and a subprocess
-    each would make the scan slower than the build it is reclaiming.
+    Two calls per worktree rather than per directory: a workspace has a hundred
+    repositories and several hundred candidates, and a subprocess each would make
+    the scan slower than the build it is reclaiming.
 
-    Being ignored is the evidence that a directory is output rather than source.
-    `build/` and `target/` are perfectly ordinary names for authored code -- a
-    `build/` holding release scripts, a `target/` in a project that means
-    something else by it -- and a basename match alone cannot tell them apart.
-    Git already knows, because somebody wrote it in `.gitignore`.
+    **The index is consulted as a second line, not the first.** The worry is that
+    `git add -f` commits a file inside an ignored directory, leaving a candidate
+    that looks disposable while holding authored content. Measured against git
+    2.x, that does not happen: once any file under `build/` is tracked,
+    `check-ignore` stops reporting `build/` as ignored, so the ignore test
+    already refuses it -- confirmed with the pattern on the directory, on a
+    parent, anchored, and with the tracked file several levels down.
+
+    The `ls-files` call is kept anyway, because that is an implementation detail
+    of one git version rather than a documented guarantee, and because it costs
+    one subprocess per worktree. No test asserts it fires; a test that cannot
+    reach the branch it claims to cover would be worse than none.
     """
-    if not candidates:
-        return set()
-    payload = "\0".join(str(c) for c in candidates)
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(worktree), "check-ignore", "--stdin", "-z"],
-            input=payload, capture_output=True, text=True, timeout=60, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        # Cannot tell, so do not offer. A reclaim command that deletes on an
-        # unanswered question is worse than one that misses something.
-        return set()
-    # Exit 0 means some paths were ignored, 1 means none were; both are normal.
-    if result.returncode not in (0, 1):
-        return set()
-    return {pathlib.Path(line) for line in result.stdout.split("\0") if line}
+    ignored: set = set()
+    tracked: set = set()
+    if candidates:
+        result = _git(worktree, "check-ignore", "--stdin", "-z",
+                      stdin="\0".join(str(c) for c in candidates))
+        # 0 means some were ignored, 1 means none were; both are normal.
+        if result is not None and result.returncode in (0, 1):
+            ignored = {pathlib.Path(x) for x in result.stdout.split("\0") if x}
+    listed = _git(worktree, "ls-files", "-z")
+    if listed is not None and listed.returncode == 0:
+        tracked = {worktree / x for x in listed.stdout.split("\0") if x}
+    return ignored, tracked
+
+
+def _contains_nested_git(path: pathlib.Path) -> bool:
+    """Whether a repository lives inside *path*.
+
+    An outer repository can ignore `build/`, and `build/vendor` can itself be a
+    clone. The candidate passes `check-ignore`, and `shutil.rmtree` would then
+    take that repository's history with it. Filtering `.git` out of the *walk*
+    does not protect against this -- it is the opposite containment.
+    """
+    for root, dirs, files in os.walk(path, onerror=lambda _: None):
+        if ".git" in dirs or ".git" in files:  # a file, for worktrees and submodules
+            return True
+    return False
 
 
 def find_reclaimable(
@@ -2780,34 +2804,33 @@ def find_reclaimable(
 ):
     """Artifact directories under *workspace*, **largest first**.
 
-    Pruned as it walks: once a directory matches it is not descended into, so a
-    `node_modules` inside a `build` is counted once rather than twice, and the
-    walk does not spend minutes inside dependency trees it has already claimed.
+    `.git` is never entered, and a candidate that *contains* a repository is
+    never offered: a repository's history is not build output however large it
+    grows, in either direction of containment.
 
-    `.git` is never entered. A repository's history is not build output however
-    large it grows, and a command that can delete is a command that must be
-    obviously incapable of deleting that.
+    With `require_git_ignored` (the default) a candidate must be **ignored by the
+    Git repository that contains it** and must hold **no tracked file**. The
+    directory's name is not evidence: `build/` and `target/` are ordinary names
+    for authored code. A candidate outside any worktree is not offered either --
+    there is nothing to ask.
 
-    With `require_git_ignored` (the default), a candidate must be **ignored by
-    the Git repository that contains it**. The directory's name is not evidence:
-    `build/` and `target/` are ordinary names for authored code, and deleting
-    somebody's hand-written `build/` because of its name would be the worst
-    possible failure for this command. A candidate outside any worktree is not
-    offered either -- there is nothing to ask.
+    Matching directories are **not pruned from the walk before eligibility is
+    known**. An unignored authored `scripts/build/` can contain an ignored
+    `target/`, and pruning at the match would reject the outer candidate while
+    never having visited the reclaimable inner one. Accepted candidates are
+    de-duplicated afterwards instead, so a `node_modules` inside an accepted
+    `build` is still counted once.
     """
     if older_than_days < 0:
         raise ValueError("older_than_days cannot be negative")
 
     cutoff = time.time() - (older_than_days * 86400) if older_than_days else None
-    seen_inodes: set = set()
-    candidates = []
 
+    candidates = []
     for root, dirs, _ in os.walk(workspace, onerror=lambda _: None):
         dirs[:] = [d for d in dirs if d != ".git"]
         for name in [d for d in dirs if d in names]:
             candidates.append(pathlib.Path(root) / name)
-        # Do not descend into what has already been claimed.
-        dirs[:] = [d for d in dirs if d not in names]
 
     if require_git_ignored:
         by_worktree: dict = {}
@@ -2816,19 +2839,38 @@ def find_reclaimable(
             if worktree is None:
                 continue
             by_worktree.setdefault(worktree, []).append(path)
-        allowed: set = set()
+        eligible = []
         for worktree, paths in by_worktree.items():
-            allowed |= _ignored_by_git(worktree, paths)
-        candidates = [c for c in candidates if c in allowed]
+            ignored, tracked = _worktree_facts(worktree, paths)
+            for path in paths:
+                if path not in ignored:
+                    continue
+                # A tracked file under an ignored directory is authored content
+                # that deletion would destroy.
+                if any(str(t).startswith(str(path) + os.sep) for t in tracked):
+                    continue
+                eligible.append(path)
+        candidates = eligible
+
+    candidates = [c for c in candidates if not _contains_nested_git(c)]
+
+    # De-duplicated only now that eligibility is settled: a descendant of an
+    # accepted candidate is already inside what will be deleted.
+    accepted: list = []
+    for path in sorted(candidates, key=lambda p: len(p.parts)):
+        prefix = str(path) + os.sep
+        if any(str(path).startswith(str(a) + os.sep) for a in accepted):
+            continue
+        accepted.append(path)
 
     found = []
-    for path in candidates:
-        size, newest = _measure(path, seen_inodes)
-        # Checked against the newest thing inside, so an actively compiling
-        # tree is never old however stale its root entry looks.
+    for path in accepted:
+        size, newest, linked = _measure(path)
+        # Checked against the newest thing inside, so an actively compiling tree
+        # is never old however stale its root entry looks.
         if cutoff is not None and newest > cutoff:
             continue
-        found.append((path, size, newest))
+        found.append((path, size, newest, linked))
 
     return sorted(found, key=lambda item: item[1], reverse=True)
 
@@ -2852,22 +2894,30 @@ def run_reclaim(args: argparse.Namespace) -> None:
         return
 
     by_kind: dict = {}
-    for path, size, _ in found:
+    for path, size, _, _ in found:
         by_kind.setdefault(path.name, [0, 0])
         by_kind[path.name][0] += size
         by_kind[path.name][1] += 1
 
-    total = sum(size for _, size, _ in found)
+    total = sum(size for _, size, _, _ in found)
+    linked_total = sum(linked for _, _, _, linked in found)
     print(f"Reclaimable under {workspace}:")
     print()
     for kind, (size, count) in sorted(by_kind.items(), key=lambda kv: kv[1][0], reverse=True):
         print(f"  {_human_bytes(size):>9}  {count:>4}x  {kind:<16} {names.get(kind, '')}")
     print()
     print(f"  {_human_bytes(total):>9}         total")
+    if linked_total:
+        # Said rather than folded in: a hard-linked inode is only freed when
+        # every name for it goes, and this command cannot prove that without
+        # indexing the filesystem. The total above is therefore a floor.
+        print()
+        print(f"  {_human_bytes(linked_total)} of hard-linked content is excluded from that figure:")
+        print("  deleting one name frees nothing while another link survives.")
 
     if args.list:
         print()
-        for path, size, touched in found[: args.list]:
+        for path, size, touched, _ in found[: args.list]:
             age = (time.time() - touched) / 86400
             print(f"  {_human_bytes(size):>9}  {age:>5.0f}d  {path}")
 
@@ -2881,7 +2931,7 @@ def run_reclaim(args: argparse.Namespace) -> None:
 
     removed = 0
     freed = 0
-    for path, size, _ in found:
+    for path, size, _, _ in found:
         try:
             shutil.rmtree(path)
         except OSError as exc:
@@ -6233,7 +6283,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reclaim_cmd.add_argument(
         "--older-than",
-        type=_nonnegative_days,
+        type=_nonnegative_int,
         default=0,
         metavar="DAYS",
         help="Only directories untouched for this many days. Protects work in progress.",
@@ -6250,7 +6300,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reclaim_cmd.add_argument(
         "--list",
-        type=int,
+        type=_nonnegative_int,
         default=0,
         metavar="N",
         help="Also list the N largest directories individually.",

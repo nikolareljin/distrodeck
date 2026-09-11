@@ -60,7 +60,7 @@ class TestWhatItFinds:
     def test_it_finds_ignored_build_output(self, repo):
         make_dir(repo, "build")
         found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
-        assert [p.name for p, _, _ in found] == ["build"]
+        assert [p.name for p, _, _, _ in found] == ["build"]
 
     def test_it_leaves_source_alone(self, repo):
         make_dir(repo, "src")
@@ -105,7 +105,7 @@ class TestItWillNotDeleteAuthoredCode:
         # --any-directory exists for trees Git knows nothing about, and says so.
         make_dir(tmp_path, "loose/build")
         found = distrodeck.find_reclaimable(tmp_path, ARTIFACTS, require_git_ignored=False)
-        assert [p.name for p, _, _ in found] == ["build"]
+        assert [p.name for p, _, _, _ in found] == ["build"]
 
 
 class TestWhatItRefusesToTouch:
@@ -117,7 +117,7 @@ class TestWhatItRefusesToTouch:
     def test_it_does_not_count_nested_artifacts_twice(self, repo):
         make_dir(repo, "build/node_modules")
         found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
-        assert [p.name for p, _, _ in found] == ["build"]
+        assert [p.name for p, _, _, _ in found] == ["build"]
 
     def test_virtualenvs_are_not_included_by_default(self, repo):
         make_dir(repo, "venv")
@@ -126,7 +126,7 @@ class TestWhatItRefusesToTouch:
     def test_but_they_can_be_asked_for(self, repo):
         make_dir(repo, "venv")
         names = {**ARTIFACTS, **distrodeck.RECLAIM_ENVIRONMENTS}
-        assert [p.name for p, _, _ in distrodeck.find_reclaimable(repo.parent, names)] == ["venv"]
+        assert [p.name for p, _, _, _ in distrodeck.find_reclaimable(repo.parent, names)] == ["venv"]
 
 
 class TestAgeIsTakenFromTheNewestThingInside:
@@ -170,30 +170,37 @@ class TestAgeIsTakenFromTheNewestThingInside:
         import argparse
 
         with pytest.raises(argparse.ArgumentTypeError):
-            distrodeck._nonnegative_days("-1")
-        assert distrodeck._nonnegative_days("30") == 30
+            distrodeck._nonnegative_int("-1")
+        assert distrodeck._nonnegative_int("30") == 30
 
 
 class TestSizeIsWhatDeletionWouldFree:
-    def test_hard_links_are_counted_once(self, repo):
-        # A build tree that links rather than copies would otherwise bill the
-        # same inode to every path naming it, inflating the promise.
-        first = make_dir(repo, "build", size=64 * 1024)
-        linked = first / "linked.o"
+    def test_hard_linked_content_is_excluded_not_merely_deduplicated(self, repo):
+        """Counting the first occurrence still overstates the total.
+
+        Removing one of two names for an inode frees nothing while the other
+        survives, and proving every name is inside the deletion set would mean
+        indexing the filesystem. So such content is left out and reported
+        separately, making the figure an underestimate -- the safe direction for
+        a promise about space.
+        """
+        target = make_dir(repo, "build", size=64 * 1024)
         try:
-            os.link(first / "blob", linked)
+            os.link(target / "blob", target / "second-name.o")
         except OSError:
             pytest.skip("filesystem does not support hard links")
-        seen: set = set()
-        size, _ = distrodeck._measure(first, seen)
-        standalone = make_dir(repo, "target", size=64 * 1024)
-        alone, _ = distrodeck._measure(standalone, set())
-        # Two names, one inode: no more than a single copy is counted.
-        assert size < alone * 2
+        size, _, linked = distrodeck._measure(target)
+        assert linked > 0, "the linked inode should be reported separately"
+        assert size == 0, "and excluded from the total that deletion would free"
+
+    def test_ordinary_files_are_counted(self, repo):
+        target = make_dir(repo, "build", size=64 * 1024)
+        size, _, linked = distrodeck._measure(target)
+        assert size > 0 and linked == 0
 
     def test_it_reports_something_for_a_real_directory(self, repo):
         make_dir(repo, "build", size=16 * 1024)
-        (_, size, _), = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        (_, size, _, _), = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
         assert size > 0
 
 
@@ -230,3 +237,86 @@ class TestItDoesNotDeleteUnlessAskedTwice:
     def test_an_empty_workspace_says_so_rather_than_failing(self, tmp_path, capsys):
         distrodeck.run_reclaim(self._args(tmp_path))
         assert "Nothing reclaimable" in capsys.readouterr().out
+
+
+class TestContainmentRunsBothWays:
+    """`.git` filtered from the walk does not protect a repository *inside* a match.
+
+    An outer repository can ignore `build/`, and `build/vendor` can itself be a
+    clone. The candidate passes `check-ignore`, and `rmtree` would then take that
+    repository's history with it. The inverse test -- a `.git/build` -- does not
+    cover this at all.
+    """
+
+    def test_a_candidate_containing_a_repository_is_not_offered(self, repo):
+        nested = make_dir(repo, "build/vendor")
+        git(nested, "init", "-q")
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_a_submodule_or_worktree_marker_file_also_protects_it(self, repo):
+        # A submodule and a linked worktree have `.git` as a *file*, not a directory.
+        nested = make_dir(repo, "build/vendor")
+        (nested / ".git").write_text("gitdir: ../../.git/modules/vendor\n")
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_an_ordinary_candidate_is_still_offered(self, repo):
+        make_dir(repo, "build/ordinary")
+        assert [p.name for p, _, _, _ in distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]
+
+
+class TestIgnoredIsNotEnoughOnItsOwn:
+    def test_a_directory_holding_a_force_added_file_is_not_offered(self, repo):
+        """Authored content inside a build directory must survive.
+
+        Which guard stops it is deliberately not asserted. Measured against
+        git 2.x, `check-ignore` stops reporting `build/` as ignored as soon as
+        anything under it is tracked, so the ignore test refuses it before the
+        index is consulted at all -- the `ls-files` check in `_worktree_facts`
+        is a second line that no constructible case reaches. Asserting the
+        mechanism would be asserting a git implementation detail; the outcome is
+        what matters and is what this checks.
+        """
+        target = make_dir(repo, "build")
+        kept = target / "hand-written.sh"
+        kept.write_text("#!/bin/sh\necho authored\n")
+        git(repo, "add", "-f", str(kept))
+        git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "force-add")
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_without_the_forced_file_it_is_offered(self, repo):
+        make_dir(repo, "build")
+        assert len(distrodeck.find_reclaimable(repo.parent, ARTIFACTS)) == 1
+
+
+class TestPruningDoesNotHideNestedArtifacts:
+    def test_an_ignored_artifact_inside_an_authored_match_is_still_found(self, repo):
+        """Pruning at the match, before eligibility is known, loses work.
+
+        An unignored authored `scripts/build/` can contain an ignored `target/`.
+        Rejecting the outer candidate is right; never having visited the inner
+        one is a miss.
+        """
+        (repo / ".gitignore").write_text("target/\nnode_modules/\n")
+        make_dir(repo, "scripts/build")          # authored, not ignored
+        make_dir(repo, "scripts/build/target")   # ignored output inside it
+        found = [p for p, _, _, _ in distrodeck.find_reclaimable(repo.parent, ARTIFACTS)]
+        assert [p.name for p in found] == ["target"]
+
+    def test_a_descendant_of_an_accepted_candidate_is_counted_once(self, repo):
+        make_dir(repo, "build/node_modules")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"]
+
+
+class TestListCountIsValidated:
+    def test_a_negative_list_count_is_refused(self):
+        import argparse
+
+        # Quieter than the --older-than case: -1 is truthy, so found[:-1] prints
+        # every candidate except the smallest rather than failing.
+        with pytest.raises(argparse.ArgumentTypeError):
+            distrodeck._nonnegative_int("-1")
+
+    def test_zero_and_positive_are_accepted(self):
+        assert distrodeck._nonnegative_int("0") == 0
+        assert distrodeck._nonnegative_int("10") == 10

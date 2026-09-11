@@ -8,8 +8,8 @@ This project follows Keep a Changelog and Semantic Versioning.
 ### Added
 - **`distrodeck reclaim`: disk that a build can make again.** A workspace of
   development checkouts is mostly not source. Measured on one machine, 90 GB
-  across roughly a hundred repositories: **33.8 GB of `build/`, 17.9 GB of Rust
-  `target/`, 5.2 GB of `.dart_tool/`, 4.0 GB of `node_modules/`** -- 62.8 GB in
+  across roughly a hundred repositories: **33.8 GB of `build/`, 15.5 GB of Rust
+  `target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/`** -- 59.5 GB in
   total, about two thirds of the workspace, none of it authored by anybody.
   Reports by default and deletes only with `--apply`. That is the reverse of its
   sibling `cleanup-kernels`, deliberately: this command can remove tens of
@@ -32,13 +32,27 @@ This project follows Keep a Changelog and Semantic Versioning.
   outside any worktree is not offered either; `--any-directory` waives the
   requirement explicitly.
 
+  A candidate that *contains* a repository is refused too: an outer repository
+  can ignore `build/` while `build/vendor` is itself a clone, and filtering
+  `.git` out of the walk is the opposite containment -- it would not have saved
+  that history from `rmtree`. A `.git` file counts as well as a directory, since
+  that is how submodules and linked worktrees appear.
+
+  Matching directories are **not pruned before eligibility is known**. An
+  authored `scripts/build/` can hold an ignored `target/`; pruning at the match
+  rejected the outer candidate while never visiting the reclaimable inner one.
+
   Age comes from the **newest file anywhere inside**, not the directory's own
   mtime, which changes only when its immediate entries do -- so an actively
   compiling `target/` whose root entry is weeks old is no longer mistaken for
-  stale. Size is **allocated blocks**, not apparent length, with hard-linked
-  inodes counted once, so the figure is what deletion actually returns.
-  `--older-than` refuses a negative value, which would put the cutoff in the
-  future and silently disable the protection.
+  stale. Size is **allocated blocks**, not apparent length, and **hard-linked
+  content is excluded rather than counted once**: removing one name for an inode
+  frees nothing while another survives, and proving every name is inside the
+  deletion set would mean indexing the filesystem. 5.8 GB fell out of the
+  measured total that way, and the command now says so -- the figure is a floor.
+  `--older-than` and `--list` both refuse a negative value; the first would put
+  the cutoff in the future and disable the protection, the second would quietly
+  print every entry but the smallest.
 
   It never enters `.git` -- a repository's history is not build output however
   large it grows -- and it prunes as it walks, so a `node_modules` inside a
