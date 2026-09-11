@@ -4,6 +4,7 @@ import base64
 import configparser
 import json
 import os
+import pathlib
 import re
 import shlex
 import signal
@@ -2599,6 +2600,152 @@ def maybe_cleanup_kernels(keep: int) -> None:
         return
     if not run_cleanup_kernels(argparse.Namespace(dry_run=False, keep=keep)):
         warn("Old kernel cleanup reported errors.")
+
+
+# ---------------------------------------------------------------------------
+# reclaim: disk that a build can make again
+# ---------------------------------------------------------------------------
+#
+# A workspace of development checkouts is mostly not source. Measured on one
+# machine, 90 GB across roughly a hundred repositories: 30.6 GB of `build/`,
+# 17.8 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 2.8 GB of `node_modules/`
+# -- about three quarters of the total, none of it authored by anybody.
+#
+# The distinction this command is built around is **regenerable versus
+# reproducible-at-a-cost**. A `target/` directory is the output of a command
+# that can be run again offline in minutes. A virtualenv is also "rebuildable",
+# and rebuilding one that holds torch and whisper is a multi-gigabyte download
+# that fails entirely on a train. They are not the same risk and are not
+# offered on the same flag.
+
+# Directories that are pure build output: deleting one costs the time to run a
+# build, and nothing else. Every one of these is conventionally gitignored.
+RECLAIM_ARTIFACTS = {
+    "build": "compiler and packager output (Gradle, CMake, Flutter)",
+    "target": "Rust build output",
+    ".dart_tool": "Flutter and Dart package resolution",
+    "node_modules": "npm dependency tree",
+    ".gradle": "Gradle caches for this project",
+    ".next": "Next.js build output",
+    "__pycache__": "Python bytecode",
+    ".pytest_cache": "pytest scratch",
+    ".mypy_cache": "mypy incremental state",
+}
+
+# Rebuildable, but only with a network and time -- and sometimes a very large
+# download. Behind its own flag because "free to delete" is not true of these
+# in the situation where somebody most wants the space.
+RECLAIM_ENVIRONMENTS = {
+    "venv": "Python virtualenv (needs network and a pip install to restore)",
+    ".venv": "Python virtualenv (needs network and a pip install to restore)",
+}
+
+
+def _directory_size(path: pathlib.Path) -> int:
+    total = 0
+    for root, dirs, files in os.walk(path, onerror=lambda _: None):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _human_bytes(count: int) -> str:
+    value = float(count)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}TB"
+
+
+def find_reclaimable(workspace: pathlib.Path, names: dict, older_than_days: int = 0):
+    """Artifact directories under *workspace*, newest-touched first.
+
+    Pruned as it walks: once a directory matches it is not descended into, so a
+    `node_modules` inside a `build` is counted once rather than twice, and the
+    walk does not spend minutes inside dependency trees it has already claimed.
+
+    `.git` is never entered. A repository's history is not build output however
+    large it grows, and a command that can delete is a command that must be
+    obviously incapable of deleting that.
+    """
+    cutoff = time.time() - (older_than_days * 86400) if older_than_days else None
+    found = []
+    for root, dirs, _ in os.walk(workspace, onerror=lambda _: None):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        matched = [d for d in dirs if d in names]
+        for name in matched:
+            path = pathlib.Path(root) / name
+            try:
+                touched = path.stat().st_mtime
+            except OSError:
+                continue
+            if cutoff is not None and touched > cutoff:
+                continue
+            found.append((path, _directory_size(path), touched))
+        # Do not descend into what has already been claimed.
+        dirs[:] = [d for d in dirs if d not in names]
+    return sorted(found, key=lambda item: item[1], reverse=True)
+
+
+def run_reclaim(args: argparse.Namespace) -> None:
+    workspace = pathlib.Path(args.workspace).expanduser().resolve()
+    if not workspace.is_dir():
+        print(f"Not a directory: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    names = dict(RECLAIM_ARTIFACTS)
+    if args.include_environments:
+        names.update(RECLAIM_ENVIRONMENTS)
+
+    found = find_reclaimable(workspace, names, args.older_than)
+    if not found:
+        print(f"Nothing reclaimable under {workspace}.")
+        return
+
+    by_kind: dict = {}
+    for path, size, _ in found:
+        by_kind.setdefault(path.name, [0, 0])
+        by_kind[path.name][0] += size
+        by_kind[path.name][1] += 1
+
+    total = sum(size for _, size, _ in found)
+    print(f"Reclaimable under {workspace}:")
+    print()
+    for kind, (size, count) in sorted(by_kind.items(), key=lambda kv: kv[1][0], reverse=True):
+        print(f"  {_human_bytes(size):>9}  {count:>4}x  {kind:<16} {names.get(kind, '')}")
+    print()
+    print(f"  {_human_bytes(total):>9}         total")
+
+    if args.list:
+        print()
+        for path, size, touched in found[: args.list]:
+            age = (time.time() - touched) / 86400
+            print(f"  {_human_bytes(size):>9}  {age:>5.0f}d  {path}")
+
+    if not args.apply:
+        print()
+        print("  Nothing was deleted. Re-run with --apply to reclaim it.")
+        if not args.include_environments:
+            print("  Virtualenvs are excluded; --include-environments adds them, and")
+            print("  restoring one needs a network and a pip install.")
+        return
+
+    removed = 0
+    freed = 0
+    for path, size, _ in found:
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            print(f"  could not remove {path}: {exc}", file=sys.stderr)
+            continue
+        removed += 1
+        freed += size
+    print()
+    print(f"  Removed {removed} directory(ies), {_human_bytes(freed)} freed.")
 
 
 def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
@@ -5915,6 +6062,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Previous kernel versions to keep in addition to the running kernel",
     )
     cleanup_cmd.set_defaults(func=run_cleanup_kernels_cmd)
+
+    reclaim_cmd = sub.add_parser(
+        "reclaim",
+        help="Report, and with --apply remove, build output under a workspace",
+    )
+    reclaim_cmd.add_argument(
+        "workspace",
+        nargs="?",
+        default="~/Projects",
+        help="Directory of checkouts to scan (default: ~/Projects)",
+    )
+    # Deliberately the reverse of cleanup-kernels, which takes --dry-run. This
+    # one can delete tens of gigabytes across a hundred repositories in a
+    # second, so the safe direction is the default and acting is the flag.
+    reclaim_cmd.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete. Without it, this only reports what it would delete.",
+    )
+    reclaim_cmd.add_argument(
+        "--include-environments",
+        action="store_true",
+        help="Also virtualenvs. Restoring one needs a network and a pip install.",
+    )
+    reclaim_cmd.add_argument(
+        "--older-than",
+        type=int,
+        default=0,
+        metavar="DAYS",
+        help="Only directories untouched for this many days. Protects work in progress.",
+    )
+    reclaim_cmd.add_argument(
+        "--list",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Also list the N largest directories individually.",
+    )
+    reclaim_cmd.set_defaults(func=run_reclaim)
 
     security_cmd = sub.add_parser("security", help="Apply security upgrades")
     security_cmd.set_defaults(func=lambda _: run_security())

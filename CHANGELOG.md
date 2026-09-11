@@ -2,6 +2,34 @@
 
 This project follows Keep a Changelog and Semantic Versioning.
 
+## Unreleased
+
+- **`distrodeck reclaim`: disk that a build can make again.** A workspace of
+  development checkouts is mostly not source. Measured on one machine, 90 GB
+  across roughly a hundred repositories: **33.4 GB of `build/`, 20.2 GB of Rust
+  `target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/`** -- 63.9 GB in
+  total, about three quarters of the workspace, none of it authored by anybody.
+
+  Reports by default and deletes only with `--apply`. That is the reverse of its
+  sibling `cleanup-kernels`, deliberately: this command can remove tens of
+  gigabytes across a hundred repositories in a second, so the safe direction is
+  the default and acting is the flag.
+
+  The distinction it is built around is **regenerable versus
+  reproducible-at-a-cost**. A `target/` is the output of a command that runs
+  again offline in minutes. A virtualenv is also "rebuildable", and rebuilding
+  one holding torch and whisper is a multi-gigabyte download that fails entirely
+  without a network -- so virtualenvs are behind `--include-environments` rather
+  than offered as free.
+
+  `--older-than DAYS` protects work in progress: on the measured machine, 63.9 GB
+  total falls to 57.2 GB at seven days and 43.3 GB at thirty, the difference
+  being projects actively being built.
+
+  It never enters `.git` -- a repository's history is not build output however
+  large it grows -- and it prunes as it walks, so a `node_modules` inside a
+  `build` is counted once rather than twice.
+
 ## [Unreleased]
 
 ### Changed
