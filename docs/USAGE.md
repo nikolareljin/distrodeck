@@ -221,10 +221,13 @@ What it will not offer, ever -- no flag lifts these:
   device number differing from the parent's (which is the only way to notice that
   the candidate is a mount point itself -- everything under a mount is one device),
   and the mount table, which is what catches a bind mount of the *same* filesystem.
-  Only the last needs `/proc`, so where it cannot be read the same-device bind
-  mount is the one case that goes undetected. The first two are checked before the
-  candidate is read at all, so a slow or dead mount is skipped rather than measured,
-  and the scan stops at a device boundary rather than descending through one.
+  Only the last needs `/proc`, so where it cannot be read the same-device bind mount
+  is the one case that goes undetected. Two of the three -- the parent comparison and
+  the mount table -- are answered **before the candidate is read at all**, so a slow
+  or dead mount is skipped rather than measured. The in-tree device change is
+  necessarily found while measuring, since that is what notices it; what it gives is
+  that the measurement **stops** at the boundary and goes no deeper, so the cost is
+  one listing of the mount root rather than a traversal of whatever is behind it.
 - a directory it could not read in full. A subtree the scan cannot enter is
   "could not look", not "looked and found nothing" -- it could hold a clone, and
   with `--older-than` it could hold the very file that says somebody is working

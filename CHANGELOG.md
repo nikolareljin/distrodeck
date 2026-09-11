@@ -99,6 +99,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   rather than descending through it, so one listing of the mount root is the whole
   cost.
 
+  A **mount point is bytes** as well. `mountinfo` octal-escapes the four characters
+  that would break its own field separation and nothing else, so a mount point whose
+  name is not valid UTF-8 arrives raw -- and decoding it strictly raised
+  `UnicodeDecodeError`, which is not an `OSError` and so was not the
+  unavailable-table fallback: it aborted the command, from inside the function added
+  to make mount detection safe. Read with the filesystem encoding and
+  `surrogateescape`, so the names stay comparable with the paths they are tested
+  against.
+
   **A path is bytes.** `subprocess.run(..., text=True)` decodes strictly, so one
   tracked filename that is not valid UTF-8 made `git ls-files -z` raise
   `UnicodeDecodeError` -- neither `OSError` nor `SubprocessError`, so it escaped the

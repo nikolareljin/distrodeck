@@ -1502,3 +1502,53 @@ class TestAMountIsRefusedBeforeItIsTraversed:
         assert m.total < 512 * 1024, (
             f"{m.total} includes the other filesystem's contents: it descended"
         )
+
+
+class TestTheMountTableIsNotAssumedToBeUtf8:
+    """`mountinfo` octal-escapes four characters and leaves the rest as bytes.
+
+    Space, tab, newline and backslash are escaped because they would break the
+    file's own field separation. A mount point whose name is not valid UTF-8 is
+    simply raw bytes -- and decoding strictly raised `UnicodeDecodeError`, which is
+    not an `OSError`, so it was not the unavailable-table fallback. It aborted the
+    command, in the function added to make mount detection safe.
+    """
+
+    RAW = b"/mnt/odd-\xff-share"
+
+    @staticmethod
+    def _table(tmp_path, *mount_points):
+        table = tmp_path / "mountinfo"
+        with open(table, "wb") as handle:
+            for n, point in enumerate(mount_points):
+                handle.write(
+                    b"%d 1 0:%d / " % (20 + n, 30 + n) + point
+                    + b" rw,relatime shared:2 - tmpfs tmpfs rw\n"
+                )
+        return table
+
+    def test_an_undecodable_mount_point_does_not_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO",
+                            str(self._table(tmp_path, self.RAW, b"/")))
+        points = distrodeck._mount_points()
+        assert points is not None, "it fell back to no-table instead of reading it"
+        assert os.fsdecode(self.RAW) in points, points
+
+    def test_the_name_still_compares_against_a_path(self, tmp_path, monkeypatch):
+        """The point of `surrogateescape`: these are compared with `str(Path)`."""
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO",
+                            str(self._table(tmp_path, self.RAW)))
+        points = distrodeck._mount_points()
+        candidate = Path(os.fsdecode(self.RAW))
+        assert distrodeck._mount_refusal(candidate, None, points)
+
+    def test_an_undecodable_name_inside_a_candidate_is_still_caught(self, repo, tmp_path, monkeypatch):
+        target = make_dir(repo, "build")
+        inside = os.fsencode(str(target)) + b"/odd-\xff-share"
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO",
+                            str(self._table(tmp_path, inside)))
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_a_missing_table_is_still_the_fallback(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO", str(tmp_path / "not-there"))
+        assert distrodeck._mount_points() is None

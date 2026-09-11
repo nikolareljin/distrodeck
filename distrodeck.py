@@ -2958,6 +2958,11 @@ def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
     return ignored, tracked, True
 
 
+# Named so a test can point it at a file of its own. The kernel's copy cannot be
+# made to contain an awkward mount point without mounting one, which needs root.
+_MOUNTINFO = "/proc/self/mountinfo"
+
+
 def _parse_mountinfo(lines) -> set:
     """Mount points out of `mountinfo` lines. Separate so it can be tested.
 
@@ -2991,11 +2996,23 @@ def _mount_points():
 
     Paths in this file escape space, tab, newline and backslash as octal, so they
     are decoded rather than compared raw.
+
+    **Read with the filesystem encoding, not UTF-8.** `mountinfo` octal-escapes the
+    four characters that would break its own field separation and nothing else, so a
+    mount point whose name is not valid UTF-8 arrives as raw bytes. Decoding
+    strictly raised `UnicodeDecodeError`, which is not an `OSError` and so was not
+    the unavailable-table fallback -- it aborted the command. `surrogateescape`
+    matches `_git` and keeps the names comparable with the `Path` values they are
+    tested against.
     """
     try:
-        with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+        with open(
+            _MOUNTINFO,
+            encoding=sys.getfilesystemencoding(),
+            errors="surrogateescape",
+        ) as handle:
             return _parse_mountinfo(handle)
-    except OSError:
+    except (OSError, UnicodeError):
         # No refusal on its own: `st_dev` divergence still catches a separate
         # filesystem, which is the common case. Returning None says "this half of
         # the check did not run" rather than "there are no mounts".
