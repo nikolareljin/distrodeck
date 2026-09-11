@@ -1257,3 +1257,67 @@ class TestItNeverTreatsRepositoryStorageAsBuildOutput:
         make_dir(repo, "build")
         found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
         assert [p.name for p, _, _, _ in found] == ["build"], found
+
+
+class TestAWorkspaceBelowABareRepositoryIsRefused:
+    """Pruning a bare repository only helps when the walk reaches its root.
+
+    A workspace of `repo.git/refs/heads` starts *below* that root, so the markers
+    that identify a bare repository are never in view -- and with
+    `--any-directory` a `build/` there is a branch, offered and deleted. The same
+    mistake as a scan rooted at `.git/objects`, one level up, and it survived the
+    commit that fixed that one.
+    """
+
+    @staticmethod
+    def _bare(at):
+        subprocess.run(["git", "init", "--bare", "-q", str(at)],
+                       check=True, capture_output=True)
+        return at
+
+    def test_rooted_below_a_bare_repository(self, tmp_path):
+        bare = self._bare(tmp_path / "vendor.git")
+        heads = bare / "refs" / "heads"
+        (heads / "build").mkdir(parents=True, exist_ok=True)
+        with pytest.raises(ValueError, match="bare repository"):
+            distrodeck.find_reclaimable(heads, ARTIFACTS, require_git_ignored=False)
+
+    def test_rooted_at_a_bare_repository(self, tmp_path):
+        bare = self._bare(tmp_path / "vendor.git")
+        with pytest.raises(ValueError, match="bare repository"):
+            distrodeck.find_reclaimable(bare, ARTIFACTS, require_git_ignored=False)
+
+    def test_the_command_refuses_it_with_a_message(self, tmp_path, capsys):
+        bare = self._bare(tmp_path / "vendor.git")
+        args = argparse.Namespace(workspace=str(bare / "objects"), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=True)
+        with pytest.raises(SystemExit) as exit_status:
+            distrodeck.run_reclaim(args)
+        assert exit_status.value.code == 1
+        assert "bare repository" in capsys.readouterr().err
+
+    def test_a_branch_directory_below_the_root_survives_apply(self, tmp_path):
+        """The whole point, driven through `--apply`: the ref is still there."""
+        bare = self._bare(tmp_path / "vendor.git")
+        ref = bare / "refs" / "heads" / "build"
+        ref.mkdir(parents=True, exist_ok=True)
+        (ref / "main").write_text("0" * 40 + "\n")
+        args = argparse.Namespace(workspace=str(bare / "refs" / "heads"), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=True)
+        with pytest.raises(SystemExit):
+            distrodeck.run_reclaim(args)
+        assert (ref / "main").exists(), "the branch was deleted"
+
+    def test_an_ordinary_nested_workspace_is_still_scanned(self, repo):
+        """The control: the refusal is about repository storage, not about depth."""
+        make_dir(repo, "deep/nested/build")
+        found = distrodeck.find_reclaimable(repo / "deep", ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"], found
+
+    def test_a_workspace_beside_a_bare_repository_is_fine(self, repo, tmp_path):
+        self._bare(tmp_path / "vendor.git")
+        make_dir(repo, "build")
+        found = distrodeck.find_reclaimable(repo, ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"], found

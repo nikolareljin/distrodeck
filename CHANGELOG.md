@@ -51,6 +51,10 @@ This project follows Keep a Changelog and Semantic Versioning.
   *below* a candidate -- so deleting it would have deleted the branch. Dropping
   `.git` from the children a walk descends into helps with neither case: a bare
   repository has no `.git` child, and the root handed to the walk is never a child.
+  Nor does pruning a bare repository when the walk *reaches* its root, if the
+  workspace is `repo.git/refs/heads` and the walk starts below it -- so the
+  workspace's ancestors are examined before any walking, and a workspace at or
+  inside a bare repository is refused outright.
 
   A **symlink named like an artifact is not one**. `os.walk` lists a symlink to a
   directory in `dirs` even with `followlinks=False`, so a symlink called `build`

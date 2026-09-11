@@ -198,10 +198,13 @@ What it will not offer, ever -- no flag lifts these:
   history. A `.git` file counts as well as a directory, since that is how
   submodules and linked worktrees appear, and a bare clone counts too: it has no
   `.git` entry at all, only `HEAD`, `objects` and `refs` at its root.
-- anything inside a bare repository, and any scan rooted inside `.git`. A loose
-  ref is a path -- a branch called `build/main` is a directory named `build` under
-  `refs/heads` -- so deleting it would delete the branch. Refused whatever the
-  flags say, since a repository's own storage is not build output.
+- anything inside a bare repository, and any scan rooted inside `.git` or inside a
+  bare repository -- at its root or below it. A loose ref is a path: a branch called
+  `build/main` is a directory named `build` under `refs/heads`, so deleting it would
+  delete the branch. The workspace's own ancestors are checked before the scan
+  begins, because a workspace of `repo.git/refs/heads` never walks past the entries
+  that identify the repository above it. Refused whatever the flags say, since a
+  repository's own storage is not build output.
 - a symlink, however it is named. `os.walk` lists a symlink to a directory among
   directories, so one called `build` was offered and measured as its target --
   space that removing the link would not free. Removing it would free only the

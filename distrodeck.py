@@ -3032,20 +3032,40 @@ def _mount_refusal(path: pathlib.Path, measured, points) -> str:
 _BARE_REPOSITORY_MARKERS = ("HEAD", "objects", "refs")
 
 
-def _is_bare_repository(dirs, files) -> bool:
+def _is_bare_repository(entries) -> bool:
     """Whether a directory's own entries make it a bare repository's root."""
-    here = set(dirs) | set(files)
+    here = set(entries)
     return all(marker in here for marker in _BARE_REPOSITORY_MARKERS)
 
 
-def _inside_git_metadata(path: pathlib.Path) -> bool:
-    """Whether *path* is a `.git` directory or lives inside one.
+def _git_storage_above(path: pathlib.Path) -> str:
+    """Why *path* is inside a repository's own storage, or "".
 
-    A scan rooted here would treat a repository's own storage as build output. The
-    `.git` filter in the discovery walk cannot help: it drops `.git` from the
-    *children* it descends into, and the root it was handed is never a child.
+    A scan rooted here would treat a repository's storage as build output, and a
+    loose ref makes that concrete: a branch called `build/main` is a directory
+    named `build` under `refs/heads`.
+
+    **Asked about the ancestors, not only about the root.** Neither of the walk's
+    own defences can see this. Dropping `.git` from the children it descends into
+    cannot help, because the root it was handed is never a child; and pruning a
+    bare repository when the walk *reaches* its root cannot help either, because a
+    workspace of `repo.git/refs/heads` starts below that root, so the markers that
+    identify it are never in view. Both were real: the first was fixed a commit
+    before this one, and this is the same mistake one level up.
     """
-    return ".git" in path.parts
+    if ".git" in path.parts:
+        return "it is inside a .git directory"
+    here = path
+    while True:
+        try:
+            entries = os.listdir(here)
+        except OSError:
+            entries = []
+        if _is_bare_repository(entries):
+            return f"it is inside the bare repository at {here}"
+        if here.parent == here:
+            return ""
+        here = here.parent
 
 
 def _contains_nested_git(path: pathlib.Path) -> tuple:
@@ -3081,7 +3101,7 @@ def _contains_nested_git(path: pathlib.Path) -> tuple:
     for root, dirs, files in os.walk(path, onerror=unreadable):
         if ".git" in dirs or ".git" in files:  # a file, for worktrees and submodules
             return True, complete
-        if _is_bare_repository(dirs, files):
+        if _is_bare_repository(list(dirs) + list(files)):
             return True, complete
     return False, complete
 
@@ -3197,10 +3217,11 @@ def find_reclaimable(
     if older_than_days < 0:
         raise ValueError("older_than_days cannot be negative")
 
-    if _inside_git_metadata(workspace):
+    storage = _git_storage_above(workspace)
+    if storage:
         raise ValueError(
-            f"{workspace} is inside a .git directory: a repository's own storage "
-            "is not build output"
+            f"refusing to scan {workspace}: {storage}, and a repository's own "
+            "storage is not build output"
         )
 
     cutoff = time.time() - (older_than_days * 86400) if older_than_days else None
@@ -3208,7 +3229,7 @@ def find_reclaimable(
     candidates = []
     for root, dirs, files in os.walk(workspace, onerror=lambda _: None):
         dirs[:] = [d for d in dirs if d != ".git"]
-        if _is_bare_repository(dirs, files):
+        if _is_bare_repository(list(dirs) + list(files)):
             # A bare repository has no `.git` child for the filter above to catch:
             # `HEAD`, `objects` and `refs` are at its root. Descending into one put
             # its *contents* in scope, and a loose ref is a path -- a branch called
@@ -3344,10 +3365,11 @@ def run_reclaim(args: argparse.Namespace) -> None:
         print(f"Not a directory: {workspace}", file=sys.stderr)
         sys.exit(1)
 
-    if _inside_git_metadata(workspace):
+    storage = _git_storage_above(workspace)
+    if storage:
         print(
-            f"Refusing to scan {workspace}: it is inside a .git directory, and a "
-            "repository's own storage is not build output.",
+            f"Refusing to scan {workspace}: {storage}, and a repository's own "
+            "storage is not build output.",
             file=sys.stderr,
         )
         sys.exit(1)
