@@ -876,22 +876,24 @@ class TestItRefusesToDeleteThroughAMountPoint:
         real = distrodeck._measure(target)
         assert real.crosses_mount is False, "nothing is mounted in a temp dir"
         two_devices = real._replace(crosses_mount=True)
-        assert distrodeck._crosses_a_mount(target, two_devices, set()) is True
+        assert (distrodeck._mount_refusal(target, two_devices, set())
+                == "a filesystem is mounted inside it")
 
     def test_a_mount_point_inside_the_tree_is_a_crossing(self, repo):
         target = make_dir(repo, "build")
         inside = str(target / "data")
-        assert distrodeck._crosses_a_mount(target, None, {inside}) is True
+        assert (distrodeck._mount_refusal(target, None, {inside})
+                == "a filesystem is mounted inside it")
 
     def test_the_candidate_itself_being_a_mount_is_a_crossing(self, repo):
         """`rmtree` empties it and leaves the mount behind: nothing is reclaimed."""
         target = make_dir(repo, "build")
-        assert distrodeck._crosses_a_mount(target, None, {str(target)}) is True
+        assert distrodeck._mount_refusal(target, None, {str(target)})
 
     def test_a_sibling_mount_is_not(self, repo):
         """The prefix test must not match a directory that merely starts the same."""
         target = make_dir(repo, "build")
-        assert distrodeck._crosses_a_mount(target, None, {str(target) + "-output"}) is False
+        assert distrodeck._mount_refusal(target, None, {str(target) + "-output"}) == ""
 
     def test_an_unreadable_mount_table_does_not_refuse_on_its_own(self, repo):
         """`None` means that half of the check did not run, not "no mounts".
@@ -901,7 +903,7 @@ class TestItRefusesToDeleteThroughAMountPoint:
         separate filesystem, which is the common case.
         """
         target = make_dir(repo, "build")
-        assert distrodeck._crosses_a_mount(target, distrodeck._measure(target), None) is False
+        assert distrodeck._mount_refusal(target, distrodeck._measure(target), None) == ""
 
     def test_the_scan_skips_a_candidate_with_a_mount_inside(self, repo, monkeypatch):
         target = make_dir(repo, "build")
@@ -941,7 +943,7 @@ class TestItRefusesToDeleteThroughAMountPoint:
         if points is None:
             pytest.skip("no /proc/self/mountinfo on this platform")
         assert len(points) > 1
-        assert distrodeck._crosses_a_mount(Path("/"), None, points) is True
+        assert distrodeck._mount_refusal(Path("/"), None, points)
 
     def test_escaped_paths_are_decoded(self):
         """A mount under a directory with a space would otherwise compare against
@@ -1017,3 +1019,55 @@ class TestWorktreeLookupCostsOneCallPerRepository:
                             lambda *a, **k: calls.append(a) or None)
         assert distrodeck._worktree_of(loose) is None
         assert calls == [], f"asked git about a tree with no .git anywhere: {calls}"
+
+
+class TestACandidateThatIsItselfAMountIsCaughtWithoutTheTable:
+    """Everything under a mount point is one device, so the tree looks ordinary.
+
+    The first version of this check asked two questions -- more than one device
+    *inside* the candidate, and the mount table -- and a candidate that was itself
+    a separate-filesystem mount answered no to both: one device throughout, and
+    nothing to consult where `/proc/self/mountinfo` could not be read. `--apply`
+    would then have emptied the mounted filesystem, against the refusal the
+    documentation promises. Comparing the candidate's device with its parent's is
+    the question that needs no table.
+    """
+
+    @staticmethod
+    def _a_real_mount_point():
+        for candidate in ("/dev/shm", "/run", "/proc", "/sys"):
+            path = Path(candidate)
+            own, parent = distrodeck._device_of(path), distrodeck._device_of(path.parent)
+            if path.is_dir() and own is not None and parent is not None and own != parent:
+                return path
+        return None
+
+    def test_with_no_mount_table_at_all(self):
+        """Against this machine's real filesystems, with `points=None`."""
+        mount = self._a_real_mount_point()
+        if mount is None:
+            pytest.skip("no separate-filesystem mount point found to test against")
+        assert (distrodeck._mount_refusal(mount, None, None)
+                == "it is itself a mount point"), mount
+
+    def test_a_measurement_inside_it_sees_nothing_wrong(self):
+        """Why the parent comparison is necessary and not redundant."""
+        mount = self._a_real_mount_point()
+        if mount is None:
+            pytest.skip("no separate-filesystem mount point found to test against")
+        try:
+            measured = distrodeck._measure(mount)
+        except OSError:
+            pytest.skip(f"cannot measure {mount}")
+        assert measured.crosses_mount is False, (
+            "one device throughout, which is exactly why this case slipped through"
+        )
+
+    def test_an_ordinary_directory_is_not_a_mount_point(self, repo):
+        target = make_dir(repo, "build")
+        assert distrodeck._mount_refusal(target, None, None) == ""
+
+    def test_an_unreadable_device_fails_closed(self, repo):
+        missing = repo / "build"
+        assert (distrodeck._mount_refusal(missing, None, None)
+                == "its filesystem could not be identified")

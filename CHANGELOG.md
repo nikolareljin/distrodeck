@@ -49,13 +49,18 @@ This project follows Keep a Changelog and Semantic Versioning.
   other directory, so a bind mount, an NFS share or a mounted image inside an
   ignored `build/` would have had its contents deleted -- data that is not the
   candidate's to free, that no build reproduces, and whose space does not come
-  back to this disk. Detected two ways because neither suffices: a change of
-  device number anywhere in the tree catches a separate filesystem, and
-  `/proc/self/mountinfo` catches a bind mount of the *same* filesystem, whose
-  device number is its parent's. An unreadable mount table is not a refusal on its
-  own, or the command would be useless in a container. The table is re-read
-  immediately before each deletion, so a mount that appears during a minutes-long
-  scan is still caught.
+  back to this disk. Three signals, because each sees something the others cannot:
+  a change of device number **inside** the tree catches a filesystem mounted under
+  the candidate; a device number differing from the **parent's** catches the
+  candidate being a mount point itself, which nothing inside it can see because
+  everything under a mount is one device; and `/proc/self/mountinfo` catches a bind
+  mount of the *same* filesystem, whose device number is its parent's and which
+  `os.path.ismount` cannot see either. Only the third needs `/proc`, so an
+  unreadable mount table loses the same-device bind mount case and nothing else --
+  refusing everything instead would make the command useless in a container. A path
+  whose own device cannot be read is refused. The table is re-read immediately
+  before each deletion, so a mount that appears during a minutes-long scan is still
+  caught.
 
   Deciding which repository a candidate belongs to no longer costs a subprocess
   per candidate. `git rev-parse --show-toplevel` ran once per match: on the

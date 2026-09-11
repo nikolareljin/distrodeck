@@ -2747,10 +2747,11 @@ def _measure(path: pathlib.Path) -> Measurement:
     through a mount point like any other directory, so an ignored `build/` holding
     a bind mount, an NFS share or a mounted image would have the *mounted*
     contents deleted -- data that is not the candidate's to free and may not be
-    replaceable by any build. Detected two ways, because neither is sufficient:
-    a differing `st_dev` anywhere in the tree catches a separate filesystem, and
-    the mount table catches a bind mount of the *same* filesystem, whose `st_dev`
-    is identical to its parent's.
+    replaceable by any build. This flag is one of the three signals `_mount_refusal`
+    combines -- it sees a filesystem mounted *inside* the candidate. It cannot see
+    the candidate being a mount point itself, because everything under a mount is
+    one device; that is a comparison with the parent, and the mount table is what
+    catches a same-device bind mount.
     """
     total = 0
     linked = 0
@@ -2800,9 +2801,9 @@ def _measure(path: pathlib.Path) -> Measurement:
                 continue
             total += size
     # More than one device under one candidate means a filesystem is mounted
-    # inside it. The mount table is consulted as well, in `_crosses_a_mount`: a
-    # bind mount of the same filesystem has its parent's `st_dev` and is invisible
-    # here.
+    # inside it. Two other cases are invisible from in here and are `_mount_refusal`'s
+    # job: the candidate being a mount point itself (one device throughout), and a
+    # bind mount of the same filesystem (its parent's device number).
     return Measurement(
         total, newest, linked, linked_inodes, complete, len(devices) > 1
     )
@@ -2964,20 +2965,54 @@ def _mount_points():
         return None
 
 
-def _crosses_a_mount(path: pathlib.Path, measured, points) -> bool:
-    """Whether deleting *path* would reach through a mount point.
+def _device_of(path):
+    """The device a path lives on, or None if it cannot be read."""
+    try:
+        return os.lstat(path).st_dev
+    except OSError:
+        return None
 
-    True when the candidate *is* a mount point as well as when one lives inside
-    it: `rmtree` empties the mounted filesystem either way, and the directory it
-    leaves behind is the mount, not reclaimed space.
+
+def _mount_refusal(path: pathlib.Path, measured, points) -> str:
+    """Why deleting *path* would reach storage that is not its own, or "".
+
+    Three questions, because each sees something the others cannot:
+
+    1. **More than one device inside the tree** -- a filesystem mounted somewhere
+       under the candidate. `_measure` collects this for free while it stats.
+    2. **A different device from the candidate's parent** -- the candidate is
+       itself a mount point. No measurement *inside* it can see this: everything
+       under a mount is one device, so the tree looks perfectly ordinary. This is
+       the question that must not depend on the mount table, because without it a
+       mounted `build/` would have been emptied despite the documented refusal.
+    3. **The mount table** -- a bind mount of the *same* filesystem, inside the
+       candidate or at it. Its device number is its parent's, so neither of the
+       checks above can see it, and `os.path.ismount` cannot either. This is the
+       only one of the three that needs `/proc`, and the only case that goes
+       undetected where `/proc` is unavailable.
+
+    Emptied either way is the point: `rmtree` walks through a mount like any other
+    directory, and what it leaves behind is the mount, not reclaimed space.
     """
     if measured is not None and measured.crosses_mount:
-        return True
+        return "a filesystem is mounted inside it"
+
+    own = _device_of(path)
+    parent = _device_of(path.parent)
+    if own is None or parent is None:
+        # Fail closed: a path whose device cannot be read is not one to delete
+        # recursively. Other checks refuse it too, so this is defence in depth.
+        return "its filesystem could not be identified"
+    if own != parent:
+        return "it is itself a mount point"
+
     if points is None:
-        return False
+        return ""
     here = str(path)
     prefix = here + os.sep
-    return any(point == here or point.startswith(prefix) for point in points)
+    if any(point == here or point.startswith(prefix) for point in points):
+        return "a filesystem is mounted inside it"
+    return ""
 
 
 # A bare repository has no `.git` at all: its contents sit at the root. These
@@ -3086,10 +3121,11 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Re
     # `test_a_subtree_that_becomes_unreadable_between_the_two_walks` provokes.
     if not measured.complete:
         return Recheck("it can no longer be read in full, so it cannot be trusted")
-    if _crosses_a_mount(path, measured, _mount_points()):
-        # Re-read here rather than carried from the scan: a mount can appear in
-        # the minutes between, and this is the last check before `rmtree`.
-        return Recheck("a filesystem is mounted inside it")
+    # Re-read here rather than carried from the scan: a mount can appear in the
+    # minutes between, and this is the last check before `rmtree`.
+    mounted = _mount_refusal(path, measured, _mount_points())
+    if mounted:
+        return Recheck(mounted)
     if cutoff is not None and measured.newest > cutoff:
         return Recheck("something inside it changed during the scan")
 
@@ -3199,14 +3235,12 @@ def find_reclaimable(
     measured: dict = {}
     for path in candidates:
         m = _measure(path)
-        if _crosses_a_mount(path, m, points):
+        mounted = _mount_refusal(path, m, points)
+        if mounted:
             # Not the candidate's storage to free. `rmtree` walks through a mount
             # point like any other directory, so the mounted filesystem's contents
             # would go and the space would not come back.
-            print(
-                f"  skipping {path}: a filesystem is mounted inside it",
-                file=sys.stderr,
-            )
+            print(f"  skipping {path}: {mounted}", file=sys.stderr)
             continue
         if not m.complete:
             # Refused whether or not `--older-than` is in play. With it, an

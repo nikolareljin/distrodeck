@@ -202,10 +202,12 @@ What it will not offer, ever -- no flag lifts these:
   point. `rm -r` walks through a mount like any other directory, so a bind mount,
   an NFS share or a mounted image inside an ignored `build/` would have its
   *contents* deleted -- data no build reproduces, whose space does not return to
-  this disk anyway. Detected from both the mount table and a change of device
-  number during the scan, because a bind mount of the same filesystem has the
-  same device number as its parent and a separate filesystem need not appear in a
-  table this process can read.
+  this disk anyway. Three signals: a device number that changes inside the tree, a
+  device number differing from the parent's (which is the only way to notice that
+  the candidate is a mount point itself -- everything under a mount is one device),
+  and the mount table, which is what catches a bind mount of the *same* filesystem.
+  Only the last needs `/proc`, so where it cannot be read the same-device bind
+  mount is the one case that goes undetected.
 - a directory it could not read in full. A subtree the scan cannot enter is
   "could not look", not "looked and found nothing" -- it could hold a clone, and
   with `--older-than` it could hold the very file that says somebody is working
