@@ -1400,3 +1400,105 @@ class TestRepositoryStorageChecksFailClosed:
         check = distrodeck._still_eligible(target, None, False)
         assert "bare repository" in check.reason, check.reason
         assert heads.exists()
+
+
+class TestAPathThatIsNotValidUtf8DoesNotAbortTheScan:
+    """A path on Linux is bytes, and `text=True` decodes strictly.
+
+    One tracked filename that is not valid UTF-8 made `git ls-files -z` raise
+    `UnicodeDecodeError` from inside `subprocess.run`. That is neither `OSError` nor
+    `SubprocessError`, so it escaped `_git` entirely and aborted the whole scan --
+    not a refusal for one worktree, an exception out of the command.
+    """
+
+    BAD = b"odd-\xff-name.o"
+
+    @staticmethod
+    def _write_undecodable(directory, raw):
+        name = os.fsdecode(raw)
+        try:
+            (directory / name).write_bytes(b"x" * 1024)
+        except (OSError, UnicodeError):
+            pytest.skip("filesystem will not accept a non-UTF-8 filename")
+        return directory / name
+
+    def test_a_tracked_file_with_undecodable_bytes(self, repo):
+        tracked = self._write_undecodable(repo, self.BAD)
+        git(repo, "add", "-f", str(tracked))
+        make_dir(repo, "build")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert [p.name for p, _, _, _ in found] == ["build"], found
+
+    def test_such_a_file_inside_the_candidate_still_protects_it(self, repo):
+        """The refusal must still work when the tracked path is the undecodable
+        one: it is a tracked file under an ignored directory either way."""
+        target = make_dir(repo, "build")
+        tracked = self._write_undecodable(target, self.BAD)
+        git(repo, "add", "-f", str(tracked))
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_git_returns_the_bytes_rather_than_raising(self, repo):
+        tracked = self._write_undecodable(repo, self.BAD)
+        git(repo, "add", "-f", str(tracked))
+        result = distrodeck._git(repo, "ls-files", "-z")
+        assert result is not None, "_git swallowed it instead of returning output"
+        assert result.returncode == 0
+        listed = [x for x in result.stdout.split("\0") if x]
+        assert os.fsdecode(self.BAD) in listed, listed
+
+
+class TestAMountIsRefusedBeforeItIsTraversed:
+    """Rejecting a mount after measuring it means the traversal already happened.
+
+    On a slow mount that is minutes spent measuring somebody else's storage for a
+    candidate that is then skipped; on a dead one the command does not come back at
+    all. The mount table and the parent-device comparison both answer without
+    reading anything, so they are asked first.
+    """
+
+    def test_the_walks_are_never_entered(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target / "share")})
+        walked = []
+        real_measure, real_search = distrodeck._measure, distrodeck._contains_nested_git
+        monkeypatch.setattr(distrodeck, "_measure",
+                            lambda p: walked.append(("measure", str(p))) or real_measure(p))
+        monkeypatch.setattr(distrodeck, "_contains_nested_git",
+                            lambda p: walked.append(("search", str(p))) or real_search(p))
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+        assert walked == [], f"the candidate was traversed before being refused: {walked}"
+
+    def test_the_pre_delete_check_also_refuses_before_walking(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target / "share")})
+        walked = []
+        real_search = distrodeck._contains_nested_git
+        monkeypatch.setattr(distrodeck, "_contains_nested_git",
+                            lambda p: walked.append(str(p)) or real_search(p))
+        assert distrodeck._still_eligible(target, None, True).reason
+        assert walked == [], f"walked before refusing: {walked}"
+
+    def test_a_device_boundary_stops_the_measurement_descending(self, repo, monkeypatch):
+        """The fallback for a mount the table does not list: the crossing is
+        recorded, and nothing below it is read."""
+        target = make_dir(repo, "build")
+        beyond = target / "elsewhere"
+        beyond.mkdir()
+        (beyond / "huge").write_bytes(b"x" * 512 * 1024)
+        (beyond / "deeper").mkdir()
+
+        real_stat = os.stat
+        other_device = os.stat(target).st_dev + 1
+
+        def pretend(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if str(path).startswith(str(beyond)):
+                return os.stat_result(tuple(info)[:2] + (other_device,) + tuple(info)[3:])
+            return info
+
+        monkeypatch.setattr(os, "stat", pretend)
+        m = distrodeck._measure(target)
+        assert m.crosses_mount is True, "the crossing was not noticed"
+        assert m.total < 512 * 1024, (
+            f"{m.total} includes the other filesystem's contents: it descended"
+        )

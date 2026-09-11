@@ -2766,28 +2766,39 @@ def _measure(path: pathlib.Path) -> Measurement:
         nonlocal complete
         complete = False
 
+    root_device = None
     try:
         info = path.stat()
         newest = info.st_mtime
         devices.add(info.st_dev)
+        root_device = info.st_dev
     except OSError:
         complete = False
-    for root, _, files in os.walk(path, onerror=unreadable):
+    for root, dirs, files in os.walk(path, onerror=unreadable):
         try:
             info = os.stat(root)
-            newest = max(newest, info.st_mtime)
-            devices.add(info.st_dev)
-            # A directory is itself an allocation -- typically 4 KiB, and a
-            # `node_modules` is mostly directories. Leaving them out made an empty
-            # artifact directory report 0B and understated every deep tree. No
-            # `st_nlink` test here: a directory's link count is above one for `.`
-            # and each subdirectory, which is not a hard link in the sense that
-            # matters, and treating it as one would move real space into the
-            # excluded figure.
-            blocks = getattr(info, "st_blocks", None)
-            total += info.st_size if blocks is None else blocks * 512
         except OSError:
             complete = False
+            continue
+        if root_device is not None and info.st_dev != root_device:
+            # Another filesystem. Recorded and then left alone: the candidate is
+            # refused for crossing a boundary, and walking an NFS share or a
+            # bind-mounted dataset to find out how big it is would be minutes of
+            # somebody else's storage measured for nothing -- or, on a dead mount,
+            # no answer at all. One listing of the mount root is the whole cost.
+            devices.add(info.st_dev)
+            dirs[:] = []
+            continue
+        newest = max(newest, info.st_mtime)
+        devices.add(info.st_dev)
+        # A directory is itself an allocation -- typically 4 KiB, and a
+        # `node_modules` is mostly directories. Leaving them out made an empty
+        # artifact directory report 0B and understated every deep tree. No
+        # `st_nlink` test here: a directory's link count is above one for `.` and
+        # each subdirectory, which is not a hard link in the sense that matters,
+        # and treating it as one would move real space into the excluded figure.
+        blocks = getattr(info, "st_blocks", None)
+        total += info.st_size if blocks is None else blocks * 512
         for name in files:
             try:
                 info = os.lstat(os.path.join(root, name))
@@ -2830,12 +2841,27 @@ def _human_bytes(count: int) -> str:
 
 
 def _git(worktree, *args, stdin: str = None, timeout: int = 60):
+    """Run `git` in *worktree*, or None if it could not be run.
+
+    **Not `text=True`.** That decodes strictly, and a path on Linux is bytes: a
+    single tracked filename that is not valid UTF-8 made `git ls-files -z` raise
+    `UnicodeDecodeError` from inside `subprocess.run` -- which is neither `OSError`
+    nor `SubprocessError`, so it escaped this function and aborted the whole scan
+    rather than failing closed for one worktree. The filesystem encoding with
+    `surrogateescape` round-trips those bytes, so a path read out of `git` can be
+    handed back to `os` unchanged, which is what comparing it against the walk's
+    own paths requires.
+    """
     try:
         return subprocess.run(
             ["git", "-C", str(worktree), *args],
-            input=stdin, capture_output=True, text=True, timeout=timeout, check=False,
+            input=stdin, capture_output=True, timeout=timeout, check=False,
+            encoding=sys.getfilesystemencoding(), errors="surrogateescape",
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        # `UnicodeError` as well, for the encoding direction: an argument or
+        # `stdin` that the filesystem encoding cannot represent is a refusal for
+        # this worktree, not an exception out of a scan.
         return None
 
 
@@ -3192,6 +3218,13 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Re
         if any(str(t).startswith(str(path) + os.sep) for t in tracked):
             return Recheck("it now holds a tracked file")
 
+    # Before the walks, for the same reason as in the scan: answering from the
+    # mount table costs nothing, and traversing a mount to find out it was a mount
+    # can cost everything.
+    mounted = _mount_refusal(path, None, _mount_points())
+    if mounted:
+        return Recheck(mounted)
+
     nested, readable = _contains_nested_git(path)
     if nested:
         return Recheck("it now contains a repository")
@@ -3320,6 +3353,24 @@ def find_reclaimable(
                 eligible.append(path)
         candidates = eligible
 
+    # Before either walk. `_mount_refusal` answers from the mount table and a
+    # comparison with the parent's device, neither of which traverses anything --
+    # so a candidate holding an NFS share or a bind-mounted dataset is refused
+    # without its contents ever being read. Detecting that afterwards, from the
+    # measurement, meant the traversal had already happened: minutes of somebody
+    # else's storage on a slow mount, or no answer at all on a dead one. What is
+    # left for the measurement to catch is a mount the table does not list, which
+    # on Linux means `/proc` could not be read.
+    points = _mount_points()
+    unmounted = []
+    for path in candidates:
+        mounted = _mount_refusal(path, None, points)
+        if mounted:
+            print(f"  skipping {path}: {mounted}", file=sys.stderr)
+            continue
+        unmounted.append(path)
+    candidates = unmounted
+
     searched = []
     for path in candidates:
         nested, readable = _contains_nested_git(path)
@@ -3348,7 +3399,6 @@ def find_reclaimable(
     # the 8,000-odd `__pycache__` directories sit inside a matched `build`, the
     # scan takes tens of seconds rather than a few. The alternative is reporting
     # less than is reclaimable, which is the bug this ordering fixes.
-    points = _mount_points()
     measured: dict = {}
     for path in candidates:
         m = _measure(path)
