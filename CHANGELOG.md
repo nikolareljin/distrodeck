@@ -90,6 +90,17 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  The last check before each deletion **re-reads the table**, which the comment over
+  it had been claiming while the code used the snapshot taken before two full-tree
+  walks -- minutes old on a large candidate, and exactly as stale as the scan's was
+  when the re-check started. Both directions are asked again. The
+  nested-repository walk also stops at a device boundary, as the measurement already
+  did: it runs first, so on the degraded path with no mount table it was the walk that
+  crossed into a dead or enormous subtree while the refusal meant to prevent that
+  waited its turn. Recording the crossing stays the measurement's job; the search only
+  has to not walk through it. That costs one `stat` per directory and took the
+  whole-workspace scan from 29.5s to 31.8s.
+
   **And a mount appearing *above* a candidate is refused before deletion.** Every
   other mount check looks at or below the path it is given, and discovery's refusal to
   descend uses one snapshot of the table -- so a mount appearing after that walk left a

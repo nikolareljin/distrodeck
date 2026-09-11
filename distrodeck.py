@@ -3264,7 +3264,18 @@ def _contains_nested_git(path: pathlib.Path) -> tuple:
         nonlocal complete
         complete = False
 
+    # The same device boundary `_measure` stops at. Without it this walk crossed
+    # first: it runs before the measurement, so a dead or enormous NFS subtree was
+    # traversed here -- or hung the command -- while the refusal that was supposed to
+    # prevent that waited its turn. Recording the crossing is the measurement's job;
+    # this only has to not walk through it.
+    root_device = _device_of(path)
     for root, dirs, files in os.walk(path, onerror=unreadable):
+        if root_device is not None:
+            here = _device_of(root)
+            if here is not None and here != root_device:
+                dirs[:] = []
+                continue
         if ".git" in dirs or ".git" in files:  # a file, for worktrees and submodules
             return True, complete
         if _is_bare_repository(list(dirs) + list(files)):
@@ -3357,9 +3368,17 @@ def _still_eligible(
     # `test_a_subtree_that_becomes_unreadable_between_the_two_walks` provokes.
     if not measured.complete:
         return Recheck("it can no longer be read in full, so it cannot be trusted")
-    # Re-read here rather than carried from the scan: a mount can appear in the
-    # minutes between, and this is the last check before `rmtree`.
-    mounted = _mount_refusal(path, measured, points)
+    # Re-read, and this time it really is a re-read. The snapshot above was taken
+    # before two full-tree walks that take minutes on a large candidate, so by here
+    # it is exactly as stale as the scan's was when this function started -- and the
+    # comment that used to sit here claimed a refresh while the code had stopped
+    # doing one. Both directions are asked again: a bind mount of the same device
+    # inside the candidate, and a mount that has appeared above it.
+    points = _mount_points()
+    mounted = (
+        _mount_refusal(path, measured, points)
+        or _mount_above(path, workspace, points)
+    )
     if mounted:
         return Recheck(mounted)
     if cutoff is not None and measured.newest > cutoff:

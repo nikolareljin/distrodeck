@@ -1849,3 +1849,112 @@ class TestADirectorySymlinkInsideACandidateIsAccountedFor:
         (elsewhere / "huge").write_bytes(b"x" * 512 * 1024)
         (target / "link").symlink_to(elsewhere, target_is_directory=True)
         assert distrodeck._measure(target).total < 256 * 1024
+
+
+class TestTheLastCheckReadsTheTableAgain:
+    """The snapshot that let the two walks start is minutes old by the time they end.
+
+    `_still_eligible` reads the table, walks the candidate twice -- for a nested
+    repository and to measure it -- and then decided from the snapshot it had taken
+    before both. A bind mount of the same device, or a mount above the candidate,
+    appearing *during* those walks was absent from the last check before `rmtree`. The
+    comment sitting over that line claimed a re-read the code had stopped doing.
+    """
+
+    def test_a_mount_appearing_during_the_walks_is_caught(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        reads = {"n": 0}
+
+        def clean_then_mounted():
+            reads["n"] += 1
+            # Clean for the check before the walks; mounted for the one after.
+            return set() if reads["n"] == 1 else {str(target)}
+
+        monkeypatch.setattr(distrodeck, "_mount_points", clean_then_mounted)
+        check = distrodeck._still_eligible(target, None, True, repo.parent)
+        assert reads["n"] >= 2, "the table was read only once"
+        assert check.reason == "it is itself a mount point", check.reason
+
+    def test_an_ancestor_mount_appearing_during_the_walks_is_caught(self, repo, monkeypatch):
+        holder = repo / "holder"
+        target = make_dir(repo, "holder/build")
+        reads = {"n": 0}
+
+        def clean_then_mounted():
+            reads["n"] += 1
+            return set() if reads["n"] == 1 else {str(holder)}
+
+        monkeypatch.setattr(distrodeck, "_mount_points", clean_then_mounted)
+        check = distrodeck._still_eligible(target, None, False, repo)
+        assert "now mounted" in check.reason, check.reason
+
+    def test_a_table_that_stays_clean_still_approves(self, repo, monkeypatch):
+        """The control: re-reading must not become a refusal of its own."""
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: set())
+        assert distrodeck._still_eligible(target, None, True, repo.parent).reason == ""
+
+
+class TestTheRepositoryWalkStopsAtADeviceBoundary:
+    """It runs before the measurement, so without this it crossed first.
+
+    `_measure` stops at a device boundary, but the nested-repository search goes
+    first -- so on the degraded path, with no mount table, a dead or enormous NFS
+    subtree was traversed here, or hung the command, while the refusal meant to
+    prevent exactly that waited its turn.
+    """
+
+    @staticmethod
+    def _tree(repo):
+        mounted = repo / "build" / "mounted"
+        mounted.mkdir(parents=True)
+        (repo / "build" / "blob").write_bytes(b"x" * 1024)
+        vendor = mounted / "vendor"
+        vendor.mkdir()
+        subprocess.run(["git", "-C", str(vendor), "init", "-q"],
+                       check=True, capture_output=True)
+        return repo / "build", mounted
+
+    def test_it_does_not_enter_the_other_device(self, repo, monkeypatch):
+        target, mounted = self._tree(repo)
+        real_device = distrodeck._device_of
+        monkeypatch.setattr(distrodeck, "_device_of",
+                            lambda p: real_device(p) + 1
+                            if str(p).startswith(str(mounted)) else real_device(p))
+        seen = []
+        real_walk = os.walk
+
+        def watched(top, *args, **kwargs):
+            for root, dirs, files in real_walk(top, *args, **kwargs):
+                seen.append(root)
+                yield root, dirs, files
+
+        monkeypatch.setattr(os, "walk", watched)
+        nested, readable = distrodeck._contains_nested_git(target)
+        inside = [r for r in seen if r.startswith(str(mounted / "vendor"))]
+        assert inside == [], f"walked into the other filesystem: {inside}"
+        assert nested is False, (
+            "the repository beyond the boundary was reported, which means it walked "
+            "there -- the crossing is the measurement's refusal to make, not this one's"
+        )
+
+    def test_the_control_finds_it_on_the_same_device(self, repo):
+        """Without the boundary it is an ordinary nested repository, and refused."""
+        target, _ = self._tree(repo)
+        assert distrodeck._contains_nested_git(target) == (True, True)
+
+    def test_the_candidate_is_still_refused_by_the_measurement(self, repo, monkeypatch):
+        """Not walking there must not turn into offering it: `_measure` records the
+        crossing and `_mount_refusal` refuses on it."""
+        target, mounted = self._tree(repo)
+        real_stat = os.stat
+        other = real_stat(target).st_dev + 1
+
+        def pretend(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if str(path).startswith(str(mounted)):
+                return os.stat_result(tuple(info)[:2] + (other,) + tuple(info)[3:])
+            return info
+
+        monkeypatch.setattr(os, "stat", pretend)
+        assert distrodeck._measure(target).crosses_mount is True
