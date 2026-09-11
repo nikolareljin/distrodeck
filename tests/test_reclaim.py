@@ -1,8 +1,8 @@
 """Reclaiming disk that a build can make again.
 
 A workspace of checkouts is mostly not source. Measured on one machine, 90 GB
-across roughly a hundred repositories: 33.8 GB of `build/`, 15.5 GB of Rust
-`target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/` -- 59.5 GB in
+across roughly a hundred repositories: 34.1 GB of `build/`, 15.6 GB of Rust
+`target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/` -- 60.0 GB in
 total, plus a further 3.3 GB of hard-linked content deliberately excluded from
 that figure. About two thirds of the workspace, none of it authored by anybody.
 
@@ -194,7 +194,15 @@ class TestSizeIsWhatDeletionWouldFree:
         m = distrodeck._measure(target)
         size, linked = m.total, m.linked
         assert linked > 0, "the linked inode should be reported separately"
-        assert size == 0, "and excluded from the total that deletion would free"
+        # Not zero: the directory is an allocation of its own. What must be absent
+        # is the linked file's bytes, so the total is the directory and nothing
+        # else.
+        blocks = getattr(os.stat(target), "st_blocks", None)
+        own = os.stat(target).st_size if blocks is None else blocks * 512
+        assert size == own, (
+            f"{size} is more than the directory's own {own}: the linked file's "
+            "bytes are in the total that deletion would free"
+        )
 
     def test_ordinary_files_are_counted(self, repo):
         target = make_dir(repo, "build", size=64 * 1024)
@@ -1071,3 +1079,107 @@ class TestACandidateThatIsItselfAMountIsCaughtWithoutTheTable:
         missing = repo / "build"
         assert (distrodeck._mount_refusal(missing, None, None)
                 == "its filesystem could not be identified")
+
+
+class TestDirectoriesAreAnAllocationToo:
+    """A directory costs blocks, and a `node_modules` is mostly directories.
+
+    Only files were added to the total, so an accepted artifact directory holding
+    nothing reported `0B` -- a figure that says "deleting this frees nothing" about
+    a tree that frees real space -- and every deep tree understated both the
+    reclaimable and the freed total.
+    """
+
+    def test_an_empty_artifact_directory_does_not_report_zero(self, repo):
+        empty = repo / "build"
+        empty.mkdir()
+        assert distrodeck._measure(empty).total > 0
+
+    def test_a_tree_of_empty_directories_grows_the_total(self, repo):
+        shallow = make_dir(repo, "build", size=1024)
+        deep = make_dir(repo, "target", size=1024)
+        for n in range(40):
+            (deep / f"pkg{n}" / "sub").mkdir(parents=True)
+        assert distrodeck._measure(deep).total > distrodeck._measure(shallow).total
+
+    def test_a_directorys_link_count_is_not_treated_as_a_hard_link(self, repo):
+        """`st_nlink` is above one for every directory with subdirectories.
+
+        Applying the hard-link rule to directories would move real, freeable space
+        into the excluded figure, which is the one number that exists to explain
+        why the total is lower than expected.
+        """
+        target = make_dir(repo, "build", size=1024)
+        (target / "sub").mkdir()
+        assert os.stat(target).st_nlink > 1, "the premise of this test"
+        m = distrodeck._measure(target)
+        assert m.linked == 0, "a directory was counted as hard-linked content"
+        assert m.linked_inodes == {}
+
+
+class TestASymlinkNamedLikeAnArtifactIsNotOne:
+    """`os.walk` lists a symlink to a directory in `dirs` even with
+    `followlinks=False`.
+
+    A symlink named `build` therefore arrived as a candidate, and then measured as
+    its *target*, because handing a symlink to `os.walk` as the top path resolves
+    it -- so the report claimed space that deleting the link would not free.
+    `shutil.rmtree` then refuses a directory symlink outright, so `--apply` failed
+    on it, which since the exit-status fix means the whole run reports failure.
+    """
+
+    def test_it_is_not_offered(self, repo, tmp_path):
+        """With the Git filter off, so the symlink check is what refuses.
+
+        Written with the filter on first, and it passed while the symlink check was
+        removed: git's `build/` pattern matches directories only, so `check-ignore`
+        had already rejected the symlink and the test proved nothing about the
+        check it was written for.
+        """
+        elsewhere = tmp_path / "real-output"
+        elsewhere.mkdir()
+        (elsewhere / "blob").write_bytes(b"x" * 256 * 1024)
+        (repo / "build").symlink_to(elsewhere, target_is_directory=True)
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS,
+                                            require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [], found
+
+    def test_with_the_git_filter_off_a_real_directory_still_is(self, repo):
+        """The control for the test above: `--any-directory` does offer things, so
+        the empty result there is the symlink check and not the flag."""
+        make_dir(repo, "build")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS,
+                                            require_git_ignored=False)
+        assert [p.name for p, _, _, _ in found] == ["build"], found
+
+    def test_the_git_filter_also_declines_it(self, repo, tmp_path):
+        """Defence in depth, and the reason the first version of this test lied:
+        `build/` with a trailing slash matches a directory, and git treats a
+        symlink as a file."""
+        elsewhere = tmp_path / "real-output"
+        elsewhere.mkdir()
+        (repo / "build").symlink_to(elsewhere, target_is_directory=True)
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_measuring_one_would_have_reported_the_targets_size(self, repo, tmp_path):
+        """The premise, asserted rather than assumed: this is what was wrong."""
+        elsewhere = tmp_path / "real-output"
+        elsewhere.mkdir()
+        (elsewhere / "blob").write_bytes(b"x" * 256 * 1024)
+        link = repo / "build"
+        link.symlink_to(elsewhere, target_is_directory=True)
+        assert distrodeck._measure(link).total >= 256 * 1024
+
+    def test_the_pre_delete_check_refuses_one(self, repo, tmp_path):
+        """A directory replaced by a symlink between the scan and the deletion."""
+        elsewhere = tmp_path / "real-output"
+        elsewhere.mkdir()
+        link = repo / "build"
+        link.symlink_to(elsewhere, target_is_directory=True)
+        check = distrodeck._still_eligible(link, None, True)
+        assert check.reason == "it is a symbolic link now", check.reason
+
+    def test_a_real_directory_of_the_same_name_still_is(self, repo):
+        make_dir(repo, "build")
+        assert [p.name for p, _, _, _ in
+                distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]

@@ -2608,9 +2608,9 @@ def maybe_cleanup_kernels(keep: int) -> None:
 # ---------------------------------------------------------------------------
 #
 # A workspace of development checkouts is mostly not source. Measured on one
-# machine, 90 GB across roughly a hundred repositories: 33.8 GB of `build/`,
-# 15.5 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/`
-# -- 59.5 GB in total, about two thirds, none of it authored by anybody. A
+# machine, 90 GB across roughly a hundred repositories: 34.1 GB of `build/`,
+# 15.6 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/`
+# -- 60.0 GB in total, about two thirds, none of it authored by anybody. A
 # further 3.3 GB is hard-linked and deliberately left out of that figure,
 # because removing one name for an inode frees nothing while another survives.
 #
@@ -2717,7 +2717,9 @@ def _measure(path: pathlib.Path) -> Measurement:
 
     **Allocated blocks, not apparent size.** `st_size` is the file's length, not
     the space on disk: a sparse build artifact reports far more than deleting it
-    returns.
+    returns. Directories are counted too -- each is an allocation of its own, a
+    `node_modules` is mostly directories, and leaving them out made an empty
+    artifact directory report `0B`.
 
     **Hard-linked inodes are excluded entirely, not counted once.** Counting the
     first occurrence still overstates the total whenever another link to the
@@ -2775,6 +2777,15 @@ def _measure(path: pathlib.Path) -> Measurement:
             info = os.stat(root)
             newest = max(newest, info.st_mtime)
             devices.add(info.st_dev)
+            # A directory is itself an allocation -- typically 4 KiB, and a
+            # `node_modules` is mostly directories. Leaving them out made an empty
+            # artifact directory report 0B and understated every deep tree. No
+            # `st_nlink` test here: a directory's link count is above one for `.`
+            # and each subdirectory, which is not a hard link in the sense that
+            # matters, and treating it as one would move real space into the
+            # excluded figure.
+            blocks = getattr(info, "st_blocks", None)
+            total += info.st_size if blocks is None else blocks * 512
         except OSError:
             complete = False
         for name in files:
@@ -3087,6 +3098,11 @@ def _still_eligible(path: pathlib.Path, cutoff, require_git_ignored: bool) -> Re
     Fails closed: anything unreadable, or any git call that does not answer, is
     a refusal rather than a pass.
     """
+    if path.is_symlink():
+        # Checked before `is_dir`, which follows the link and answers about the
+        # target. A symlink appearing where a directory was is not the thing that
+        # was measured.
+        return Recheck("it is a symbolic link now")
     if not path.is_dir():
         return Recheck("it is no longer there")
 
@@ -3172,7 +3188,17 @@ def find_reclaimable(
     for root, dirs, _ in os.walk(workspace, onerror=lambda _: None):
         dirs[:] = [d for d in dirs if d != ".git"]
         for name in [d for d in dirs if d in names]:
-            candidates.append(pathlib.Path(root) / name)
+            path = pathlib.Path(root) / name
+            # `os.walk` lists a symlink to a directory in `dirs` even with
+            # `followlinks=False`, so a symlink named `build` arrived here as a
+            # candidate -- and then measured as its *target*, because handing a
+            # symlink to `os.walk` as the top path resolves it. The report claimed
+            # the target's size, and `shutil.rmtree` refuses a directory symlink
+            # outright, so `--apply` failed on it. Deleting one would free only the
+            # link anyway, and somebody made it on purpose.
+            if path.is_symlink():
+                continue
+            candidates.append(path)
 
     if require_git_ignored:
         by_worktree: dict = {}

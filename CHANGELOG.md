@@ -8,8 +8,8 @@ This project follows Keep a Changelog and Semantic Versioning.
 ### Added
 - **`distrodeck reclaim`: disk that a build can make again.** A workspace of
   development checkouts is mostly not source. Measured on one machine, 90 GB
-  across roughly a hundred repositories: **33.8 GB of `build/`, 15.5 GB of Rust
-  `target/`, 5.2 GB of `.dart_tool/`, 3.1 GB of `node_modules/`** -- 59.5 GB in
+  across roughly a hundred repositories: **34.1 GB of `build/`, 15.6 GB of Rust
+  `target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/`** -- 60.0 GB in
   total, about two thirds of the workspace, none of it authored by anybody.
   Reports by default and deletes only with `--apply`. That is the reverse of its
   sibling `cleanup-kernels`, deliberately: this command can remove tens of
@@ -22,10 +22,10 @@ This project follows Keep a Changelog and Semantic Versioning.
   without a network -- so virtualenvs are behind `--include-environments` rather
   than offered as free.
   `--older-than DAYS` protects work in progress. Measured on the same machine and
-  the same default set as the 59.5 GB above: **59.5 GB falls to 46.1 GB at seven
-  days and 29.4 GB at thirty**, the difference being projects actively being
+  the same default set as the 60.0 GB above: **60.0 GB falls to 46.4 GB at seven
+  days and 29.6 GB at thirty**, the difference being projects actively being
   built. (`--include-environments` is the flag that raises the baseline, to
-  69.0 GB -- an earlier draft of this entry quoted figures from that wider set
+  69.5 GB -- an earlier draft of this entry quoted figures from that wider set
   against the default total, which cannot be compared.)
   A candidate must be **ignored by the Git repository that contains it**. The
   name is not evidence: `build/` and `target/` are ordinary names for authored
@@ -43,6 +43,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   counts as well: `git clone --bare` has no `.git` entry at all, which made the
   kind of repository somebody vendors into a build directory invisible to the
   check meant to protect it.
+
+  A **symlink named like an artifact is not one**. `os.walk` lists a symlink to a
+  directory in `dirs` even with `followlinks=False`, so a symlink called `build`
+  arrived as a candidate and was then measured as its *target*, because handing a
+  symlink to `os.walk` as the top path resolves it -- the report claimed space that
+  removing the link would not free, and `shutil.rmtree` refuses a directory symlink
+  outright, so `--apply` failed on it. Refused during discovery and again
+  immediately before deletion, where `is_dir()` would have followed the link and
+  answered about the target.
 
   A directory with **a filesystem mounted inside it is refused**, as is one that
   is itself a mount point. `shutil.rmtree` walks through a mount point like any
@@ -116,10 +125,18 @@ This project follows Keep a Changelog and Semantic Versioning.
   be minutes old -- a `target/` that kept compiling in between was not the size
   it was found at.
 
-  Age comes from the **newest file anywhere inside**, not the directory's own
-  mtime, which changes only when its immediate entries do -- so an actively
-  compiling `target/` whose root entry is weeks old is no longer mistaken for
-  stale. Size is **allocated blocks**, not apparent length, and **hard-linked
+  Age comes from the newest mtime of **anything inside, file or directory**,
+  rather than the candidate's own entry -- a directory's mtime changes only when
+  its immediate entries do, so an actively compiling `target/` whose root entry is
+  weeks old is no longer mistaken for stale. Directories count as well as files,
+  which means creating or removing even an empty one makes a tree recent: that is
+  activity, and the mistake it causes is refusing to delete rather than deleting
+  something in use. Size is **allocated blocks**, not apparent length, and
+  directories are an allocation too -- counting only files made an empty artifact
+  directory report `0B` and understated every deep tree, and a `node_modules` is
+  mostly directories. A directory's `st_nlink` is above one for `.` and each
+  subdirectory, which is not a hard link in the sense that matters, so the
+  hard-link rule is not applied to them. **Hard-linked
   content is excluded rather than counted once**: removing one name for an inode
   frees nothing while another survives, and proving every name is inside the
   deletion set would mean indexing the filesystem. 3.3 GB fell out of the

@@ -159,7 +159,7 @@ Options:
 ### reclaim
 
 Report, and with `--apply` remove, build output under a workspace of checkouts.
-A workspace is mostly not source: measured on one machine, 59.5 GB of 90 GB was
+A workspace is mostly not source: measured on one machine, 60.0 GB of 90 GB was
 regenerable output in `build/`, `target/`, `.dart_tool/` and `node_modules/`.
 
 ```
@@ -174,9 +174,9 @@ Options:
   reverse of `cleanup-kernels` on purpose: this can remove tens of gigabytes
   across a hundred repositories in a second, so the safe direction is the
   default and acting is the flag.
-- `--older-than DAYS`: only directories whose newest file inside is older than
-  this. Protects work in progress. A negative value is refused. On the measured
-  machine the default 59.5 GB falls to 46.1 GB at seven days and 29.4 GB at
+- `--older-than DAYS`: only directories untouched for this many days. Protects
+  work in progress. A negative value is refused. On the measured machine the
+  default 60.0 GB falls to 46.4 GB at seven days and 29.6 GB at
   thirty. A tree's age is the newest mtime of **anything inside it, file or
   directory** -- so creating or removing even an empty directory in a build tree
   makes it recent. That is deliberate: it is activity, and the mistake it causes
@@ -198,6 +198,10 @@ What it will not offer, ever -- no flag lifts these:
   history. A `.git` file counts as well as a directory, since that is how
   submodules and linked worktrees appear, and a bare clone counts too: it has no
   `.git` entry at all, only `HEAD`, `objects` and `refs` at its root.
+- a symlink, however it is named. `os.walk` lists a symlink to a directory among
+  directories, so one called `build` was offered and measured as its target --
+  space that removing the link would not free. Removing it would free only the
+  link, and somebody made it deliberately.
 - a directory with a filesystem mounted inside it, or which is itself a mount
   point. `rm -r` walks through a mount like any other directory, so a bind mount,
   an NFS share or a mounted image inside an ignored `build/` would have its
@@ -229,7 +233,9 @@ does not cost the rest of the run, and a cron entry or CI step can tell that the
 disk was not actually freed. A *skip* is not a failure: that is the pre-delete
 re-check doing its job, and the exit status stays zero for it.
 
-Reported sizes are **allocated blocks**, not apparent file length, and
+Reported sizes are **allocated blocks**, not apparent file length -- directories
+  included, since each is an allocation of its own and a `node_modules` is mostly
+  directories -- and
 hard-linked content is excluded from the total and reported separately: removing
 one name for an inode frees nothing while another survives, so the figure is a
 floor rather than an estimate.
