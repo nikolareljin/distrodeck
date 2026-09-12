@@ -3240,16 +3240,29 @@ def _mount_refusal(path: pathlib.Path, measured, points) -> str:
     return ""
 
 
-# A bare repository has no `.git` at all: its contents sit at the root. These
-# three together are what `git` itself looks for, and what distinguishes one from
-# a directory that merely happens to contain a file called HEAD.
-_BARE_REPOSITORY_MARKERS = ("HEAD", "objects", "refs")
+# A bare repository has no `.git` at all: its contents sit at the root, and these
+# markers are what distinguish one from a directory that merely happens to hold a file
+# called HEAD.
+#
+# **Two layouts, because `refs/` is not the only ref storage.** `git init --bare
+# --ref-format=reftable` (2.45 onward) writes `HEAD`, `objects` and `reftable/` and no
+# `refs/` at all -- so a check that required `refs` missed exactly the repository a
+# newer git creates, and one vendored into an ignored `build/` would have been deleted
+# with its history. Matching either layout costs nothing; requiring the intersection
+# would match any directory with a `HEAD` file in it.
+_BARE_REPOSITORY_LAYOUTS = (
+    ("HEAD", "objects", "refs"),      # the files backend, every version of git
+    ("HEAD", "objects", "reftable"),  # `--ref-format=reftable`, git 2.45 onward
+)
 
 
 def _is_bare_repository(entries) -> bool:
     """Whether a directory's own entries make it a bare repository's root."""
     here = set(entries)
-    return all(marker in here for marker in _BARE_REPOSITORY_MARKERS)
+    return any(
+        all(marker in here for marker in layout)
+        for layout in _BARE_REPOSITORY_LAYOUTS
+    )
 
 
 def _marker_present(path: pathlib.Path):
@@ -3282,8 +3295,11 @@ def _probe_bare_repository(path: pathlib.Path) -> bool:
     A probe that cannot answer counts as a marker being present. Fail-closed here
     costs a directory that is not reclaimed; failing open costs a branch.
     """
-    answers = [_marker_present(path / marker) for marker in _BARE_REPOSITORY_MARKERS]
-    return all(answer is not False for answer in answers)
+    for layout in _BARE_REPOSITORY_LAYOUTS:
+        answers = [_marker_present(path / marker) for marker in layout]
+        if all(answer is not False for answer in answers):
+            return True
+    return False
 
 
 def _git_storage_above(path: pathlib.Path) -> str:

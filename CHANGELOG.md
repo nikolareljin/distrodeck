@@ -42,7 +42,9 @@ This project follows Keep a Changelog and Semantic Versioning.
   that is how submodules and linked worktrees appear, and a **bare** repository
   counts as well: `git clone --bare` has no `.git` entry at all, which made the
   kind of repository somebody vendors into a build directory invisible to the
-  check meant to protect it.
+  check meant to protect it. **Both ref backends count**: `git init --bare
+  --ref-format=reftable`, from git 2.45, stores refs in `reftable/` and has no `refs/`
+  at all, so requiring `refs` missed exactly the repository a newer git creates.
 
   **Nothing inside a bare repository, and no scan rooted inside `.git`.** A loose
   ref is a path: a branch called `build/main` is a directory named `build` under

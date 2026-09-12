@@ -2541,3 +2541,82 @@ class TestAKnownMountIsRefusedBeforeAnythingTouchesIt:
         monkeypatch.setattr(distrodeck, "_mount_points", lambda: set())
         assert [p.name for p, _, _, _ in
                 distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]
+
+
+class TestAReftableBareRepositoryIsRecognisedToo:
+    """`refs/` is not the only ref storage a bare repository has.
+
+    `git init --bare --ref-format=reftable`, from git 2.45, writes `HEAD`, `objects`
+    and `reftable/` and no `refs/` at all. A check that required `refs` therefore
+    missed exactly the repository a newer git creates -- and one vendored into an
+    ignored `build/` would have been deleted with its history.
+
+    The detection is structural, so the layout is built by hand here and the same
+    assertions are repeated against a real `git init` when the local git is new enough.
+    """
+
+    @staticmethod
+    def _reftable_layout(at):
+        at.mkdir(parents=True, exist_ok=True)
+        (at / "HEAD").write_text("ref: refs/heads/main\n")
+        (at / "objects").mkdir(exist_ok=True)
+        (at / "reftable").mkdir(exist_ok=True)
+        (at / "reftable" / "tables.list").write_text("")
+        assert not (at / "refs").exists(), "the premise: no refs/ directory"
+        return at
+
+    @staticmethod
+    def _real_reftable(at):
+        result = subprocess.run(
+            ["git", "init", "--bare", "--ref-format=reftable", "-q", str(at)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip("this git does not support --ref-format=reftable")
+        return at
+
+    def test_the_entry_test_accepts_it(self, tmp_path):
+        at = self._reftable_layout(tmp_path / "vendor.git")
+        assert distrodeck._is_bare_repository(os.listdir(at)) is True
+
+    def test_the_probe_accepts_it(self, tmp_path):
+        at = self._reftable_layout(tmp_path / "vendor.git")
+        assert distrodeck._probe_bare_repository(at) is True
+
+    def test_a_candidate_containing_one_is_refused(self, repo, tmp_path):
+        target = make_dir(repo, "build")
+        self._reftable_layout(target / "vendor.git")
+        nested, readable = distrodeck._contains_nested_git(target)
+        assert nested is True and readable is True
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_the_walk_does_not_descend_into_one(self, repo, tmp_path):
+        """Its contents are storage, and a ref is a path: `refs/heads/build` under the
+        legacy backend, and a `build` directory is a `build` directory."""
+        bare = self._reftable_layout(repo / "vendor.git")
+        (bare / "objects" / "build").mkdir()
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS,
+                                            require_git_ignored=False)
+        assert [str(p) for p, _, _, _ in found] == [], found
+
+    def test_a_workspace_inside_one_is_refused(self, tmp_path):
+        bare = self._reftable_layout(tmp_path / "vendor.git")
+        with pytest.raises(ValueError, match="bare repository"):
+            distrodeck.find_reclaimable(bare / "objects", ARTIFACTS,
+                                        require_git_ignored=False)
+
+    def test_a_directory_with_only_head_is_not_one(self, tmp_path):
+        """Matching either layout must not become matching any subset of one."""
+        at = tmp_path / "not-a-repo"
+        at.mkdir()
+        (at / "HEAD").write_text("not a ref\n")
+        assert distrodeck._is_bare_repository(os.listdir(at)) is False
+        (at / "objects").mkdir()
+        assert distrodeck._is_bare_repository(os.listdir(at)) is False
+
+    def test_against_a_real_reftable_repository(self, repo, tmp_path):
+        """Skipped on git older than 2.45, which cannot create one."""
+        target = make_dir(repo, "build")
+        self._real_reftable(target / "vendor.git")
+        assert distrodeck._contains_nested_git(target)[0] is True
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []

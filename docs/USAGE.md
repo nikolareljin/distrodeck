@@ -197,7 +197,9 @@ What it will not offer, ever -- no flag lifts these:
   while `build/vendor` is itself a clone, and deleting it would take that
   history. A `.git` file counts as well as a directory, since that is how
   submodules and linked worktrees appear, and a bare clone counts too: it has no
-  `.git` entry at all, only `HEAD`, `objects` and `refs` at its root.
+  `.git` entry at all, only `HEAD`, `objects` and its ref storage at the root -- `refs/`
+  with the traditional backend, or `reftable/` for a repository created by git 2.45 or
+  newer with `--ref-format=reftable`.
 - anything inside a bare repository, and any scan rooted inside `.git` or inside a
   bare repository -- at its root or below it. A loose ref is a path: a branch called
   `build/main` is a directory named `build` under `refs/heads`, so deleting it would
