@@ -3248,8 +3248,10 @@ def _mount_refusal(path: pathlib.Path, measured, points) -> str:
 # --ref-format=reftable` (2.45 onward) writes `HEAD`, `objects` and `reftable/` and no
 # `refs/` at all -- so a check that required `refs` missed exactly the repository a
 # newer git creates, and one vendored into an ignored `build/` would have been deleted
-# with its history. Matching either layout costs nothing; requiring the intersection
-# would match any directory with a `HEAD` file in it.
+# with its history. Matching **either** layout costs nothing, and it has to be either
+# rather than their intersection: `HEAD` plus `objects` alone would accept a directory
+# that has no ref storage of any kind, which is not a repository. If a future layout
+# keeps `refs/` as well, the first entry matches it and nothing needs changing.
 _BARE_REPOSITORY_LAYOUTS = (
     ("HEAD", "objects", "refs"),      # the files backend, every version of git
     ("HEAD", "objects", "reftable"),  # `--ref-format=reftable`, git 2.45 onward

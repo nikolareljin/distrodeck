@@ -2620,3 +2620,40 @@ class TestAReftableBareRepositoryIsRecognisedToo:
         self._real_reftable(target / "vendor.git")
         assert distrodeck._contains_nested_git(target)[0] is True
         assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+
+class TestHeadAndObjectsAloneAreNotARepository:
+    """The intersection of the two layouts is not a layout.
+
+    `HEAD` + `objects` is what the two have in common, and accepting that would accept a
+    directory with no ref storage of any kind -- which is not a repository, and is a
+    shape a build tree could produce by accident. Matching either complete layout is the
+    point; matching what they share is the mistake one edit away from it.
+    """
+
+    def test_head_and_objects_without_ref_storage(self, tmp_path):
+        at = tmp_path / "looks-close"
+        at.mkdir()
+        (at / "HEAD").write_text("ref: refs/heads/main\n")
+        (at / "objects").mkdir()
+        assert distrodeck._is_bare_repository(os.listdir(at)) is False
+        assert distrodeck._probe_bare_repository(at) is False
+
+    def test_either_complete_layout_is_accepted(self, tmp_path):
+        for storage in ("refs", "reftable"):
+            at = tmp_path / f"bare-{storage}"
+            at.mkdir()
+            (at / "HEAD").write_text("ref: refs/heads/main\n")
+            (at / "objects").mkdir()
+            (at / storage).mkdir()
+            assert distrodeck._is_bare_repository(os.listdir(at)) is True, storage
+            assert distrodeck._probe_bare_repository(at) is True, storage
+
+    def test_a_repository_with_both_still_matches(self, tmp_path):
+        """A future layout keeping `refs/` alongside `reftable/` needs no change."""
+        at = tmp_path / "both"
+        at.mkdir()
+        (at / "HEAD").write_text("ref: refs/heads/main\n")
+        for name in ("objects", "refs", "reftable"):
+            (at / name).mkdir()
+        assert distrodeck._is_bare_repository(os.listdir(at)) is True
