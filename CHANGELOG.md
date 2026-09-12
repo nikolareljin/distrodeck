@@ -229,10 +229,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   be minutes old -- a `target/` that kept compiling in between was not the size
   it was found at.
 
-  Age comes from the newest mtime of **anything inside, file or directory**,
-  rather than the candidate's own entry -- a directory's mtime changes only when
-  its immediate entries do, so an actively compiling `target/` whose root entry is
-  weeks old is no longer mistaken for stale. Directories count as well as files,
+  Age comes from the newest mtime of **anything inside, file or directory -- and of
+  the candidate itself**. All three contribute: the measurement starts from the
+  candidate's own `stat`, the walk yields it as its first root, and every descendant
+  is stat'd on the way, so adding or removing an immediate child does make a tree
+  recent. The reason descendants are included is that a directory's mtime changes
+  only when its *immediate* entries do, so an actively compiling `target/` whose
+  root entry is weeks old is no longer mistaken for stale -- which is an argument
+  for counting what is inside, not for ignoring the root. Directories count as well
+  as files,
   which means creating or removing even an empty one makes a tree recent: that is
   activity, and the mistake it causes is refusing to delete rather than deleting
   something in use. Size is **allocated blocks**, not apparent length, and

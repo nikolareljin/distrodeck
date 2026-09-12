@@ -3328,9 +3328,10 @@ def _still_eligible(
     3. Then the **expensive** ones, whose results only need to be accurate as of
        before the cheap authoritative checks: the measurement, then the
        nested-repository walk.
-    4. Then the mount table **again**, and the **git questions last** -- ignored, and
-       holding no tracked file. Those are the two a person can change with one
-       command, they cost two subprocesses rather than a traversal, and nothing after
+    4. Then everything cheap enough to repeat, in rising cost: the mount table
+       **again**, the repository-storage climb **again**, and the **git questions
+       last** -- ignored, and holding no tracked file. Those are the things a person
+       can change with one command, none of them costs a traversal, and nothing after
        them does any I/O but `rmtree` itself.
 
     What remains is the window between the last check and `rmtree`, which no ordering
@@ -3387,6 +3388,15 @@ def _still_eligible(
     )
     if mounted:
         return Recheck(mounted)
+
+    # Repository storage again, for the same reason the table is re-read: the verdict
+    # in step 2 is two full traversals old, `git init --bare` over an existing
+    # directory turns an ancestor into one in a moment, and with `--any-directory`
+    # there is no git check after this to notice. Cheap enough to repeat -- three
+    # `lstat`s per ancestor level, no subprocess -- unlike the traversals above.
+    storage = _git_storage_above(path)
+    if storage:
+        return Recheck(storage)
 
     # ...and git last. A file force-added during the measurement used to reach
     # `rmtree`, because the only thing refreshed after that traversal was the mount

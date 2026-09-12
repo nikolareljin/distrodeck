@@ -2133,3 +2133,80 @@ class TestNothingTouchesTheCandidateBeforeTheMountTable:
                 == "it is itself a mount point")
         assert (distrodeck._mount_refusal(target, None, {str(target / "inner")})
                 == "a filesystem is mounted inside it")
+
+
+class TestRepositoryStorageIsRecheckedAfterTheTraversals:
+    """The verdict in step 2 is two full traversals old by the time it is used.
+
+    `git init --bare` over a directory that already exists turns an ancestor into a
+    repository in a moment, and with `--any-directory` there is no git check after the
+    traversals to notice -- so an already-discovered `refs/heads/build` still reached
+    `rmtree`. This one is cheap enough to repeat: three `lstat`s per ancestor level and
+    no subprocess, unlike the walks it now follows.
+    """
+
+    def test_an_ancestor_becoming_bare_during_the_measurement(self, repo, monkeypatch):
+        heads = repo / "refs" / "heads"
+        target = make_dir(repo, "refs/heads/build")
+        (target / "main").write_text("0" * 40 + "\n")
+        real_measure = distrodeck._measure
+        calls = {"n": 0}
+
+        def measure_then_init_bare(path):
+            result = real_measure(path)
+            if str(path) == str(target):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    # During the re-check's own traversal. The scan saw an ordinary
+                    # directory; `repo` becomes a bare repository before the verdict.
+                    (repo / "HEAD").write_text("ref: refs/heads/main\n")
+                    (repo / "objects").mkdir(exist_ok=True)
+            return result
+
+        monkeypatch.setattr(distrodeck, "_measure", measure_then_init_bare)
+        check = distrodeck._still_eligible(target, None, False, repo.parent)
+        assert "bare repository" in check.reason, check.reason
+        assert (target / "main").exists()
+
+    def test_apply_does_not_delete_the_branch(self, repo, monkeypatch):
+        target = make_dir(repo, "refs/heads/build")
+        (target / "main").write_text("0" * 40 + "\n")
+        real_measure = distrodeck._measure
+        calls = {"n": 0}
+
+        def measure_then_init_bare(path):
+            result = real_measure(path)
+            if str(path) == str(target):
+                calls["n"] += 1
+                if calls["n"] == 2:      # the re-check's traversal, not the scan's
+                    (repo / "HEAD").write_text("ref: refs/heads/main\n")
+                    (repo / "objects").mkdir(exist_ok=True)
+            return result
+
+        monkeypatch.setattr(distrodeck, "_measure", measure_then_init_bare)
+        args = argparse.Namespace(workspace=str(repo), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=True)
+        distrodeck.run_reclaim(args)
+        assert (target / "main").exists(), "deleted a branch created mid-scan"
+
+    def test_the_climb_runs_after_both_traversals(self, repo, monkeypatch):
+        """Order asserted, since the whole fix is where the call sits."""
+        target = make_dir(repo, "build")
+        order = []
+        real_measure = distrodeck._measure
+        real_search = distrodeck._contains_nested_git
+        real_storage = distrodeck._git_storage_above
+        monkeypatch.setattr(distrodeck, "_measure",
+                            lambda p: order.append("measure") or real_measure(p))
+        monkeypatch.setattr(distrodeck, "_contains_nested_git",
+                            lambda p: order.append("search") or real_search(p))
+        monkeypatch.setattr(distrodeck, "_git_storage_above",
+                            lambda p: order.append("storage") or real_storage(p))
+        distrodeck._still_eligible(target, None, False, repo.parent)
+        assert order == ["storage", "measure", "search", "storage"], order
+
+    def test_an_unchanged_ancestor_still_approves(self, repo):
+        """The control: repeating the climb must not refuse the ordinary case."""
+        target = make_dir(repo, "build")
+        assert distrodeck._still_eligible(target, None, False, repo.parent).reason == ""
