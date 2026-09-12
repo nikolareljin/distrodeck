@@ -2249,7 +2249,8 @@ class TestTheFloorClaimIsQualifiedOnCopyOnWriteFilesystems:
                                   list=0, any_directory=False)
         distrodeck.run_reclaim(args)
         out = capsys.readouterr().out
-        assert "btrfs" in out and "upper bound rather than a floor" in out, out
+        assert "btrfs" in out, out
+        assert "neither a floor nor a ceiling" in out, out
 
     def test_it_does_not_appear_on_ext4(self, repo, monkeypatch, capsys):
         """A caveat printed everywhere is one nobody reads."""
@@ -2260,7 +2261,7 @@ class TestTheFloorClaimIsQualifiedOnCopyOnWriteFilesystems:
                                   include_environments=False, older_than=0,
                                   list=0, any_directory=False)
         distrodeck.run_reclaim(args)
-        assert "upper bound" not in capsys.readouterr().out
+        assert "neither a floor nor a ceiling" not in capsys.readouterr().out
 
     def test_the_longest_mount_point_wins(self, tmp_path, monkeypatch):
         """What the kernel resolves to, not the first line that matches."""
@@ -2362,3 +2363,125 @@ class TestAgeAndSizeDescribeTheTreeAfterEveryOtherCheck:
         target = make_dir(repo, "build", age_days=30)
         check = distrodeck._still_eligible(target, time.time() - 7 * 86400, True, repo.parent)
         assert check.reason == "" and check.measured is not None
+
+
+class TestTheTableIsReadAgainAfterTheFinalMeasurement:
+    """The measurement is the last expensive thing, so the last read must follow it.
+
+    A bind mount of the same device -- at the candidate or above it -- appearing during
+    that traversal is invisible to `crosses_mount` and to the device comparison, because
+    both see identical device numbers. Only the table can tell, and the snapshot in use
+    was taken before the walk began. Terminal this time: nothing after that read does
+    any I/O but `rmtree`.
+    """
+
+    def test_a_bind_mount_appearing_during_the_measurement(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        real_measure = distrodeck._measure
+        state = {"mounted": False}
+
+        def measure_then_mount(path):
+            result = real_measure(path)
+            if str(path) == str(target):
+                state["mounted"] = True
+            return result
+
+        def table():
+            return {str(target)} if state["mounted"] else set()
+
+        monkeypatch.setattr(distrodeck, "_measure", measure_then_mount)
+        monkeypatch.setattr(distrodeck, "_mount_points", table)
+        check = distrodeck._still_eligible(target, None, True, repo.parent)
+        assert check.reason == "it is itself a mount point", check.reason
+
+    def test_an_ancestor_mount_appearing_during_the_measurement(self, repo, monkeypatch):
+        holder = repo / "holder"
+        target = make_dir(repo, "holder/build")
+        real_measure = distrodeck._measure
+        state = {"mounted": False}
+
+        def measure_then_mount(path):
+            result = real_measure(path)
+            if str(path) == str(target):
+                state["mounted"] = True
+            return result
+
+        monkeypatch.setattr(distrodeck, "_measure", measure_then_mount)
+        monkeypatch.setattr(distrodeck, "_mount_points",
+                            lambda: {str(holder)} if state["mounted"] else set())
+        check = distrodeck._still_eligible(target, None, False, repo)
+        assert "now mounted" in check.reason, check.reason
+
+    def test_apply_does_not_delete_through_it(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        (target / "blob").write_bytes(b"x" * 4096)
+        real_measure = distrodeck._measure
+        calls = {"n": 0}
+
+        def measure_then_mount(path):
+            result = real_measure(path)
+            if str(path) == str(target):
+                calls["n"] += 1
+            return result
+
+        monkeypatch.setattr(distrodeck, "_measure", measure_then_mount)
+        # Mounted only once the re-check's own measurement has run: calls 1 is the
+        # scan's, 2 is the re-check's.
+        monkeypatch.setattr(distrodeck, "_mount_points",
+                            lambda: {str(target)} if calls["n"] >= 2 else set())
+        args = argparse.Namespace(workspace=str(repo.parent), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        assert (target / "blob").exists(), "deleted through a mount that appeared last"
+
+    def test_a_table_that_stays_clean_still_approves(self, repo, monkeypatch):
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: set())
+        target = make_dir(repo, "build")
+        assert distrodeck._still_eligible(target, None, True, repo.parent).reason == ""
+
+
+class TestNeitherBoundIsClaimedWhereNeitherHolds:
+    """Calling the total an upper bound was as wrong as calling it a floor.
+
+    Two errors in opposite directions, neither bounding the other. Shared extents
+    inflate the figure: `st_blocks` counts them for each reflinked copy while deleting
+    one frees nothing. The hard-link exclusion deflates it: content left out of the
+    total *is* freed whenever every link to the inode is inside what is being deleted,
+    which is the common case for a build tree that hard-links its own outputs.
+    """
+
+    @staticmethod
+    def _table(tmp_path, point, fstype):
+        table = tmp_path / "mountinfo"
+        table.write_text(
+            "21 1 0:20 / / rw,relatime shared:1 - ext4 /dev/root rw\n"
+            f"22 21 0:21 / {point} rw,relatime shared:2 - {fstype} /dev/sdb rw\n"
+        )
+        return str(table)
+
+    def test_the_hard_link_exclusion_can_understate(self, repo):
+        """The direction the 'upper bound' wording denied: every link is inside the
+        candidate, so deleting it frees bytes the figure left out."""
+        target = make_dir(repo, "build", size=64 * 1024)
+        try:
+            os.link(target / "blob", target / "second")
+        except OSError:
+            pytest.skip("filesystem does not support hard links")
+        m = distrodeck._measure(target)
+        assert m.linked > 0, "the inode was not excluded"
+        # Both names are inside `target`, so `rmtree` frees those bytes, and the
+        # reported total does not include them.
+        assert m.total < m.linked + 64 * 1024
+
+    def test_the_caveat_claims_no_bound_in_either_direction(self, repo, monkeypatch, capsys):
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO",
+                            self._table(repo.parent, str(repo.parent), "btrfs"))
+        args = argparse.Namespace(workspace=str(repo.parent), apply=False,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        out = capsys.readouterr().out
+        assert "neither a floor nor a ceiling" in out, out
+        assert "upper bound" not in out, "the wording that claimed a bound is back"

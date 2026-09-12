@@ -2729,8 +2729,8 @@ def _measure(path: pathlib.Path) -> Measurement:
     deletion set would mean indexing the whole filesystem, so the conservative
     reading is taken: such inodes are left out and reported separately.
 
-    **That makes the figure an underestimate on a filesystem without shared
-    extents, and only there.** Copy-on-write filesystems -- btrfs, ZFS, bcachefs,
+    **That makes the figure an underestimate on a filesystem without shared extents,
+    and only there -- where it is neither an underestimate nor an overestimate.** Copy-on-write filesystems -- btrfs, ZFS, bcachefs,
     XFS formatted with `reflink=1` -- let two files share blocks by reference
     rather than by copy, and `st_blocks` reports those blocks for *each* file while
     `st_nlink` stays 1, so the hard-link exclusion above cannot see them. Deleting
@@ -2740,6 +2740,12 @@ def _measure(path: pathlib.Path) -> Measurement:
     binding for and a syscall per file across a workspace; the honest alternative is
     to say so, which `reclaim` does when it recognises the filesystem it is
     measuring.
+
+    The two errors there point in opposite directions and neither bounds the other, so
+    no bound survives: shared extents inflate the total, and the hard-link exclusion
+    deflates it whenever every link to an inode *is* inside the deletion set -- which
+    is the common case for a build tree that hard-links its own outputs. Calling the
+    result an upper bound was as wrong as calling it a floor, in the other direction.
 
     Within this tree the figure is de-duplicated by inode: adding a linked file's
     size once per *name* would report an inode with three links as three times its
@@ -3474,7 +3480,15 @@ def _still_eligible(
     measured = _measure(path)
     if not measured.complete:
         return Recheck("it can no longer be read in full, so it cannot be trusted")
-    mounted = _mount_refusal(path, measured, points)
+    # The table again, because that traversal is the last expensive thing here and a
+    # bind mount of the same device -- at the candidate or above it -- appearing during
+    # it is invisible to both `crosses_mount` and the device comparison. Terminal this
+    # time: nothing after this line does any I/O but `rmtree`.
+    points = _mount_points()
+    mounted = (
+        _mount_refusal(path, measured, points)
+        or _mount_above(path, workspace, points)
+    )
     if mounted:
         return Recheck(mounted)
     if cutoff is not None and measured.newest > cutoff:
@@ -3756,8 +3770,10 @@ def run_reclaim(args: argparse.Namespace) -> None:
         print()
         print(f"  {workspace} is on {kind}, where files can share blocks by reference.")
         print("  Deleting one copy of shared extents frees nothing while another holds")
-        print("  them, and that sharing is invisible to this measurement, so treat the")
-        print("  figure as an upper bound rather than a floor.")
+        print("  them, and that sharing is invisible here -- so on this filesystem the")
+        print("  figure is neither a floor nor a ceiling. Shared extents inflate it;")
+        print("  the hard-linked content excluded above deflates it whenever every")
+        print("  link to an inode is inside what you are deleting.")
 
     if args.list:
         print()

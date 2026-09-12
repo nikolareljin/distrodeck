@@ -90,6 +90,12 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  The mount table is read **once more after that final measurement**, which is the last
+  expensive thing the check does: a bind mount of the same device, at the candidate or
+  above it, appearing during that traversal is invisible to both the crossing flag and
+  the device comparison, since every device number involved is identical. Terminal this
+  time -- nothing after that read does any I/O but `rmtree`.
+
   **The pre-delete check measures last**, so the age and the freed size describe the
   tree after every other question rather than before them. Captured before a full walk
   and two subprocesses, `newest` went stale while they ran -- and a build writing
@@ -261,7 +267,11 @@ This project follows Keep a Changelog and Semantic Versioning.
   filesystem without shared extents, and only there**. Copy-on-write filesystems
   (btrfs, ZFS, bcachefs, XFS with `reflink=1`) let two files share blocks by reference,
   and `st_blocks` reports those blocks for *each* file while `st_nlink` stays 1, so the
-  exclusion above cannot see them and the total overstates. Detecting shared extents
+  exclusion above cannot see them and the total overstates. The two errors point in
+  opposite directions and neither bounds the other, so on such a filesystem the figure
+  is **neither a floor nor a ceiling**: shared extents inflate it, and the hard-link
+  exclusion deflates it whenever every link to an inode is inside the deletion set --
+  the common case for a build tree that hard-links its own outputs. Detecting shared extents
   needs `FIEMAP`, an `ioctl` with no stdlib binding and a syscall per file; saying so is
   what is available, and `reclaim` now reads the filesystem type out of the mount table
   and prints the caveat only where it applies -- a caveat printed everywhere is one
