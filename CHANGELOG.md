@@ -90,6 +90,19 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  **The pre-delete check no longer has the problem it exists to solve.** Its git and
+  nested-repository questions ran before a traversal that takes minutes on a large
+  candidate, and the only thing refreshed afterwards was the mount table -- so a file
+  force-added while the measurement ran reached `rmtree`, checked and then invalidated
+  by the same function. The order is now: the **mount table first**, before anything at
+  all touches the candidate, because every other question here is a syscall on the path
+  and a syscall on a dead mount does not return; then the one-`lstat` questions; then
+  the two traversals; then the table again and the **git questions last**, since those
+  are the two things a person changes with one command and they cost two subprocesses
+  rather than a walk. What remains is the window between the last check and `rmtree`
+  itself, which no ordering closes -- the two are not atomic with respect to each other
+  -- and the code says so rather than implying otherwise.
+
   The last check before each deletion **re-reads the table**, which the comment over
   it had been claiming while the code used the snapshot taken before two full-tree
   walks -- minutes old on a large candidate, and exactly as stale as the scan's was

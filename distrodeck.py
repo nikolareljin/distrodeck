@@ -2677,8 +2677,8 @@ def _nonnegative_int(raw: str) -> int:
 class Measurement(NamedTuple):
     """What one traversal of a candidate learned.
 
-    A tuple rather than five return values because the qualifiers are only
-    meaningful next to the figures they qualify. `complete` false means a size
+    A tuple rather than six return values because the qualifiers are only meaningful
+    next to the figures they qualify. `complete` false means a size
     read off this traversal is not a smaller size, it is an unknown one.
     `crosses_mount` true means the tree reaches storage that is not the
     candidate's. `linked_inodes` is evidence rather than a conclusion: this
@@ -2737,14 +2737,18 @@ def _measure(path: pathlib.Path) -> Measurement:
     total is lower than expected. Across candidates, `linked_inodes` is what the
     caller de-duplicates from.
 
-    **The newest mtime of anything inside, file or directory**, not the
-    candidate's own entry. A directory's mtime changes only when its immediate
-    entries are added or removed; editing a file three levels down does not touch
-    it, so an actively compiling `target/` whose root entry is weeks old would
-    otherwise look weeks old. Directories count as well as files, which means
-    creating or removing even an empty directory inside a tree makes it recent --
-    deliberately, since that is activity, and the error it causes is refusing to
-    delete something rather than deleting something in use.
+    **The newest mtime of anything inside, file or directory -- and of the candidate
+    itself.** All three contribute: `newest` starts from the candidate's own `stat`,
+    the walk yields the candidate as its first root, and every descendant is stat'd
+    on the way. Saying "not the candidate's own entry" was wrong and it mattered:
+    adding or removing an immediate child updates the candidate's mtime, and
+    `--older-than` reads that. What the rule is actually *for* is that a directory's
+    mtime changes only when its immediate entries do, so an actively compiling
+    `target/` whose root entry is weeks old must not look weeks old -- which is why
+    descendants are included, not why the root is excluded. Directories count as well
+    as files, so creating or removing even an empty one makes a tree recent:
+    deliberately, since that is activity, and the error it causes is refusing to delete
+    rather than deleting something in use.
 
     **`crosses_mount` is about other people's storage.** `shutil.rmtree` walks
     through a mount point like any other directory, so an ignored `build/` holding
@@ -3136,6 +3140,21 @@ def _mount_refusal(path: pathlib.Path, measured, points) -> str:
     Emptied either way is the point: `rmtree` walks through a mount like any other
     directory, and what it leaves behind is the mount, not reclaimed space.
     """
+    # **The table first, before anything that touches the path.** `_device_of` is an
+    # `lstat`, and an `lstat` on a dead mount does not return -- so consulting the
+    # cheap, syscall-free answer second meant the check that exists to avoid touching
+    # a dead mount could block inside its own first question.
+    if points is not None:
+        here = str(path)
+        if here in points:
+            # A same-device bind mount of the candidate itself: the device comparison
+            # below cannot see it, and saying "mounted inside it" would be wrong
+            # about which directory is the mount.
+            return "it is itself a mount point"
+        prefix = here + os.sep
+        if any(point.startswith(prefix) for point in points):
+            return "a filesystem is mounted inside it"
+
     if measured is not None and measured.crosses_mount:
         return "a filesystem is mounted inside it"
 
@@ -3147,18 +3166,6 @@ def _mount_refusal(path: pathlib.Path, measured, points) -> str:
         return "its filesystem could not be identified"
     if own != parent:
         return "it is itself a mount point"
-
-    if points is None:
-        return ""
-    here = str(path)
-    if here in points:
-        # A same-device bind mount of the candidate itself: the device comparison
-        # above cannot see it, and saying "mounted inside it" would be wrong about
-        # which directory is the mount.
-        return "it is itself a mount point"
-    prefix = here + os.sep
-    if any(point.startswith(prefix) for point in points):
-        return "a filesystem is mounted inside it"
     return ""
 
 
@@ -3302,33 +3309,89 @@ def _still_eligible(
 ) -> Recheck:
     """A `Recheck` whose `reason` is empty if *path* may still be deleted.
 
-    Re-run immediately before deletion, because everything known about a
-    candidate was learned during a scan that can take minutes across a large
-    workspace. A build started in that window creates fresh files, a colleague
-    can `git add -f` something into it, a clone can appear inside it -- and
-    `--older-than`, whose entire purpose is to protect work in progress, was
-    evaluated against a measurement taken before that work resumed.
+    Re-run immediately before deletion, because everything known about a candidate
+    was learned during a scan that can take minutes across a large workspace. A
+    build started in that window creates fresh files, a colleague can `git add -f`
+    something into it, a clone can appear inside it -- and `--older-than`, whose
+    entire purpose is to protect work in progress, was evaluated against a
+    measurement taken before that work resumed.
 
-    Fails closed: anything unreadable, or any git call that does not answer, is
-    a refusal rather than a pass.
+    **The order here is the substance, not a style choice.** This function has the
+    same problem it exists to solve: its own early checks go stale while its two
+    full-tree walks run, which on a large candidate is minutes. So:
+
+    1. The **mount table** first, before anything at all touches the candidate. Every
+       other question here is a syscall on the path, and a syscall on a dead mount
+       does not return.
+    2. Then the cheap questions that need one `lstat`: symlink, still a directory,
+       repository storage above it.
+    3. Then the **expensive** ones, whose results only need to be accurate as of
+       before the cheap authoritative checks: the measurement, then the
+       nested-repository walk.
+    4. Then the mount table **again**, and the **git questions last** -- ignored, and
+       holding no tracked file. Those are the two a person can change with one
+       command, they cost two subprocesses rather than a traversal, and nothing after
+       them does any I/O but `rmtree` itself.
+
+    What remains is the window between the last check and `rmtree`, which no ordering
+    closes: the two are not atomic with respect to each other, and nothing short of a
+    filesystem-level guarantee would make them so. Narrowing it to "cheap checks
+    last" is the whole of what is available.
+
+    Fails closed: anything unreadable, or any git call that does not answer, is a
+    refusal rather than a pass.
     """
-    storage = _git_storage_above(path)
-    if storage:
-        # Asked again here, not only of the workspace at the start of the scan: an
-        # ancestor can become a bare repository in between -- `git init --bare` in
-        # a directory that already existed is enough -- and the candidate would
-        # then be a ref directory. No flag waives this one, so the last check
-        # before `rmtree` has to make it too.
-        return Recheck(storage)
+    # 1. Nothing has touched the candidate yet.
+    points = _mount_points()
+    mounted = _mount_refusal(path, None, points) or _mount_above(path, workspace, points)
+    if mounted:
+        return Recheck(mounted)
 
+    # 2. One `lstat` each.
     if path.is_symlink():
-        # Checked before `is_dir`, which follows the link and answers about the
-        # target. A symlink appearing where a directory was is not the thing that
-        # was measured.
+        # Before `is_dir`, which follows the link and answers about the target. A
+        # symlink appearing where a directory was is not the thing that was measured.
         return Recheck("it is a symbolic link now")
     if not path.is_dir():
         return Recheck("it is no longer there")
 
+    storage = _git_storage_above(path)
+    if storage:
+        # An ancestor can become a bare repository in between -- `git init --bare` in
+        # a directory that already existed is enough -- and the candidate would then
+        # be a ref directory. No flag waives this one.
+        return Recheck(storage)
+
+    # 3. The traversals. Measured whether or not there is a cutoff to check it
+    # against, because the caller needs a current size for the freed total either
+    # way, and one traversal answers both questions.
+    measured = _measure(path)
+    if not measured.complete:
+        return Recheck("it can no longer be read in full, so it cannot be trusted")
+
+    nested, readable = _contains_nested_git(path)
+    if nested:
+        return Recheck("it now contains a repository")
+    if not readable:
+        return Recheck(
+            "it can no longer be read in full, so a repository inside it "
+            "cannot be ruled out"
+        )
+
+    # 4. The table again -- the snapshot in step 1 is two full traversals old by now,
+    # which is exactly the staleness this whole function exists to correct.
+    points = _mount_points()
+    mounted = (
+        _mount_refusal(path, measured, points)
+        or _mount_above(path, workspace, points)
+    )
+    if mounted:
+        return Recheck(mounted)
+
+    # ...and git last. A file force-added during the measurement used to reach
+    # `rmtree`, because the only thing refreshed after that traversal was the mount
+    # table. These are the cheapest authoritative questions available, so they are the
+    # ones worth having closest to the deletion.
     if require_git_ignored:
         worktree = _worktree_of(path)
         if worktree is None:
@@ -3341,46 +3404,6 @@ def _still_eligible(
         if any(str(t).startswith(str(path) + os.sep) for t in tracked):
             return Recheck("it now holds a tracked file")
 
-    # Before the walks, for the same reason as in the scan: answering from the
-    # mount table costs nothing, and traversing a mount to find out it was a mount
-    # can cost everything.
-    points = _mount_points()
-    mounted = _mount_refusal(path, None, points) or _mount_above(path, workspace, points)
-    if mounted:
-        return Recheck(mounted)
-
-    nested, readable = _contains_nested_git(path)
-    if nested:
-        return Recheck("it now contains a repository")
-    if not readable:
-        return Recheck(
-            "it can no longer be read in full, so a repository inside it "
-            "cannot be ruled out"
-        )
-
-    # Measured whether or not there is a cutoff to check it against, because the
-    # caller needs a current size for the freed total either way, and one
-    # traversal answers both questions.
-    measured = _measure(path)
-    # A second completeness check over the same tree, and deliberately not folded
-    # into the one above: these are two separate walks, and a subtree can become
-    # unreadable between them. That window is what
-    # `test_a_subtree_that_becomes_unreadable_between_the_two_walks` provokes.
-    if not measured.complete:
-        return Recheck("it can no longer be read in full, so it cannot be trusted")
-    # Re-read, and this time it really is a re-read. The snapshot above was taken
-    # before two full-tree walks that take minutes on a large candidate, so by here
-    # it is exactly as stale as the scan's was when this function started -- and the
-    # comment that used to sit here claimed a refresh while the code had stopped
-    # doing one. Both directions are asked again: a bind mount of the same device
-    # inside the candidate, and a mount that has appeared above it.
-    points = _mount_points()
-    mounted = (
-        _mount_refusal(path, measured, points)
-        or _mount_above(path, workspace, points)
-    )
-    if mounted:
-        return Recheck(mounted)
     if cutoff is not None and measured.newest > cutoff:
         return Recheck("something inside it changed during the scan")
 
