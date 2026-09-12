@@ -3381,28 +3381,32 @@ def _still_eligible(
     entire purpose is to protect work in progress, was evaluated against a
     measurement taken before that work resumed.
 
-    **The order here is the substance, not a style choice.** This function has the
-    same problem it exists to solve: its own early checks go stale while its two
-    full-tree walks run, which on a large candidate is minutes. So:
+    **The order here is the substance, not a style choice**, because this function
+    had the same problem it exists to solve: its own early answers went stale while
+    its later work ran. Cheapest first, and whatever each answer protects must be
+    nothing that happens after it:
 
-    1. The **mount table** first, before anything at all touches the candidate. Every
-       other question here is a syscall on the path, and a syscall on a dead mount
-       does not return.
-    2. Then the cheap questions that need one `lstat`: symlink, still a directory,
-       repository storage above it.
-    3. Then the **expensive** ones, whose results only need to be accurate as of
-       before the cheap authoritative checks: the measurement, then the
-       nested-repository walk.
-    4. Then everything cheap enough to repeat, in rising cost: the mount table
-       **again**, the repository-storage climb **again**, and the **git questions
-       last** -- ignored, and holding no tracked file. Those are the things a person
-       can change with one command, none of them costs a traversal, and nothing after
-       them does any I/O but `rmtree` itself.
+    1. The **mount table**, before anything at all touches the candidate. Every other
+       question here is a syscall on the path, and a syscall on a dead mount does not
+       return.
+    2. The questions costing one `lstat`: symlink, still a directory, repository
+       storage above it.
+    3. The **nested-repository walk** -- expensive, and authoritative about the one
+       thing a fresh measurement cannot tell you.
+    4. Everything cheap enough to ask twice, in rising cost: the mount table again,
+       the repository-storage climb again, the git questions -- ignored, and holding
+       no tracked file.
+    5. The **measurement, last**. It supplies the age and the freed size, and both
+       must describe the tree as it is *after* all of the above: a build writing fresh
+       output during the nested walk or the git subprocesses left `newest` stale, and
+       `--older-than --apply` then deleted a tree that had just become active. It also
+       has the final word on readability and on crossing a filesystem boundary, since
+       nothing follows it.
 
-    What remains is the window between the last check and `rmtree`, which no ordering
-    closes: the two are not atomic with respect to each other, and nothing short of a
-    filesystem-level guarantee would make them so. Narrowing it to "cheap checks
-    last" is the whole of what is available.
+    What remains is the window between step 5 and `rmtree`, which no ordering closes:
+    the two are not atomic with respect to each other, and nothing short of a
+    filesystem-level guarantee would make them so. Narrowing it to one traversal is
+    the whole of what is available.
 
     Fails closed: anything unreadable, or any git call that does not answer, is a
     refusal rather than a pass.
@@ -3428,13 +3432,7 @@ def _still_eligible(
         # be a ref directory. No flag waives this one.
         return Recheck(storage)
 
-    # 3. The traversals. Measured whether or not there is a cutoff to check it
-    # against, because the caller needs a current size for the freed total either
-    # way, and one traversal answers both questions.
-    measured = _measure(path)
-    if not measured.complete:
-        return Recheck("it can no longer be read in full, so it cannot be trusted")
-
+    # 3. The walk that answers what a measurement cannot.
     nested, readable = _contains_nested_git(path)
     if nested:
         return Recheck("it now contains a repository")
@@ -3444,29 +3442,21 @@ def _still_eligible(
             "cannot be ruled out"
         )
 
-    # 4. The table again -- the snapshot in step 1 is two full traversals old by now,
-    # which is exactly the staleness this whole function exists to correct.
+    # 4. The table again -- the snapshot in step 1 is a full traversal old by now --
+    # then the storage climb again, then git. Three `lstat`s per ancestor level and two
+    # subprocesses: cheap enough to repeat, where a traversal is not.
     points = _mount_points()
     mounted = (
-        _mount_refusal(path, measured, points)
+        _mount_refusal(path, None, points)
         or _mount_above(path, workspace, points)
     )
     if mounted:
         return Recheck(mounted)
 
-    # Repository storage again, for the same reason the table is re-read: the verdict
-    # in step 2 is two full traversals old, `git init --bare` over an existing
-    # directory turns an ancestor into one in a moment, and with `--any-directory`
-    # there is no git check after this to notice. Cheap enough to repeat -- three
-    # `lstat`s per ancestor level, no subprocess -- unlike the traversals above.
     storage = _git_storage_above(path)
     if storage:
         return Recheck(storage)
 
-    # ...and git last. A file force-added during the measurement used to reach
-    # `rmtree`, because the only thing refreshed after that traversal was the mount
-    # table. These are the cheapest authoritative questions available, so they are the
-    # ones worth having closest to the deletion.
     if require_git_ignored:
         worktree = _worktree_of(path)
         if worktree is None:
@@ -3479,6 +3469,14 @@ def _still_eligible(
         if any(str(t).startswith(str(path) + os.sep) for t in tracked):
             return Recheck("it now holds a tracked file")
 
+    # 5. Measured last, so the age and the size describe the tree after every check
+    # above rather than before them.
+    measured = _measure(path)
+    if not measured.complete:
+        return Recheck("it can no longer be read in full, so it cannot be trusted")
+    mounted = _mount_refusal(path, measured, points)
+    if mounted:
+        return Recheck(mounted)
     if cutoff is not None and measured.newest > cutoff:
         return Recheck("something inside it changed during the scan")
 

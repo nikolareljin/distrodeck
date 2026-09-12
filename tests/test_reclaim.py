@@ -628,27 +628,28 @@ class TestATreeItCannotReadIsNotOffered:
         assert distrodeck._measure(target).complete is False
 
     def test_the_pre_delete_check_refuses_it(self, repo, unreadable):
-        """The measurement answers, because in the re-check it runs first.
+        """The repository search answers, because in the re-check it runs first.
 
         The two guards produce different messages on purpose, so this can say which
-        one fired. The ordering is deliberate -- the re-check does its traversals
-        before its cheap authoritative questions -- and when it was the other way
-        round this test pinned the repository search instead.
+        one fired. Which of them answers has now swapped twice as the ordering was
+        corrected -- the measurement moved to last so that age and size describe the
+        tree after every other check -- which is why both have a test naming the
+        branch rather than sharing an assertion.
         """
         target = make_dir(repo, "build", age_days=30)
         unreadable(make_dir(repo, "build/nested", age_days=30))
         reason = distrodeck._still_eligible(target, None, True, repo.parent).reason
         assert reason, "an unreadable tree must not be approved for deletion"
-        assert reason == "it can no longer be read in full, so it cannot be trusted", reason
+        assert "repository inside it cannot be ruled out" in reason, reason
 
-    def test_the_repository_search_refuses_a_tree_that_goes_unreadable_after_measuring(
+    def test_the_measurement_refuses_a_tree_that_goes_unreadable_after_the_search(
         self, repo, monkeypatch
     ):
         """The other guard, reachable in the re-check only as a race.
 
-        With the measurement first, an unreadable subtree is refused there -- so the
-        repository search's own readability branch answers only when a subtree becomes
-        unreadable *between* the two traversals. Provoked rather than waited for.
+        With the repository search first, an unreadable subtree is refused there -- so
+        the measurement's own completeness branch answers only when a subtree becomes
+        unreadable after the search has already passed. Provoked rather than waited for.
         """
         target = make_dir(repo, "build", age_days=30)
         nested = make_dir(repo, "build/nested", age_days=30)
@@ -661,19 +662,19 @@ class TestATreeItCannotReadIsNotOffered:
         if ignores_the_bit:
             pytest.skip("filesystem ignores the read bit")
 
-        real_measure = distrodeck._measure
+        real_search = distrodeck._contains_nested_git
 
-        def measure_then_block(p):
-            result = real_measure(p)
+        def search_then_block(p):
+            result = real_search(p)
             os.chmod(nested, 0o000)
             return result
 
-        monkeypatch.setattr(distrodeck, "_measure", measure_then_block)
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_block)
         try:
             reason = distrodeck._still_eligible(target, None, True, repo.parent).reason
         finally:
             os.chmod(nested, mode)
-        assert "repository inside it cannot be ruled out" in reason, reason
+        assert reason == "it can no longer be read in full, so it cannot be trusted", reason
 
     def test_a_subtree_that_becomes_unreadable_between_the_two_walks(self, repo):
         """The measurement's own refusal, which nothing else can reach.
@@ -1994,17 +1995,19 @@ class TestTheRepositoryWalkStopsAtADeviceBoundary:
         assert distrodeck._measure(target).crosses_mount is True
 
 
-class TestContentAppearingDuringTheMeasurementIsStillCaught:
+class TestContentAppearingDuringTheTraversalIsStillCaught:
     """The re-check had the problem it exists to solve.
 
-    Its git and nested-repository questions ran *before* a traversal that the
-    surrounding documentation itself describes as taking minutes, and the only thing
-    refreshed afterwards was the mount table. So a file force-added, or a clone
-    created, while `_measure` was running reached `rmtree` -- checked, and then
-    invalidated, by the same function.
+    Its git questions ran *before* a traversal the surrounding documentation itself
+    describes as taking minutes, and the only thing refreshed afterwards was the mount
+    table -- so a file force-added while that walk ran reached `rmtree`, checked and
+    then invalidated by the same function.
 
-    The git questions are now last: two subprocesses rather than a traversal, and the
-    two things a person can change with one command.
+    Everything cheap is now after the one expensive walk that has to come first, and
+    the measurement is after all of it, so the age and the size describe the tree as it
+    is when the decision is made. These tests write from inside the nested-repository
+    walk, which is the window that remains between the cheap checks and the start of
+    the function.
     """
 
     @staticmethod
@@ -2015,34 +2018,35 @@ class TestContentAppearingDuringTheMeasurementIsStillCaught:
 
     def test_a_file_force_added_during_the_measurement(self, repo, monkeypatch):
         target = make_dir(repo, "build")
-        real_measure = distrodeck._measure
+        real_search = distrodeck._contains_nested_git
         calls = {"n": 0}
 
-        def measure_then_track(path):
-            result = real_measure(path)
+        def search_then_track(path):
+            result = real_search(path)
             if str(path) == str(target):
                 calls["n"] += 1
-                # The *second* call is the re-check's. Planting on the first would
-                # plant during the scan, which the re-check then catches however its
-                # own checks are ordered -- and that is how this test was first
-                # written, so it passed with the ordering reverted.
+                # Only the re-check walks a candidate for nested repositories after the
+                # scan has, so the first call here is the scan's. Planting then would be
+                # caught however the re-check orders its own questions -- which is how
+                # this test was first written, and it passed with the ordering reverted.
                 if calls["n"] == 2:
                     (target / "authored.c").write_text("int main(void){return 0;}\n")
                     git(repo, "add", "-f", str(target / "authored.c"))
             return result
 
-        monkeypatch.setattr(distrodeck, "_measure", measure_then_track)
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_track)
         distrodeck.run_reclaim(self._args(repo))
         assert target.exists(), "deleted a tree that was tracked during the scan"
         assert (target / "authored.c").exists()
 
-    def test_a_clone_appearing_during_the_measurement(self, repo, monkeypatch):
-        """Covered by the nested-repository search rather than by the git ordering.
+    def test_a_clone_appearing_between_the_scan_and_the_recheck(self, repo, monkeypatch):
+        """What the re-check's own walk buys, stated for what it is.
 
-        Said explicitly because moving the git questions back in front of the
-        traversals leaves this passing: the search runs after the measurement either
-        way, and finding a clone is exactly its job. The force-added file above is
-        what the ordering actually buys.
+        A clone created *during* that walk is the residual window -- something has to
+        be last, and the measurement is, because age and size are what `--older-than`
+        reads. What is covered is a clone appearing after the scan measured the tree and
+        before the re-check walks it, which is the minutes-long gap the whole function
+        exists for.
         """
         target = make_dir(repo, "build")
         real_measure = distrodeck._measure
@@ -2052,7 +2056,7 @@ class TestContentAppearingDuringTheMeasurementIsStillCaught:
             result = real_measure(path)
             if str(path) == str(target):
                 calls["n"] += 1
-                if calls["n"] == 2:      # the re-check's traversal, not the scan's
+                if calls["n"] == 1:      # the scan's measurement
                     vendor = target / "vendor"
                     vendor.mkdir(exist_ok=True)
                     subprocess.run(["git", "-C", str(vendor), "init", "-q"],
@@ -2063,8 +2067,11 @@ class TestContentAppearingDuringTheMeasurementIsStillCaught:
         distrodeck.run_reclaim(self._args(repo))
         assert (target / "vendor" / ".git").exists(), "deleted a clone made during the scan"
 
-    def test_the_git_questions_come_after_both_traversals(self, repo, monkeypatch):
-        """Order asserted directly, so it cannot drift back silently."""
+    def test_the_git_questions_come_after_the_walk_and_before_the_measurement(
+        self, repo, monkeypatch
+    ):
+        """Order asserted directly, so it cannot drift back silently -- and it has
+        drifted twice, which is why this assertion is the literal sequence."""
         target = make_dir(repo, "build")
         order = []
         real_measure = distrodeck._measure
@@ -2077,7 +2084,7 @@ class TestContentAppearingDuringTheMeasurementIsStillCaught:
         monkeypatch.setattr(distrodeck, "_worktree_facts",
                             lambda w, c: order.append("git") or real_facts(w, c))
         distrodeck._still_eligible(target, None, True, repo.parent)
-        assert order == ["measure", "search", "git"], order
+        assert order == ["search", "git", "measure"], order
 
     def test_an_unchanged_tree_is_still_deleted(self, repo):
         """The control: the new ordering must not refuse the ordinary case."""
@@ -2135,35 +2142,33 @@ class TestNothingTouchesTheCandidateBeforeTheMountTable:
                 == "a filesystem is mounted inside it")
 
 
-class TestRepositoryStorageIsRecheckedAfterTheTraversals:
-    """The verdict in step 2 is two full traversals old by the time it is used.
+class TestRepositoryStorageIsRecheckedAfterTheTraversal:
+    """The verdict in step 2 is a full traversal old by the time it is used.
 
     `git init --bare` over a directory that already exists turns an ancestor into a
     repository in a moment, and with `--any-directory` there is no git check after the
-    traversals to notice -- so an already-discovered `refs/heads/build` still reached
+    traversal to notice -- so an already-discovered `refs/heads/build` still reached
     `rmtree`. This one is cheap enough to repeat: three `lstat`s per ancestor level and
-    no subprocess, unlike the walks it now follows.
+    no subprocess, unlike the walk it now follows.
     """
 
-    def test_an_ancestor_becoming_bare_during_the_measurement(self, repo, monkeypatch):
+    def test_an_ancestor_becoming_bare_during_the_walk(self, repo, monkeypatch):
         heads = repo / "refs" / "heads"
         target = make_dir(repo, "refs/heads/build")
         (target / "main").write_text("0" * 40 + "\n")
-        real_measure = distrodeck._measure
-        calls = {"n": 0}
+        real_search = distrodeck._contains_nested_git
 
-        def measure_then_init_bare(path):
-            result = real_measure(path)
+        def search_then_init_bare(path):
+            result = real_search(path)
             if str(path) == str(target):
-                calls["n"] += 1
-                if calls["n"] == 1:
-                    # During the re-check's own traversal. The scan saw an ordinary
-                    # directory; `repo` becomes a bare repository before the verdict.
-                    (repo / "HEAD").write_text("ref: refs/heads/main\n")
-                    (repo / "objects").mkdir(exist_ok=True)
+                # During the re-check's own traversal. The climb in step 2 saw an
+                # ordinary directory; `repo` becomes a bare repository before the
+                # second climb runs.
+                (repo / "HEAD").write_text("ref: refs/heads/main\n")
+                (repo / "objects").mkdir(exist_ok=True)
             return result
 
-        monkeypatch.setattr(distrodeck, "_measure", measure_then_init_bare)
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_init_bare)
         check = distrodeck._still_eligible(target, None, False, repo.parent)
         assert "bare repository" in check.reason, check.reason
         assert (target / "main").exists()
@@ -2171,11 +2176,11 @@ class TestRepositoryStorageIsRecheckedAfterTheTraversals:
     def test_apply_does_not_delete_the_branch(self, repo, monkeypatch):
         target = make_dir(repo, "refs/heads/build")
         (target / "main").write_text("0" * 40 + "\n")
-        real_measure = distrodeck._measure
+        real_search = distrodeck._contains_nested_git
         calls = {"n": 0}
 
-        def measure_then_init_bare(path):
-            result = real_measure(path)
+        def search_then_init_bare(path):
+            result = real_search(path)
             if str(path) == str(target):
                 calls["n"] += 1
                 if calls["n"] == 2:      # the re-check's traversal, not the scan's
@@ -2183,14 +2188,14 @@ class TestRepositoryStorageIsRecheckedAfterTheTraversals:
                     (repo / "objects").mkdir(exist_ok=True)
             return result
 
-        monkeypatch.setattr(distrodeck, "_measure", measure_then_init_bare)
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_init_bare)
         args = argparse.Namespace(workspace=str(repo), apply=True,
                                   include_environments=False, older_than=0,
                                   list=0, any_directory=True)
         distrodeck.run_reclaim(args)
         assert (target / "main").exists(), "deleted a branch created mid-scan"
 
-    def test_the_climb_runs_after_both_traversals(self, repo, monkeypatch):
+    def test_the_climb_runs_before_and_after_the_walk(self, repo, monkeypatch):
         """Order asserted, since the whole fix is where the call sits."""
         target = make_dir(repo, "build")
         order = []
@@ -2204,7 +2209,7 @@ class TestRepositoryStorageIsRecheckedAfterTheTraversals:
         monkeypatch.setattr(distrodeck, "_git_storage_above",
                             lambda p: order.append("storage") or real_storage(p))
         distrodeck._still_eligible(target, None, False, repo.parent)
-        assert order == ["storage", "measure", "search", "storage"], order
+        assert order == ["storage", "search", "storage", "measure"], order
 
     def test_an_unchanged_ancestor_still_approves(self, repo):
         """The control: repeating the climb must not refuse the ordinary case."""
@@ -2284,3 +2289,76 @@ class TestTheFloorClaimIsQualifiedOnCopyOnWriteFilesystems:
     def test_an_unreadable_table_gives_no_filesystem(self, tmp_path, monkeypatch):
         monkeypatch.setattr(distrodeck, "_MOUNTINFO", str(tmp_path / "not-there"))
         assert distrodeck._filesystem_of(Path("/anything")) is None
+
+
+class TestAgeAndSizeDescribeTheTreeAfterEveryOtherCheck:
+    """`measured.newest` was captured before a full walk and two subprocesses.
+
+    A build writing fresh untracked output during the nested-repository walk, or while
+    the git calls ran, left that value stale -- and the git questions pass for untracked
+    output, so nothing else objected. `--older-than --apply` then deleted a tree that
+    had just become active, which is the one thing that flag exists to prevent. The
+    freed figure was stale in the same way.
+
+    The measurement is last now, so both describe the tree as it is when the decision is
+    made.
+    """
+
+    def test_output_written_during_the_walk_makes_it_too_recent(self, repo, monkeypatch):
+        target = make_dir(repo, "build", age_days=30)
+        real_search = distrodeck._contains_nested_git
+
+        def search_then_build(path):
+            result = real_search(path)
+            if str(path) == str(target):
+                # A compiler resumes: untracked, so every git question still passes.
+                (target / "fresh.o").write_bytes(b"x" * 4096)
+            return result
+
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_build)
+        cutoff = time.time() - 7 * 86400
+        check = distrodeck._still_eligible(target, cutoff, True, repo.parent)
+        assert check.reason == "something inside it changed during the scan", check.reason
+
+    def test_apply_does_not_delete_the_revived_tree(self, repo, monkeypatch):
+        target = make_dir(repo, "build", age_days=30)
+        real_search = distrodeck._contains_nested_git
+        calls = {"n": 0}
+
+        def search_then_build(path):
+            result = real_search(path)
+            if str(path) == str(target):
+                calls["n"] += 1
+                if calls["n"] == 2:      # the re-check's walk, not the scan's
+                    (target / "fresh.o").write_bytes(b"x" * 4096)
+            return result
+
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_build)
+        args = argparse.Namespace(workspace=str(repo), apply=True,
+                                  include_environments=False, older_than=7,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        assert target.exists(), "deleted a tree a build had just written into"
+
+    def test_the_freed_figure_comes_from_the_final_measurement(self, repo, monkeypatch):
+        """Same refresh supplies the size, so "N freed" is not a figure about the past."""
+        target = make_dir(repo, "build", size=4096)
+        real_search = distrodeck._contains_nested_git
+
+        def search_then_grow(path):
+            result = real_search(path)
+            extra = path / "late.o"
+            if str(path) == str(target) and not extra.exists():
+                extra.write_bytes(b"x" * 2 * 1024 * 1024)
+            return result
+
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_grow)
+        check = distrodeck._still_eligible(target, None, True, repo.parent)
+        assert check.reason == "", check.reason
+        assert check.measured.total >= 2 * 1024 * 1024, check.measured.total
+
+    def test_an_untouched_tree_is_still_approved(self, repo):
+        """The control: measuring last must not refuse the ordinary case."""
+        target = make_dir(repo, "build", age_days=30)
+        check = distrodeck._still_eligible(target, time.time() - 7 * 86400, True, repo.parent)
+        assert check.reason == "" and check.measured is not None

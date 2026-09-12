@@ -90,6 +90,14 @@ This project follows Keep a Changelog and Semantic Versioning.
   before each deletion, so a mount that appears during a minutes-long scan is still
   caught.
 
+  **The pre-delete check measures last**, so the age and the freed size describe the
+  tree after every other question rather than before them. Captured before a full walk
+  and two subprocesses, `newest` went stale while they ran -- and a build writing
+  *untracked* output passes every git question, so nothing else objected:
+  `--older-than --apply` deleted a tree that had just become active, which is the one
+  thing that flag exists to prevent. The same refresh supplies the freed figure, so "N
+  freed" is not a number about the past.
+
   **The pre-delete check no longer has the problem it exists to solve.** Its git and
   nested-repository questions ran before a traversal that takes minutes on a large
   candidate, and the only thing refreshed afterwards was the mount table -- so a file
