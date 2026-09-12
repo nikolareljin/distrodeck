@@ -303,6 +303,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   the cutoff in the future and disable the protection, the second would quietly
   print every entry but the smallest.
 
+  Every guard in this command was **neutralised one at a time and the suite re-run**:
+  81 conditions, three passes. The first found 23 that no test objected to, including two
+  documented flags -- `--list N` and `--include-environments` -- that nothing had ever
+  executed, since every test passed `list=0` and `include_environments=False`. 17 tests
+  later, 70 are caught and the remaining 8 are each annotated at the site as equivalent,
+  unreachable or advisory, with the alternative that covers them named. Three are loop
+  terminators, where neutralising hangs instead of failing: detected, but not by an
+  assertion, which is a third outcome worth distinguishing.
+
   It never enters `.git` -- a repository's history is not build output however
   large it grows. It does **not** prune matched trees from the walk: eligibility
   cannot be known without asking Git, so the scan descends through them and

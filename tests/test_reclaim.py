@@ -497,7 +497,11 @@ class TestEligibilityIsRecheckedBeforeDeleting:
         assert reason == "git could not be consulted again", reason
 
     def test_still_eligible_refuses_a_vanished_directory(self, repo):
-        assert distrodeck._still_eligible(repo / "gone", None, True, repo.parent).reason != ""
+        """Naming the reason. `!= ""` was satisfied by any refusal, including the
+        filesystem probe that now answers first -- so this had stopped testing the
+        check it was written for without failing."""
+        reason = distrodeck._still_eligible(repo / "gone", None, True, repo.parent).reason
+        assert reason == "its filesystem could not be identified", reason
 
     def test_an_unchanged_candidate_is_still_deleted(self, repo, capsys):
         import argparse
@@ -1260,14 +1264,23 @@ class TestItNeverTreatsRepositoryStorageAsBuildOutput:
         assert [str(p) for p, _, _, _ in found] == [], found
 
     def test_a_scan_rooted_inside_git_is_refused(self, repo):
+        """Naming the message, not just matching `.git`.
+
+        A `.git` directory contains `HEAD`, `objects` and `refs`, so the
+        bare-repository probe refuses it too -- and its message contains the path,
+        which contains ".git". Matching the regex therefore proved nothing about which
+        check fired, and removing the `.git`-in-parts test broke nothing.
+        """
         inside = repo / ".git"
         (inside / "build").mkdir(exist_ok=True)
-        with pytest.raises(ValueError, match=r"\.git"):
+        assert distrodeck._git_storage_above(inside) == "it is inside a .git directory"
+        with pytest.raises(ValueError, match="inside a .git directory"):
             distrodeck.find_reclaimable(inside, ARTIFACTS, require_git_ignored=False)
 
     def test_a_scan_rooted_below_git_is_refused(self, repo):
         deeper = repo / ".git" / "objects"
-        with pytest.raises(ValueError, match=r"\.git"):
+        assert distrodeck._git_storage_above(deeper) == "it is inside a .git directory"
+        with pytest.raises(ValueError, match="inside a .git directory"):
             distrodeck.find_reclaimable(deeper, ARTIFACTS, require_git_ignored=False)
 
     def test_the_command_refuses_it_with_a_message(self, repo, capsys):
@@ -2657,3 +2670,238 @@ class TestHeadAndObjectsAloneAreNotARepository:
         for name in ("objects", "refs", "reftable"):
             (at / name).mkdir()
         assert distrodeck._is_bare_repository(os.listdir(at)) is True
+
+
+class TestGapsFoundByNeutralisingEveryGuard:
+    """Written after mutating all 81 guard conditions in the reclaim code to
+    `if False:` and running the suite against each.
+
+    23 survived. Most were genuinely redundant -- an earlier check answers first, which
+    is noted where it applies -- but these had no test at all, including two documented
+    user-facing flags and the load-bearing "no longer ignored" refusal.
+    """
+
+    @staticmethod
+    def _args(workspace, **over):
+        base = dict(workspace=str(workspace), apply=False, include_environments=False,
+                    older_than=0, list=0, any_directory=False)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def test_a_plain_subdirectory_is_counted_once(self, repo):
+        """`_measure` walks `dirs` to catch symlinks, and every entry there is also
+        yielded as a root. Without the `S_ISLNK` filter each ordinary subdirectory's
+        blocks are added twice -- the figure inflates and nothing objected."""
+        flat = make_dir(repo, "build", size=1024)
+        deep = make_dir(repo, "target", size=1024)
+        for n in range(20):
+            (deep / f"sub{n}").mkdir()
+        own = os.stat(deep / "sub0")
+        blocks = getattr(own, "st_blocks", None)
+        per_dir = own.st_size if blocks is None else blocks * 512
+        measured = distrodeck._measure(deep)
+        budget = distrodeck._measure(flat).total + per_dir * 21 * 1.25
+        assert measured.total < budget, (
+            f"{measured.total} is more than 20 directories' worth: counted twice"
+        )
+
+    def test_list_prints_the_largest_candidates(self, repo, capsys):
+        """`--list N` had no test at all: every other test passes `list=0`."""
+        make_dir(repo, "build", size=256 * 1024)
+        make_dir(repo, "target", size=64 * 1024)
+        make_dir(repo, "node_modules", size=1024)
+        distrodeck.run_reclaim(self._args(repo.parent, list=2))
+        out = capsys.readouterr().out
+        listed = [line for line in out.splitlines() if line.strip().endswith(("build", "target", "node_modules"))]
+        assert any("build" in line and "d  " in line for line in listed), out
+        named = [line for line in out.splitlines() if "/build" in line or "/target" in line or "/node_modules" in line]
+        assert len(named) == 2, f"--list 2 named {len(named)} directories:\n{out}"
+        assert not any("/node_modules" in line for line in named), named
+
+    def test_list_zero_names_nothing_individually(self, repo, capsys):
+        make_dir(repo, "build", size=1024)
+        distrodeck.run_reclaim(self._args(repo.parent, list=0))
+        out = capsys.readouterr().out
+        assert not any("/build" in line for line in out.splitlines()), out
+
+    def test_include_environments_adds_virtualenvs(self, repo, capsys):
+        """The other flag with no coverage. Its whole point is that a virtualenv is
+        rebuildable only with a network, so it is excluded until asked for."""
+        make_dir(repo, "venv", size=128 * 1024)
+        make_dir(repo, "build", size=1024)
+
+        distrodeck.run_reclaim(self._args(repo.parent))
+        without = capsys.readouterr().out
+        assert "venv" not in without.replace("Virtualenvs", "").replace("virtualenv", ""), without
+
+        distrodeck.run_reclaim(self._args(repo.parent, include_environments=True))
+        with_flag = capsys.readouterr().out
+        assert "venv" in with_flag, with_flag
+
+    def test_a_failed_rev_parse_means_no_worktree(self, repo, monkeypatch):
+        """`_worktree_of`'s git-failure path: a repository git cannot answer about is
+        not one this command will delete inside."""
+        target = make_dir(repo, "build")
+        real_git = distrodeck._git
+
+        def failing(worktree, *args, **kwargs):
+            if args and args[0] == "rev-parse":
+                # Non-empty stdout *and* a failure status. With an empty stdout the
+                # return-code check is an equivalent mutation -- `top` is "" and the
+                # answer is None either way -- so removing the guard broke no test.
+                # A git that prints something while failing is what distinguishes them.
+                return subprocess.CompletedProcess(args, 128, "/not/a/worktree\n",
+                                                   "fatal: bad object")
+            return real_git(worktree, *args, **kwargs)
+
+        monkeypatch.setattr(distrodeck, "_git", failing)
+        assert distrodeck._worktree_of(target) is None, (
+            "a failing rev-parse's stdout was trusted as a worktree path"
+        )
+
+    def test_a_candidate_outside_any_worktree_is_not_offered(self, tmp_path):
+        """Through the filter, not through `_worktree_of` alone: there is nothing to
+        ask about a directory no repository contains."""
+        loose = tmp_path / "loose" / "build"
+        loose.mkdir(parents=True)
+        (loose / "blob").write_bytes(b"x" * 4096)
+        assert distrodeck.find_reclaimable(tmp_path, ARTIFACTS) == []
+        # ...and `--any-directory` is what waives it.
+        assert [p.name for p, _, _, _ in
+                distrodeck.find_reclaimable(tmp_path, ARTIFACTS,
+                                            require_git_ignored=False)] == ["build"]
+
+    def test_the_recheck_refuses_a_candidate_that_is_not_ignored(self, repo):
+        """The load-bearing git refusal in `_still_eligible`, which nothing reached:
+        every test calling it directly used an ignored directory."""
+        authored = repo / "build-output"
+        authored.mkdir()
+        (authored / "main.c").write_text("int main(void){return 0;}\n")
+        check = distrodeck._still_eligible(authored, None, True, repo.parent)
+        assert check.reason == "it is no longer ignored by its repository", check.reason
+
+    def test_a_directory_that_becomes_a_file_is_refused(self, repo):
+        """And this is what reaches `is_dir`: the path exists, so the probe passes."""
+        was_a_dir = repo / "build"
+        was_a_dir.write_text("not a directory any more\n")
+        check = distrodeck._still_eligible(was_a_dir, None, True, repo.parent)
+        assert check.reason == "it is no longer there", check.reason
+
+    def test_run_reclaim_refuses_a_workspace_that_is_not_a_directory(self, repo, capsys):
+        not_a_dir = repo / "notes.txt"
+        not_a_dir.write_text("hello\n")
+        with pytest.raises(SystemExit) as exit_status:
+            distrodeck.run_reclaim(self._args(not_a_dir))
+        assert exit_status.value.code == 1
+        assert "Not a directory" in capsys.readouterr().err
+
+    def test_malformed_mountinfo_lines_are_skipped(self):
+        """A short line, a line with no `-`, and one where the type is missing."""
+        lines = [
+            "too short",
+            "22 1 0:5 / /mnt rw,relatime shared:2 ext4 /dev/sda rw",   # no separator
+            "23 1 0:6 / /other rw -",                                   # nothing after it
+            "24 1 0:7 / /good rw,relatime - btrfs /dev/sdb rw",         # the only valid one
+        ]
+        assert distrodeck._parse_mountinfo_types(lines) == {"/good": "btrfs"}
+        # the point-only parser is more permissive by design: it needs five fields
+        assert "/good" in distrodeck._parse_mountinfo(lines)
+
+    def test_mount_above_terminates_when_the_workspace_is_unrelated(self, repo, tmp_path):
+        """The climb stops at the workspace, and its other terminator is the filesystem
+        root. Nothing in the command passes a workspace that is not an ancestor, so that
+        second terminator is only reachable by a caller mistake -- which must not hang."""
+        target = make_dir(repo, "build")
+        unrelated = tmp_path / "somewhere-else"
+        unrelated.mkdir()
+        assert distrodeck._mount_above(target, unrelated, {"/definitely-not-here"}) == ""
+
+
+class TestTheRemainingGapsTheSweepNamed:
+    """The three survivors that were real, after the equivalent mutations were set aside.
+
+    An "equivalent mutation" is one where removing the guard changes nothing observable:
+    `_worktree_of`'s `worktree is None` branch, for instance, is followed by
+    `_worktree_facts(None, ...)`, which fails and refuses the candidate anyway. Those are
+    belt-and-braces, documented as such at the call sites, and no test can distinguish
+    them. These three could be distinguished, and were not.
+    """
+
+    def test_a_mount_appearing_during_the_nested_walk_is_caught(self, repo, monkeypatch):
+        """Step 4's mount check: the table is re-read after the walk, and nothing tested
+        a change that happens *during* it -- earlier tests change the table around
+        `_measure`, which step 5 catches instead."""
+        target = make_dir(repo, "build")
+        real_search = distrodeck._contains_nested_git
+        state = {"mounted": False}
+
+        def search_then_mount(path):
+            result = real_search(path)
+            if str(path) == str(target):
+                state["mounted"] = True
+            return result
+
+        monkeypatch.setattr(distrodeck, "_contains_nested_git", search_then_mount)
+        monkeypatch.setattr(distrodeck, "_mount_points",
+                            lambda: {str(target)} if state["mounted"] else set())
+        check = distrodeck._still_eligible(target, None, True, repo.parent)
+        assert check.reason == "it is itself a mount point", check.reason
+
+    def test_the_scan_refuses_an_in_tree_device_crossing(self, repo, monkeypatch):
+        """The scan's post-measurement mount check. For a mount the table lists, the
+        discovery screen has already refused the candidate -- so what is left for this
+        one is a crossing only the device numbers reveal, and that was tested on
+        `_measure` alone rather than through the scan."""
+        target = make_dir(repo, "build", size=1024)
+        beyond = target / "elsewhere"
+        beyond.mkdir()
+        (beyond / "blob").write_bytes(b"x" * 4096)
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: None)
+        real_stat = os.stat
+        other = real_stat(target).st_dev + 1
+
+        def pretend(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if str(path).startswith(str(beyond)):
+                return os.stat_result(tuple(info)[:2] + (other,) + tuple(info)[3:])
+            return info
+
+        monkeypatch.setattr(os, "stat", pretend)
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert [str(p) for p, _, _, _ in found] == [], found
+
+    def test_a_candidate_outside_a_worktree_says_so_at_recheck(self, repo):
+        """`_still_eligible`'s own worktree check. Without it the candidate is still
+        refused -- by `_worktree_facts` failing on a None worktree -- but the message
+        becomes "git could not be consulted again", which describes a broken git rather
+        than a directory no repository contains."""
+        outside = repo.parent / "loose-build"
+        outside.mkdir()
+        check = distrodeck._still_eligible(outside, None, True, repo.parent)
+        assert check.reason == "it is no longer inside a git worktree", check.reason
+
+    def test_the_hard_link_note_is_printed(self, repo, capsys):
+        target = make_dir(repo, "build", size=64 * 1024)
+        try:
+            os.link(target / "blob", target / "second")
+        except OSError:
+            pytest.skip("filesystem does not support hard links")
+        args = argparse.Namespace(workspace=str(repo.parent), apply=False,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        out = capsys.readouterr().out
+        assert "hard-linked content is excluded" in out, out
+
+    def test_the_skipped_count_is_printed(self, repo, capsys, monkeypatch):
+        """Refusals are the feature here, so the count of them is not decoration."""
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_still_eligible",
+                            lambda *a, **k: distrodeck.Recheck("a clone appeared inside it"))
+        args = argparse.Namespace(workspace=str(repo.parent), apply=True,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        out = capsys.readouterr().out
+        assert "Skipped 1" in out, out
+        assert "stopped being eligible" in out, out

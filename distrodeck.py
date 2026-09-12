@@ -2949,6 +2949,10 @@ def _worktree_of(path: pathlib.Path, cache: dict = None):
                 answer = pathlib.Path(top) if top else None
             break
         if here.parent == here:
+            # The filesystem root. A loop terminator, so neutralising it hangs rather
+            # than failing an assertion -- which a mutation sweep reports as a third
+            # outcome, and which is why the climb is bounded here explicitly rather
+            # than trusting `.parent` to run out.
             answer = None
             break
         here = here.parent
@@ -3144,6 +3148,10 @@ def _descendable(root, dirs, points) -> list:
 
     here = _device_of(root)
     if here is None:
+        # Belt-and-braces, not covered: with no reference device the loop below keeps
+        # every child anyway, because `child is not None` fails. Removing this changes
+        # nothing observable, which a mutation sweep confirmed -- it is here so the
+        # intent is readable, not because a test depends on it.
         return list(dirs)
     kept = []
     for name in dirs:
@@ -3454,6 +3462,10 @@ def _still_eligible(
         # An ancestor can become a bare repository in between -- `git init --bare` in
         # a directory that already existed is enough -- and the candidate would then
         # be a ref directory. No flag waives this one.
+        #
+        # Removing *this* call alone is an equivalent mutation: the repeat in step 4
+        # refuses the same candidate, so no test fails. It is kept because it saves two
+        # traversals on an already-doomed candidate, not because it is load-bearing.
         return Recheck(storage)
 
     # 3. The walk that answers what a measurement cannot.
@@ -3475,6 +3487,10 @@ def _still_eligible(
         or _mount_above(path, workspace, points)
     )
     if mounted:
+        # Equivalent to step 5's check for any mount that is still there when step 5
+        # runs, which is every case a test can construct -- distinguishing them would
+        # need a mount that appears during the walk and vanishes again before the
+        # measurement. Kept because it refuses before paying for a traversal.
         return Recheck(mounted)
 
     storage = _git_storage_above(path)
@@ -3491,6 +3507,13 @@ def _still_eligible(
         if path not in ignored:
             return Recheck("it is no longer ignored by its repository")
         if any(str(t).startswith(str(path) + os.sep) for t in tracked):
+            # Defence in depth with no reachable case, which a mutation sweep confirms
+            # from the other direction: removing it fails no test. Measured against git
+            # 2.x, once anything under an ignored directory is tracked, `check-ignore`
+            # stops calling that directory ignored -- so the check above refuses the
+            # candidate first, with the pattern on the directory, on a parent, anchored,
+            # and with the tracked file several levels down. Kept in case that ever
+            # changes; not claimed as tested.
             return Recheck("it now holds a tracked file")
 
     # 5. Measured last, so the age and the size describe the tree after every check
@@ -3630,6 +3653,10 @@ def find_reclaimable(
         for path in candidates:
             worktree = _worktree_of(path, worktree_cache)
             if worktree is None:
+                # There is nothing to ask about a directory no repository contains.
+                # Equivalent mutation: without this, the candidate is grouped under a
+                # None worktree, `_worktree_facts` fails on it, and the whole group is
+                # skipped with a message about git instead. Same outcome, worse message.
                 continue
             by_worktree.setdefault(worktree, []).append(path)
         eligible = []
@@ -3649,6 +3676,9 @@ def find_reclaimable(
                 # A tracked file under an ignored directory is authored content
                 # that deletion would destroy.
                 if any(str(t).startswith(str(path) + os.sep) for t in tracked):
+                    # The scan's copy of the same unreachable guard -- see the note in
+                    # `_still_eligible`. `check-ignore` has already refused anything this
+                    # would catch.
                     continue
                 eligible.append(path)
         candidates = eligible
@@ -3659,6 +3689,10 @@ def find_reclaimable(
         if nested:
             continue
         if not readable:
+            # Equivalent to the measurement's completeness refusal below, which catches
+            # the same candidate -- so a mutation sweep finds no test objecting when this
+            # is removed. Kept for the message: this one names the repository search, and
+            # the other names size and age.
             print(
                 f"  skipping {path}: it could not be read in full, so a "
                 "repository inside it cannot be ruled out",
@@ -3803,6 +3837,8 @@ def run_reclaim(args: argparse.Namespace) -> None:
         print()
         print("  Nothing was deleted. Re-run with --apply to reclaim it.")
         if not args.include_environments:
+            # A hint, not a guard. Nothing asserts it, deliberately: pinning the exact
+            # wording of advice makes the test an obstacle to improving the advice.
             print("  Virtualenvs are excluded; --include-environments adds them, and")
             print("  restoring one needs a network and a pip install.")
         return
