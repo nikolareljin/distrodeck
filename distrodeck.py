@@ -161,6 +161,35 @@ def load_config() -> configparser.ConfigParser:
     return cfg
 
 
+def developer_workspace() -> Path:
+    """Configured development-checkout workspace, defaulting to ~/Projects."""
+    configured = load_config().get("developer", "workspace", fallback="").strip()
+    return Path(configured or "~/Projects").expanduser()
+
+
+def user_config_path() -> Path:
+    """The per-user config file, which takes precedence over the system file."""
+    return config_paths()[-1]
+
+
+def set_developer_workspace(path: Path) -> None:
+    """Persist the developer workspace in the per-user configuration file."""
+    config_path = user_config_path()
+    cfg = configparser.ConfigParser()
+    try:
+        if config_path.exists():
+            cfg.read(config_path, encoding="utf-8")
+        if not cfg.has_section("developer"):
+            cfg.add_section("developer")
+        cfg.set("developer", "workspace", str(path))
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_path.open("w", encoding="utf-8") as stream:
+            cfg.write(stream)
+    except (OSError, configparser.Error) as exc:
+        raise RuntimeError(f"Could not save '{config_path}': {exc}") from exc
+    load_config.cache_clear()
+
+
 def parse_csv_list(value: Optional[str]) -> List[str]:
     """Parse comma-delimited lists (whitespace around commas is ignored)."""
     if not value:
@@ -784,6 +813,33 @@ def run_config_edit_tui() -> None:
             for choice in choices:
                 edit_config_file(Path(choice))
             continue
+
+
+def run_settings_tui() -> None:
+    """Configure settings that belong to distrodeck rather than the OS."""
+    current = developer_workspace()
+    selected = dialog_input(
+        "Distrodeck settings",
+        "Developer workspace for the developer-only reclaim command:\n"
+        "(This command is not available from the main TUI.)",
+        str(current),
+    )
+    if not selected:
+        return
+    workspace = Path(selected).expanduser().resolve()
+    if not workspace.is_dir():
+        dialog_msgbox("Distrodeck settings", f"Not a directory: {workspace}")
+        return
+    try:
+        set_developer_workspace(workspace)
+    except RuntimeError as exc:
+        dialog_msgbox("Distrodeck settings", str(exc))
+        return
+    dialog_msgbox(
+        "Distrodeck settings",
+        f"Developer workspace saved to {user_config_path()}:\n{workspace}",
+    )
+
 
 def dialog_gauge(
     title: str, message: str, no_percent: bool = False
@@ -3765,7 +3821,8 @@ def find_reclaimable(
 
 
 def run_reclaim(args: argparse.Namespace) -> None:
-    workspace = pathlib.Path(args.workspace).expanduser().resolve()
+    workspace_arg = args.workspace or developer_workspace()
+    workspace = pathlib.Path(workspace_arg).expanduser().resolve()
     if not workspace.is_dir():
         print(f"Not a directory: {workspace}", file=sys.stderr)
         sys.exit(1)
@@ -6596,6 +6653,7 @@ def run_tui() -> None:
         ("git-aliases", "Tools: Configure git aliases"),
         ("automate", "Automation: Run Ansible pull"),
         ("net-tools", "Network: Run installed tools"),
+        ("settings", "Settings: Configure distrodeck"),
         ("config-edit", "System: Edit config files"),
         ("doctor", "Diagnostics: Check system prerequisites"),
         ("sysinfo", "Diagnostics: Full system info"),
@@ -6613,6 +6671,9 @@ def run_tui() -> None:
             break
         if choice == "about":
             show_about_dialog()
+            continue
+        if choice == "settings":
+            run_settings_tui()
             continue
         if choice == "export":
             output = dialog_input(
@@ -7208,8 +7269,11 @@ def build_parser() -> argparse.ArgumentParser:
     reclaim_cmd.add_argument(
         "workspace",
         nargs="?",
-        default="~/Projects",
-        help="Directory of checkouts to scan (default: ~/Projects)",
+        default=None,
+        help=(
+            "Developer workspace to scan (default: [developer] workspace in "
+            "distrodeck config, or ~/Projects)"
+        ),
     )
     # Deliberately the reverse of cleanup-kernels, which takes --dry-run. This
     # one can delete tens of gigabytes across a hundred repositories in a

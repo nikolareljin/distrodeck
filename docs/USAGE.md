@@ -158,12 +158,19 @@ Options:
 
 ### reclaim
 
-Report, and with `--apply` remove, build output under a workspace of checkouts.
+Developer-only command: report, and with `--apply` remove, build output under a
+workspace of checkouts. It is deliberately not a main-TUI action.
 A workspace is mostly not source: measured on one machine, 60.0 GB of 90 GB was
 regenerable output in `build/`, `target/`, `.dart_tool/` and `node_modules/`.
 
+The workspace comes from `[developer] workspace` in distrodeck's configuration,
+or defaults to `~/Projects` when unset. Set it with the main TUI's **Settings**
+entry, or override it for one invocation by supplying a path. The setting is for
+the developer's checkout directory; it is not an installer or system-cleanup
+location.
+
 ```
-distrodeck reclaim                            # report on ~/Projects
+distrodeck reclaim                            # report on configured workspace
 distrodeck reclaim ~/work --list 10           # a different workspace, name the ten largest
 distrodeck reclaim --older-than 30            # only what has not been touched in a month
 distrodeck reclaim --older-than 30 --apply    # and reclaim it

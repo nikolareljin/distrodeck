@@ -76,6 +76,64 @@ class TestWhatItFinds:
         assert found[0][1] > found[1][1]
 
 
+class TestDeveloperWorkspaceSetting:
+    def test_configured_workspace_is_used_when_the_cli_path_is_omitted(
+        self, tmp_path, monkeypatch
+    ):
+        workspace = tmp_path / "developer-checkouts"
+        workspace.mkdir()
+        config = tmp_path / "config.ini"
+        config.write_text(f"[developer]\nworkspace = {workspace}\n")
+        monkeypatch.setattr(distrodeck, "config_paths", lambda: [config])
+        distrodeck.load_config.cache_clear()
+
+        assert distrodeck.developer_workspace() == workspace
+        args = distrodeck.build_parser().parse_args(["reclaim"])
+        assert args.workspace is None
+
+        distrodeck.load_config.cache_clear()
+
+    def test_setting_workspace_writes_the_user_config(self, tmp_path, monkeypatch):
+        config = tmp_path / "distrodeck" / "config.ini"
+        workspace = tmp_path / "developer-checkouts"
+        workspace.mkdir()
+        monkeypatch.setattr(distrodeck, "config_paths", lambda: [config])
+        distrodeck.load_config.cache_clear()
+
+        distrodeck.set_developer_workspace(workspace)
+
+        contents = config.read_text()
+        assert f"workspace = {workspace}" in contents
+        assert distrodeck.developer_workspace() == workspace
+
+        distrodeck.load_config.cache_clear()
+
+    def test_cli_workspace_overrides_the_configured_workspace(
+        self, tmp_path, monkeypatch
+    ):
+        configured = tmp_path / "configured"
+        overridden = tmp_path / "overridden"
+        configured.mkdir()
+        overridden.mkdir()
+        config = tmp_path / "config.ini"
+        config.write_text(f"[developer]\nworkspace = {configured}\n")
+        monkeypatch.setattr(distrodeck, "config_paths", lambda: [config])
+        distrodeck.load_config.cache_clear()
+        captured = []
+        monkeypatch.setattr(
+            distrodeck,
+            "_git_storage_above",
+            lambda path: captured.append(path) or "test refusal",
+        )
+
+        args = distrodeck.build_parser().parse_args(["reclaim", str(overridden)])
+        with pytest.raises(SystemExit):
+            distrodeck.run_reclaim(args)
+
+        assert captured == [overridden]
+        distrodeck.load_config.cache_clear()
+
+
 class TestItWillNotDeleteAuthoredCode:
     """The failure this command must never have.
 
