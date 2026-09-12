@@ -156,6 +156,129 @@ Options:
 - `--cleanup-kernels`: clean old auto-installed kernels after a successful update
 - `--keep-kernels N`: previous kernel versions to keep when cleanup is enabled
 
+### reclaim
+
+Developer-only command: report, and with `--apply` remove, build output under a
+workspace of checkouts. It is deliberately not a main-TUI action.
+A workspace is mostly not source: measured on one machine, 60.0 GB of 90 GB was
+regenerable output in `build/`, `target/`, `.dart_tool/` and `node_modules/`.
+
+The workspace comes from `[developer] workspace` in distrodeck's configuration,
+or defaults to `~/Projects` when unset. Set it with the main TUI's **Settings**
+entry, or override it for one invocation by supplying a path. The setting is for
+the developer's checkout directory; it is not an installer or system-cleanup
+location.
+
+```
+distrodeck reclaim                            # report on configured workspace
+distrodeck reclaim ~/work --list 10           # a different workspace, name the ten largest
+distrodeck reclaim --older-than 30            # only what has not been touched in a month
+distrodeck reclaim --older-than 30 --apply    # and reclaim it
+```
+
+Options:
+- `--apply`: actually delete. Without it nothing is removed, which is the
+  reverse of `cleanup-kernels` on purpose: this can remove tens of gigabytes
+  across a hundred repositories in a second, so the safe direction is the
+  default and acting is the flag.
+- `--older-than DAYS`: only directories untouched for this many days. Protects
+  work in progress. A negative value is refused. On the measured machine the
+  default 60.0 GB falls to 46.4 GB at seven days and 29.6 GB at
+  thirty. A tree's age is the newest mtime of **anything inside it, file or
+  directory** -- so creating or removing even an empty directory in a build tree
+  makes it recent. That is deliberate: it is activity, and the mistake it causes
+  is refusing to delete something, not deleting something in use. A directory is
+  only absorbed into an ancestor that itself survives this filter, so an old
+  `build/node_modules` is still offered when `build` is rejected for something
+  fresh elsewhere inside it.
+- `--list N`: also list the N largest candidates individually.
+- `--include-environments`: also Python virtualenvs. Off by default because
+  restoring one needs a network and a `pip install`, and a virtualenv holding
+  large machine-learning wheels is a multi-gigabyte download -- which is exactly
+  the situation where somebody most wants the disk back.
+- `--any-directory`: offer matching directories even when Git does not consider
+  them ignored. Off by default, and the most important default here:
+
+What it will not offer, ever -- no flag lifts these:
+- a directory containing a repository. An outer repository can ignore `build/`
+  while `build/vendor` is itself a clone, and deleting it would take that
+  history. A `.git` file counts as well as a directory, since that is how
+  submodules and linked worktrees appear, and a bare clone counts too: it has no
+  `.git` entry at all, only `HEAD`, `objects` and its ref storage at the root -- `refs/`
+  with the traditional backend, or `reftable/` for a repository created by git 2.45 or
+  newer with `--ref-format=reftable`.
+- anything inside a bare repository, and any scan rooted inside `.git` or inside a
+  bare repository -- at its root or below it. A loose ref is a path: a branch called
+  `build/main` is a directory named `build` under `refs/heads`, so deleting it would
+  delete the branch. The workspace's own ancestors are checked before the scan
+  begins, and again immediately before each deletion, because `git init --bare` in
+  an existing directory is enough to turn an ancestor into one mid-scan. A workspace
+  of `repo.git/refs/heads` never walks past the entries that identify the repository
+  above it, and those entries are probed by path rather than listed, so a repository
+  that allows directories to be traversed but not listed is still recognised.
+  Refused whatever the flags say, since a repository's own storage is not build
+  output.
+- a symlink, however it is named. `os.walk` lists a symlink to a directory among
+  directories, so one called `build` was offered and measured as its target --
+  space that removing the link would not free. Removing it would free only the
+  link, and somebody made it deliberately.
+- anything with a filesystem mounted *above* it, between the workspace and the
+  candidate, as checked again immediately before deletion -- from inside a mounted
+  filesystem a directory and its parent share a device, so only the mount table sees
+  this, and only by looking up. The workspace itself being a mount is fine: a
+  workspace on its own partition is ordinary.
+- anything at or below a mount point. The scan does not descend past one, so a
+  `target/` inside a mounted tree is never a candidate -- it would have been judged on
+  its own merits, with the mount an ancestor that nothing was looking at.
+- a directory with a filesystem mounted inside it, or which is itself a mount
+  point. `rm -r` walks through a mount like any other directory, so a bind mount,
+  an NFS share or a mounted image inside an ignored `build/` would have its
+  *contents* deleted -- data no build reproduces, whose space does not return to
+  this disk anyway. Three signals: a device number that changes inside the tree, a
+  device number differing from the parent's (which is the only way to notice that
+  the candidate is a mount point itself -- everything under a mount is one device),
+  and the mount table, which is what catches a bind mount of the *same* filesystem.
+  Only the last needs `/proc`, so where it cannot be read the same-device bind mount
+  is the one case that goes undetected. Two of the three -- the parent comparison and
+  the mount table -- are answered **before the candidate is read at all -- before even the symlink check or any git call**, so a slow
+  or dead mount is skipped rather than measured. The in-tree device change is
+  necessarily found while measuring, since that is what notices it; what it gives is
+  that the measurement **stops** at the boundary and goes no deeper, so the cost is
+  one listing of the mount root rather than a traversal of whatever is behind it.
+- a directory it could not read in full. A subtree the scan cannot enter is
+  "could not look", not "looked and found nothing" -- it could hold a clone, and
+  with `--older-than` it could hold the very file that says somebody is working
+  in there. It is also a tree `rm` would abandon half-done, so it is refused
+  whether or not a day count was given, and the skip is reported on stderr.
+
+What it will not offer by default, where `--any-directory` is the flag that
+lifts both:
+- a directory the containing repository does not ignore. `build/` and `target/`
+  are ordinary names for authored code, and being gitignored is the evidence
+  that a directory is output rather than source. On the measured machine, 8 of
+  101 `build/` directories were tracked or unignored.
+- anything at all in a worktree where `git` could not be consulted. Both the
+  ignore check and the index check must succeed, or nothing there is offered.
+
+With `--apply`, a removal that fails is reported on stderr and the command exits
+**nonzero** once every other candidate has been attempted -- one unreadable tree
+does not cost the rest of the run, and a cron entry or CI step can tell that the
+disk was not actually freed. A *skip* is not a failure: that is the pre-delete
+re-check doing its job, and the exit status stays zero for it.
+
+Reported sizes are **allocated blocks**, not apparent file length -- directories
+  included, since each is an allocation of its own and a `node_modules` is mostly
+  directories -- and
+hard-linked content is excluded from the total and reported separately: removing
+one name for an inode frees nothing while another survives, so the figure is a
+floor rather than an estimate -- **on a filesystem without shared extents**. On btrfs,
+ZFS, bcachefs or XFS with `reflink=1`, two files can share blocks by reference while
+each reports them as its own and `st_nlink` stays 1, so deleting one copy frees nothing
+while the other holds the extents. There the figure is **neither a floor nor a
+ceiling**: shared extents inflate it, and the excluded hard-linked content deflates it
+whenever every link to an inode is inside what you delete. `reclaim` reads the filesystem type from the mount
+table and says so when the workspace is on one of those.
+
 ### upgrade
 
 Run a distro upgrade. On Ubuntu this uses `do-release-upgrade`.

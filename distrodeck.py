@@ -4,10 +4,12 @@ import base64
 import configparser
 import json
 import os
+import pathlib
 import re
 import shlex
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,7 @@ import threading
 import time
 import shutil
 from functools import lru_cache
+from typing import NamedTuple
 from datetime import datetime, timezone
 from pathlib import Path
 from glob import glob
@@ -156,6 +159,35 @@ def load_config() -> configparser.ConfigParser:
                 warn(f"Failed to read config file '{path}': {exc}")
             continue
     return cfg
+
+
+def developer_workspace() -> Path:
+    """Configured development-checkout workspace, defaulting to ~/Projects."""
+    configured = load_config().get("developer", "workspace", fallback="").strip()
+    return Path(configured or "~/Projects").expanduser()
+
+
+def user_config_path() -> Path:
+    """The per-user config file, which takes precedence over the system file."""
+    return config_paths()[-1]
+
+
+def set_developer_workspace(path: Path) -> None:
+    """Persist the developer workspace in the per-user configuration file."""
+    config_path = user_config_path()
+    cfg = configparser.ConfigParser()
+    try:
+        if config_path.exists():
+            cfg.read(config_path, encoding="utf-8")
+        if not cfg.has_section("developer"):
+            cfg.add_section("developer")
+        cfg.set("developer", "workspace", str(path))
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_path.open("w", encoding="utf-8") as stream:
+            cfg.write(stream)
+    except (OSError, configparser.Error) as exc:
+        raise RuntimeError(f"Could not save '{config_path}': {exc}") from exc
+    load_config.cache_clear()
 
 
 def parse_csv_list(value: Optional[str]) -> List[str]:
@@ -781,6 +813,33 @@ def run_config_edit_tui() -> None:
             for choice in choices:
                 edit_config_file(Path(choice))
             continue
+
+
+def run_settings_tui() -> None:
+    """Configure settings that belong to distrodeck rather than the OS."""
+    current = developer_workspace()
+    selected = dialog_input(
+        "Distrodeck settings",
+        "Developer workspace for the developer-only reclaim command:\n"
+        "(This command is not available from the main TUI.)",
+        str(current),
+    )
+    if not selected:
+        return
+    workspace = Path(selected).expanduser().resolve()
+    if not workspace.is_dir():
+        dialog_msgbox("Distrodeck settings", f"Not a directory: {workspace}")
+        return
+    try:
+        set_developer_workspace(workspace)
+    except RuntimeError as exc:
+        dialog_msgbox("Distrodeck settings", str(exc))
+        return
+    dialog_msgbox(
+        "Distrodeck settings",
+        f"Developer workspace saved to {user_config_path()}:\n{workspace}",
+    )
+
 
 def dialog_gauge(
     title: str, message: str, no_percent: bool = False
@@ -2599,6 +2658,1289 @@ def maybe_cleanup_kernels(keep: int) -> None:
         return
     if not run_cleanup_kernels(argparse.Namespace(dry_run=False, keep=keep)):
         warn("Old kernel cleanup reported errors.")
+
+
+# ---------------------------------------------------------------------------
+# reclaim: disk that a build can make again
+# ---------------------------------------------------------------------------
+#
+# A workspace of development checkouts is mostly not source. Measured on one
+# machine, 90 GB across roughly a hundred repositories: 34.1 GB of `build/`,
+# 15.6 GB of Rust `target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/`
+# -- 60.0 GB in total, about two thirds, none of it authored by anybody. A
+# further 3.3 GB is hard-linked and deliberately left out of that figure,
+# because removing one name for an inode frees nothing while another survives.
+#
+# Those are the figures *after* the gitignored requirement below. Before it, a
+# basename match offered 101 `build/` directories; 8 of them were tracked or
+# unignored in their own repository, including a `scripts/build` and a
+# `src/.../build` that are plainly authored. Deleting those is the worst failure
+# this command could have, and the name alone cannot tell them apart.
+#
+# The distinction this command is built around is **regenerable versus
+# reproducible-at-a-cost**. A `target/` directory is the output of a command
+# that can be run again offline in minutes. A virtualenv is also "rebuildable",
+# and rebuilding one that holds torch and whisper is a multi-gigabyte download
+# that fails entirely on a train. They are not the same risk and are not
+# offered on the same flag.
+
+# Directories that are pure build output: deleting one costs the time to run a
+# build, and nothing else. Every one of these is conventionally gitignored.
+RECLAIM_ARTIFACTS = {
+    "build": "compiler and packager output (Gradle, CMake, Flutter)",
+    "target": "Rust build output",
+    ".dart_tool": "Flutter and Dart package resolution",
+    "node_modules": "npm dependency tree",
+    ".gradle": "Gradle caches for this project",
+    ".next": "Next.js build output",
+    "__pycache__": "Python bytecode",
+    ".pytest_cache": "pytest scratch",
+    ".mypy_cache": "mypy incremental state",
+}
+
+# Rebuildable, but only with a network and time -- and sometimes a very large
+# download. Behind its own flag because "free to delete" is not true of these
+# in the situation where somebody most wants the space.
+RECLAIM_ENVIRONMENTS = {
+    "venv": "Python virtualenv (needs network and a pip install to restore)",
+    ".venv": "Python virtualenv (needs network and a pip install to restore)",
+}
+
+
+def _nonnegative_int(raw: str) -> int:
+    """An argparse type that refuses a negative count.
+
+    `--older-than -1` puts the cutoff in the *future*, so every candidate
+    qualifies as old -- one mistyped sign turns the work-in-progress protection
+    off entirely while appearing to use it. `--list -1` is quieter still: the
+    value is truthy, so `found[:-1]` prints every candidate except the smallest
+    rather than refusing an impossible count. Both are refused at parse time,
+    where the message can name the flag.
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a whole number")
+    if value < 0:
+        raise argparse.ArgumentTypeError(
+            "cannot be negative: a negative day count puts the cutoff in the "
+            "future and disables the protection, and a negative list count "
+            "silently prints all but the smallest entry"
+        )
+    return value
+
+
+class Measurement(NamedTuple):
+    """What one traversal of a candidate learned.
+
+    A tuple rather than six return values because the qualifiers are only meaningful
+    next to the figures they qualify. `complete` false means a size
+    read off this traversal is not a smaller size, it is an unknown one.
+    `crosses_mount` true means the tree reaches storage that is not the
+    candidate's. `linked_inodes` is evidence rather than a conclusion: this
+    traversal reports the multiply-linked inodes it saw and their sizes, and the
+    caller decides which candidate accounts for each, because a measurement
+    cannot know whether its own candidate will survive the filters.
+    """
+
+    total: int
+    newest: float
+    linked: int
+    linked_inodes: dict
+    complete: bool
+    crosses_mount: bool
+
+
+def _measure(path: pathlib.Path) -> Measurement:
+    """Measure *path*: bytes freed, newest mtime inside, hard-linked bytes, and
+    whether the traversal managed to read all of it.
+
+    **`complete` is load-bearing, not diagnostic.** Discarding `scandir` and
+    `stat` failures made an unreadable subtree indistinguishable from an empty
+    one, which is the dangerous direction: with `--older-than`, a fresh file in a
+    directory the walk could not enter never raises `newest`, so the tree reads
+    as untouched for weeks and is offered for deletion on the strength of a
+    measurement that never saw the work in progress it exists to protect. An
+    unreadable tree is also one `shutil.rmtree` will abandon half-done.
+
+    **It keeps no ledger of its own.** `linked` is the multiply-linked bytes in
+    *this* tree, de-duplicated by inode within it. De-duplicating across
+    candidates is the caller's job, from `linked_inodes`, and deliberately so:
+    when this function wrote into a shared set, a candidate the age filter later
+    rejected had already consumed the inodes it shared, so the accepted candidate
+    that shared them read them as already counted and the bytes appeared in
+    nobody's figures. A measurement cannot know whether its candidate will
+    survive, so it is not the place that decides.
+
+    **Allocated blocks, not apparent size.** `st_size` is the file's length, not
+    the space on disk: a sparse build artifact reports far more than deleting it
+    returns. Directories are counted too -- each is an allocation of its own, a
+    `node_modules` is mostly directories, and leaving them out made an empty
+    artifact directory report `0B`.
+
+    **Hard-linked inodes are excluded entirely, not counted once.** Counting the
+    first occurrence still overstates the total whenever another link to the
+    same inode survives outside everything being deleted -- removing one of two
+    names frees nothing. Establishing that every `st_nlink` name is inside the
+    deletion set would mean indexing the whole filesystem, so the conservative
+    reading is taken: such inodes are left out and reported separately.
+
+    **That makes the figure an underestimate on a filesystem without shared extents,
+    and only there -- where it is neither an underestimate nor an overestimate.** Copy-on-write filesystems -- btrfs, ZFS, bcachefs,
+    XFS formatted with `reflink=1` -- let two files share blocks by reference
+    rather than by copy, and `st_blocks` reports those blocks for *each* file while
+    `st_nlink` stays 1, so the hard-link exclusion above cannot see them. Deleting
+    one reflinked copy frees nothing while the other survives, exactly as with a
+    hard link, and the total therefore overstates on such a filesystem. Detecting
+    shared extents needs `FIEMAP` per file, which is an `ioctl` Python has no
+    binding for and a syscall per file across a workspace; the honest alternative is
+    to say so, which `reclaim` does when it recognises the filesystem it is
+    measuring.
+
+    The two errors there point in opposite directions and neither bounds the other, so
+    no bound survives: shared extents inflate the total, and the hard-link exclusion
+    deflates it whenever every link to an inode *is* inside the deletion set -- which
+    is the common case for a build tree that hard-links its own outputs. Calling the
+    result an upper bound was as wrong as calling it a floor, in the other direction.
+
+    Within this tree the figure is de-duplicated by inode: adding a linked file's
+    size once per *name* would report an inode with three links as three times its
+    size, an overstatement in the one number whose only job is to explain why the
+    total is lower than expected. Across candidates, `linked_inodes` is what the
+    caller de-duplicates from.
+
+    **The newest mtime of anything inside, file or directory -- and of the candidate
+    itself.** All three contribute: `newest` starts from the candidate's own `stat`,
+    the walk yields the candidate as its first root, and every descendant is stat'd
+    on the way. Saying "not the candidate's own entry" was wrong and it mattered:
+    adding or removing an immediate child updates the candidate's mtime, and
+    `--older-than` reads that. What the rule is actually *for* is that a directory's
+    mtime changes only when its immediate entries do, so an actively compiling
+    `target/` whose root entry is weeks old must not look weeks old -- which is why
+    descendants are included, not why the root is excluded. Directories count as well
+    as files, so creating or removing even an empty one makes a tree recent:
+    deliberately, since that is activity, and the error it causes is refusing to delete
+    rather than deleting something in use.
+
+    **`crosses_mount` is about other people's storage.** `shutil.rmtree` walks
+    through a mount point like any other directory, so an ignored `build/` holding
+    a bind mount, an NFS share or a mounted image would have the *mounted*
+    contents deleted -- data that is not the candidate's to free and may not be
+    replaceable by any build. This flag is one of the three signals `_mount_refusal`
+    combines -- it sees a filesystem mounted *inside* the candidate. It cannot see
+    the candidate being a mount point itself, because everything under a mount is
+    one device; that is a comparison with the parent, and the mount table is what
+    catches a same-device bind mount.
+    """
+    total = 0
+    linked = 0
+    newest = 0.0
+    linked_inodes: dict = {}
+    complete = True
+    devices: set = set()
+
+    def unreadable(_error):
+        nonlocal complete
+        complete = False
+
+    root_device = None
+    try:
+        info = path.stat()
+        newest = info.st_mtime
+        devices.add(info.st_dev)
+        root_device = info.st_dev
+    except OSError:
+        complete = False
+    for root, dirs, files in os.walk(path, onerror=unreadable):
+        try:
+            info = os.stat(root)
+        except OSError:
+            complete = False
+            continue
+        if root_device is not None and info.st_dev != root_device:
+            # Another filesystem. Recorded and then left alone: the candidate is
+            # refused for crossing a boundary, and walking an NFS share or a
+            # bind-mounted dataset to find out how big it is would be minutes of
+            # somebody else's storage measured for nothing -- or, on a dead mount,
+            # no answer at all. One listing of the mount root is the whole cost.
+            devices.add(info.st_dev)
+            dirs[:] = []
+            continue
+        newest = max(newest, info.st_mtime)
+        devices.add(info.st_dev)
+        # A directory is itself an allocation -- typically 4 KiB, and a
+        # `node_modules` is mostly directories. Leaving them out made an empty
+        # artifact directory report 0B and understated every deep tree. No
+        # `st_nlink` test here: a directory's link count is above one for `.` and
+        # each subdirectory, which is not a hard link in the sense that matters,
+        # and treating it as one would move real space into the excluded figure.
+        blocks = getattr(info, "st_blocks", None)
+        total += info.st_size if blocks is None else blocks * 512
+
+        # A directory symlink is listed in `dirs` and never yielded as a root, so
+        # accounting for `files` alone missed it entirely: it contributed no
+        # allocation and, worse, no mtime -- a symlink created or repointed a minute
+        # ago left a tree reading as untouched for weeks, against the rule that age
+        # comes from anything inside. Counted here by `lstat`, which is the link
+        # itself and not what it points at: following it would charge another
+        # directory's contents to this candidate, which is what the symlink
+        # candidates refused at discovery were doing.
+        for name in dirs:
+            link = os.path.join(root, name)
+            try:
+                info = os.lstat(link)
+            except OSError:
+                complete = False
+                continue
+            if not stat.S_ISLNK(info.st_mode):
+                continue
+            newest = max(newest, info.st_mtime)
+            blocks = getattr(info, "st_blocks", None)
+            total += info.st_size if blocks is None else blocks * 512
+
+        for name in files:
+            try:
+                info = os.lstat(os.path.join(root, name))
+            except OSError:
+                # A name the directory listed but could not be stat'd is a file
+                # whose size and mtime are both unknown, so neither figure can
+                # be trusted afterwards.
+                complete = False
+                continue
+            newest = max(newest, info.st_mtime)
+            # `st_blocks` absent is a platform without the field; `st_blocks`
+            # *zero* is a fully sparse file, whose apparent size is exactly what
+            # deleting it does not return. Falling back on zero would report
+            # gigabytes of hole as reclaimable.
+            blocks = getattr(info, "st_blocks", None)
+            size = info.st_size if blocks is None else blocks * 512
+            if info.st_nlink > 1:
+                key = (info.st_dev, info.st_ino)
+                if key not in linked_inodes:
+                    linked_inodes[key] = size
+                    linked += size
+                continue
+            total += size
+    # More than one device under one candidate means a filesystem is mounted
+    # inside it. Two other cases are invisible from in here and are `_mount_refusal`'s
+    # job: the candidate being a mount point itself (one device throughout), and a
+    # bind mount of the same filesystem (its parent's device number).
+    return Measurement(
+        total, newest, linked, linked_inodes, complete, len(devices) > 1
+    )
+
+
+def _human_bytes(count: int) -> str:
+    value = float(count)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}TB"
+
+
+def _git(worktree, *args, stdin: str = None, timeout: int = 60):
+    """Run `git` in *worktree*, or None if it could not be run.
+
+    **Not `text=True`.** That decodes strictly, and a path on Linux is bytes: a
+    single tracked filename that is not valid UTF-8 made `git ls-files -z` raise
+    `UnicodeDecodeError` from inside `subprocess.run` -- which is neither `OSError`
+    nor `SubprocessError`, so it escaped this function and aborted the whole scan
+    rather than failing closed for one worktree. The filesystem encoding with
+    `surrogateescape` round-trips those bytes, so a path read out of `git` can be
+    handed back to `os` unchanged, which is what comparing it against the walk's
+    own paths requires.
+    """
+    try:
+        return subprocess.run(
+            ["git", "-C", str(worktree), *args],
+            input=stdin, capture_output=True, timeout=timeout, check=False,
+            encoding=sys.getfilesystemencoding(), errors="surrogateescape",
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        # `UnicodeError` as well, for the encoding direction: an argument or
+        # `stdin` that the filesystem encoding cannot represent is a refusal for
+        # this worktree, not an exception out of a scan.
+        return None
+
+
+def _worktree_of(path: pathlib.Path, cache: dict = None):
+    """The Git worktree containing *path*, or None if it is not in one.
+
+    **Walks up first, asks `git` once.** A `rev-parse` per candidate made the
+    per-worktree batching below pointless. Measured on one workspace: 8,373
+    candidates across 75 repositories cost 8,523 git processes, of which 8,373
+    were spent deciding which 150 to batch. It is 225 now -- three per repository
+    -- and the whole-workspace scan went from 40.3s to 29.6s. Climbing the directory chain until a `.git` entry appears is stat-only
+    and needs no process at all, and the answer is then confirmed with a single
+    `rev-parse` -- still asking `git`, because `GIT_DIR`, `.git` files for
+    submodules and linked worktrees, and `core.worktree` all mean the first `.git`
+    on the way up is evidence rather than proof.
+
+    Every directory climbed past is cached with the same answer, which is sound
+    precisely because none of them held a `.git`: they cannot belong to a nearer
+    worktree than the one found. That keeps the innermost-wins behaviour `git`
+    itself has, so a submodule inside a checkout still resolves to the submodule.
+
+    With no `.git` anywhere up to the filesystem root, None is returned without
+    asking. That is the fail-closed direction here: a candidate with no worktree
+    is not offered, so a missed unusual configuration costs a directory that is
+    not reclaimed, never one that is deleted unchecked.
+    """
+    if cache is None:
+        cache = {}
+    climbed = []
+    here = path.parent
+    while True:
+        if here in cache:
+            answer = cache[here]
+            break
+        climbed.append(here)
+        if (here / ".git").exists():
+            result = _git(here, "rev-parse", "--show-toplevel", timeout=10)
+            if result is None or result.returncode != 0:
+                answer = None
+            else:
+                top = result.stdout.strip()
+                answer = pathlib.Path(top) if top else None
+            break
+        if here.parent == here:
+            # The filesystem root. A loop terminator, so neutralising it hangs rather
+            # than failing an assertion -- which a mutation sweep reports as a third
+            # outcome, and which is why the climb is bounded here explicitly rather
+            # than trusting `.parent` to run out.
+            answer = None
+            break
+        here = here.parent
+    for directory in climbed:
+        cache[directory] = answer
+    return answer
+
+
+def _worktree_facts(worktree: pathlib.Path, candidates: list) -> tuple:
+    """(ignored paths, tracked paths, both_checks_succeeded) for one worktree.
+
+    Two calls per worktree rather than per directory: a workspace has a hundred
+    repositories and several hundred candidates, and a subprocess each would make
+    the scan slower than the build it is reclaiming.
+
+    **The index is consulted as a second line, not the first.** The worry is that
+    `git add -f` commits a file inside an ignored directory, leaving a candidate
+    that looks disposable while holding authored content. Measured against git
+    2.x, that does not happen: once any file under `build/` is tracked,
+    `check-ignore` stops reporting `build/` as ignored, so the ignore test
+    already refuses it -- confirmed with the pattern on the directory, on a
+    parent, anchored, and with the tracked file several levels down.
+
+    The `ls-files` call is kept anyway, because that is an implementation detail
+    of one git version rather than a documented guarantee, and because it costs
+    one subprocess per worktree. No test asserts it fires; a test that cannot
+    reach the branch it claims to cover would be worse than none.
+    """
+    ignored: set = set()
+    tracked: set = set()
+
+    result = _git(worktree, "check-ignore", "--stdin", "-z",
+                  stdin="\0".join(str(c) for c in candidates))
+    # 0 means some were ignored, 1 means none were; both are normal answers.
+    if result is None or result.returncode not in (0, 1):
+        return set(), set(), False
+    ignored = {pathlib.Path(x) for x in result.stdout.split("\0") if x}
+
+    listed = _git(worktree, "ls-files", "-z")
+    if listed is None or listed.returncode != 0:
+        # The ignore answer is returned as found, and the flag says it is only
+        # half the story -- deliberately, so that a caller which forgets to check
+        # the flag is visibly wrong rather than accidentally safe. Failing open
+        # here would be the worst kind of bug: a candidate accepted by
+        # `check-ignore` deleted while the "holds no tracked file" half of the
+        # promise never ran, which a timeout on a huge repository makes both
+        # likely and quiet.
+        return ignored, set(), False
+    tracked = {worktree / x for x in listed.stdout.split("\0") if x}
+    return ignored, tracked, True
+
+
+# Named so a test can point it at a file of its own. The kernel's copy cannot be
+# made to contain an awkward mount point without mounting one, which needs root.
+_MOUNTINFO = "/proc/self/mountinfo"
+
+
+def _parse_mountinfo(lines) -> set:
+    """Mount points out of `mountinfo` lines. Separate so it can be tested.
+
+    Field 5 is the mount point, and it escapes space, tab, newline and backslash
+    as octal -- a mount under a directory with a space in its name would otherwise
+    read as two fields and compare against nothing.
+    """
+    points = set()
+    for line in lines:
+        fields = line.split()
+        if len(fields) > 4:
+            points.add(_unescape_mountinfo(fields[4]))
+    return points
+
+
+def _unescape_mountinfo(field: str) -> str:
+    """Decode the four characters `mountinfo` escapes as octal."""
+    return (
+        field
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+# Filesystems where one file's blocks can be shared with another's by reference
+# rather than copied. `cp --reflink`, `btrfs subvolume snapshot` and `systemd-nspawn`
+# all produce them routinely. XFS only shares when formatted with `reflink=1`, which
+# cannot be read from the mount table, so it is listed and the wording hedged rather
+# than a guarantee being made either way.
+_REFLINK_FILESYSTEMS = {"btrfs", "xfs", "zfs", "bcachefs", "ocfs2"}
+
+
+def _parse_mountinfo_types(lines) -> dict:
+    """`{mount point: filesystem type}` out of `mountinfo` lines.
+
+    The type is the field after the lone `-`, which is where the optional fields
+    end. Counting from the left breaks on any line that has them.
+    """
+    types = {}
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 5 or "-" not in fields:
+            continue
+        separator = fields.index("-")
+        if separator + 1 >= len(fields):
+            continue
+        types[_unescape_mountinfo(fields[4])] = fields[separator + 1]
+    return types
+
+
+def _filesystem_of(path: pathlib.Path):
+    """The filesystem type *path* lives on, or None if it cannot be determined.
+
+    Longest matching mount point wins, which is what the kernel itself resolves to.
+    """
+    try:
+        with open(
+            _MOUNTINFO,
+            encoding=sys.getfilesystemencoding(),
+            errors="surrogateescape",
+        ) as handle:
+            types = _parse_mountinfo_types(handle)
+    except (OSError, UnicodeError):
+        return None
+
+    best = None
+    here = str(path)
+    for point, kind in types.items():
+        if here == point or here.startswith(point.rstrip(os.sep) + os.sep):
+            if best is None or len(point) > len(best[0]):
+                best = (point, kind)
+    return None if best is None else best[1]
+
+
+def _mount_points():
+    """Every mount point on this machine, or None if the table cannot be read.
+
+    `/proc/self/mountinfo` rather than `os.path.ismount`, which cannot see a bind
+    mount of the same filesystem: `ismount` reports a boundary when the device
+    differs from the parent's or the inode is a filesystem root, and a same-device
+    bind mount is neither. That is exactly the case most likely to appear inside a
+    development tree -- somebody bind-mounting a large dataset or an output
+    directory into a build.
+
+    Paths in this file escape space, tab, newline and backslash as octal, so they
+    are decoded rather than compared raw.
+
+    **Read with the filesystem encoding, not UTF-8.** `mountinfo` octal-escapes the
+    four characters that would break its own field separation and nothing else, so a
+    mount point whose name is not valid UTF-8 arrives as raw bytes. Decoding
+    strictly raised `UnicodeDecodeError`, which is not an `OSError` and so was not
+    the unavailable-table fallback -- it aborted the command. `surrogateescape`
+    matches `_git` and keeps the names comparable with the `Path` values they are
+    tested against.
+    """
+    try:
+        with open(
+            _MOUNTINFO,
+            encoding=sys.getfilesystemencoding(),
+            errors="surrogateescape",
+        ) as handle:
+            return _parse_mountinfo(handle)
+    except (OSError, UnicodeError):
+        # No refusal on its own: `st_dev` divergence still catches a separate
+        # filesystem, which is the common case. Returning None says "this half of
+        # the check did not run" rather than "there are no mounts".
+        return None
+
+
+def _device_of(path):
+    """The device a path lives on, or None if it cannot be read."""
+    try:
+        return os.lstat(path).st_dev
+    except OSError:
+        return None
+
+
+def _descendable(root, dirs, points) -> list:
+    """Which of *dirs* the discovery walk may enter: not mounts, not other devices.
+
+    Pruning here rather than refusing afterwards, because what is below a mount
+    cannot be refused afterwards: `_mount_refusal` answers about mounts at or below
+    the path it is given, and for a `target/` found inside a mounted tree the mount
+    is an *ancestor*. It would have been offered as an ordinary candidate on its own
+    merits, and deleted.
+
+    With a mount table this is a set lookup per directory and costs no syscalls,
+    which matters over a whole workspace. Without one -- `/proc` unreadable -- it
+    falls back to comparing device numbers, which costs a `stat` per directory and is
+    the price of the degraded path rather than of the normal one.
+    """
+    if points is not None:
+        return [d for d in dirs if os.path.join(root, d) not in points]
+
+    here = _device_of(root)
+    if here is None:
+        # Belt-and-braces, not covered: with no reference device the loop below keeps
+        # every child anyway, because `child is not None` fails. Removing this changes
+        # nothing observable, which a mutation sweep confirmed -- it is here so the
+        # intent is readable, not because a test depends on it.
+        return list(dirs)
+    kept = []
+    for name in dirs:
+        child = _device_of(os.path.join(root, name))
+        # An unreadable device is kept rather than pruned: the measurement refuses
+        # it later for being unreadable, and treating "cannot tell" as "is a mount"
+        # here would silently drop ordinary directories on a machine with one
+        # awkward permission.
+        if child is not None and child != here:
+            continue
+        kept.append(name)
+    return kept
+
+
+def _mount_above(path: pathlib.Path, workspace: pathlib.Path, points) -> str:
+    """A mount point strictly between *workspace* and *path*, or "".
+
+    The direction every other mount check misses. `_mount_refusal` answers about
+    mounts at or below the path it is given, and the discovery walk refuses to
+    descend past one -- but a mount that appears *after* that walk leaves a
+    candidate already collected whose ancestor is now a mount point, and from
+    inside the mounted filesystem its own device and its parent's match perfectly.
+    Only the table can see it, and only by looking upward.
+
+    The workspace itself is excluded deliberately. A workspace on its own partition
+    is ordinary -- `/home` frequently is one -- and refusing every candidate in it
+    would refuse the normal case. What must not happen is storage appearing
+    *between* the directory the user named and the directory about to be deleted.
+    """
+    if points is None:
+        # Undetectable without the table: inside a mounted filesystem the candidate
+        # and its parent share a device, so there is nothing for `st_dev` to notice.
+        return ""
+    boundary = str(workspace)
+    here = path.parent
+    while True:
+        current = str(here)
+        if current == boundary:
+            return ""
+        if current in points:
+            return f"a filesystem is now mounted at {here}, above it"
+        if here.parent == here:
+            return ""
+        here = here.parent
+
+
+def _mount_refusal(path: pathlib.Path, measured, points) -> str:
+    """Why deleting *path* would reach storage that is not its own, or "".
+
+    Three questions, because each sees something the others cannot:
+
+    1. **More than one device inside the tree** -- a filesystem mounted somewhere
+       under the candidate. `_measure` collects this for free while it stats.
+    2. **A different device from the candidate's parent** -- the candidate is
+       itself a mount point. No measurement *inside* it can see this: everything
+       under a mount is one device, so the tree looks perfectly ordinary. This is
+       the question that must not depend on the mount table, because without it a
+       mounted `build/` would have been emptied despite the documented refusal.
+    3. **The mount table** -- a bind mount of the *same* filesystem, inside the
+       candidate or at it. Its device number is its parent's, so neither of the
+       checks above can see it, and `os.path.ismount` cannot either. This is the
+       only one of the three that needs `/proc`, and the only case that goes
+       undetected where `/proc` is unavailable.
+
+    Emptied either way is the point: `rmtree` walks through a mount like any other
+    directory, and what it leaves behind is the mount, not reclaimed space.
+    """
+    # **The table first, before anything that touches the path.** `_device_of` is an
+    # `lstat`, and an `lstat` on a dead mount does not return -- so consulting the
+    # cheap, syscall-free answer second meant the check that exists to avoid touching
+    # a dead mount could block inside its own first question.
+    if points is not None:
+        here = str(path)
+        if here in points:
+            # A same-device bind mount of the candidate itself: the device comparison
+            # below cannot see it, and saying "mounted inside it" would be wrong
+            # about which directory is the mount.
+            return "it is itself a mount point"
+        prefix = here + os.sep
+        if any(point.startswith(prefix) for point in points):
+            return "a filesystem is mounted inside it"
+
+    if measured is not None and measured.crosses_mount:
+        return "a filesystem is mounted inside it"
+
+    own = _device_of(path)
+    parent = _device_of(path.parent)
+    if own is None or parent is None:
+        # Fail closed: a path whose device cannot be read is not one to delete
+        # recursively. Other checks refuse it too, so this is defence in depth.
+        return "its filesystem could not be identified"
+    if own != parent:
+        return "it is itself a mount point"
+    return ""
+
+
+# A bare repository has no `.git` at all: its contents sit at the root, and these
+# markers are what distinguish one from a directory that merely happens to hold a file
+# called HEAD.
+#
+# **Two layouts, because `refs/` is not the only ref storage.** `git init --bare
+# --ref-format=reftable` (2.45 onward) writes `HEAD`, `objects` and `reftable/` and no
+# `refs/` at all -- so a check that required `refs` missed exactly the repository a
+# newer git creates, and one vendored into an ignored `build/` would have been deleted
+# with its history. Matching **either** layout costs nothing, and it has to be either
+# rather than their intersection: `HEAD` plus `objects` alone would accept a directory
+# that has no ref storage of any kind, which is not a repository. If a future layout
+# keeps `refs/` as well, the first entry matches it and nothing needs changing.
+_BARE_REPOSITORY_LAYOUTS = (
+    ("HEAD", "objects", "refs"),      # the files backend, every version of git
+    ("HEAD", "objects", "reftable"),  # `--ref-format=reftable`, git 2.45 onward
+)
+
+
+def _is_bare_repository(entries) -> bool:
+    """Whether a directory's own entries make it a bare repository's root."""
+    here = set(entries)
+    return any(
+        all(marker in here for marker in layout)
+        for layout in _BARE_REPOSITORY_LAYOUTS
+    )
+
+
+def _marker_present(path: pathlib.Path):
+    """True, False, or None when the answer cannot be obtained.
+
+    `os.path.exists` collapses "absent" and "not permitted to look" into False,
+    which is the wrong direction for a check that decides whether something is a
+    repository.
+    """
+    try:
+        os.lstat(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        return False
+    except OSError:
+        return None
+
+
+def _probe_bare_repository(path: pathlib.Path) -> bool:
+    """Whether *path* is a bare repository's root, by probing its markers.
+
+    **Probed by path rather than listed.** `os.listdir` needs read (`r`) permission
+    and this needs only search (`x`), and a directory that grants `x` without `r` is
+    exactly the case a listing-based check read as an ordinary directory -- while a
+    workspace below its `refs/heads` stayed perfectly reachable, because reaching
+    through a directory is what `x` grants.
+
+    A probe that cannot answer counts as a marker being present. Fail-closed here
+    costs a directory that is not reclaimed; failing open costs a branch.
+    """
+    for layout in _BARE_REPOSITORY_LAYOUTS:
+        answers = [_marker_present(path / marker) for marker in layout]
+        if all(answer is not False for answer in answers):
+            return True
+    return False
+
+
+def _git_storage_above(path: pathlib.Path) -> str:
+    """Why *path* is inside a repository's own storage, or "".
+
+    A scan rooted here would treat a repository's storage as build output, and a
+    loose ref makes that concrete: a branch called `build/main` is a directory
+    named `build` under `refs/heads`.
+
+    **Asked about the ancestors, not only about the root.** Neither of the walk's
+    own defences can see this. Dropping `.git` from the children it descends into
+    cannot help, because the root it was handed is never a child; and pruning a
+    bare repository when the walk *reaches* its root cannot help either, because a
+    workspace of `repo.git/refs/heads` starts below that root, so the markers that
+    identify it are never in view. Both were real: the first was fixed a commit
+    before this one, and this is the same mistake one level up.
+    """
+    if ".git" in path.parts:
+        return "it is inside a .git directory"
+    here = path
+    while True:
+        if _probe_bare_repository(here):
+            return f"it is inside the bare repository at {here}"
+        if here.parent == here:
+            return ""
+        here = here.parent
+
+
+def _contains_nested_git(path: pathlib.Path) -> tuple:
+    """(a repository lives inside *path*, the traversal read all of *path*).
+
+    The second value is why this returns a pair. `onerror` that discards the
+    failure turned "could not look" into "looked and found nothing": one subtree
+    the walk cannot enter is enough to hide a nested clone, and the candidate
+    then passes both this check and the pre-delete re-check on the strength of a
+    search that never happened. Bare repositories make that worse, because the
+    marker set can only be recognised by listing the directory that holds it.
+
+    Callers must treat an incomplete traversal as ineligible. A repository found
+    is reported with whatever completeness the walk had reached, since the answer
+    is already a refusal.
+
+    An outer repository can ignore `build/`, and `build/vendor` can itself be a
+    clone. The candidate passes `check-ignore`, and `shutil.rmtree` would then
+    take that repository's history with it. Filtering `.git` out of the *walk*
+    does not protect against this -- it is the opposite containment.
+
+    `git clone --bare` has no `.git` entry: `HEAD`, `objects` and `refs` are at
+    the root. Looking only for `.git` therefore missed exactly the kind of
+    repository somebody vendors into a build directory, which is the case most
+    likely to be both ignored and irreplaceable.
+    """
+    complete = True
+
+    def unreadable(_error):
+        nonlocal complete
+        complete = False
+
+    # The same device boundary `_measure` stops at. Without it this walk crossed
+    # first: it runs before the measurement, so a dead or enormous NFS subtree was
+    # traversed here -- or hung the command -- while the refusal that was supposed to
+    # prevent that waited its turn. Recording the crossing is the measurement's job;
+    # this only has to not walk through it.
+    root_device = _device_of(path)
+    for root, dirs, files in os.walk(path, onerror=unreadable):
+        if root_device is not None:
+            here = _device_of(root)
+            if here is not None and here != root_device:
+                dirs[:] = []
+                continue
+        if ".git" in dirs or ".git" in files:  # a file, for worktrees and submodules
+            return True, complete
+        if _is_bare_repository(list(dirs) + list(files)):
+            return True, complete
+    return False, complete
+
+
+class Recheck(NamedTuple):
+    """The verdict of the pre-delete re-check, and the measurement behind it.
+
+    `measured` is None when the refusal came before there was anything to
+    measure. It is carried out of the check rather than taken again afterwards
+    because the freed-space total must describe the tree as it is *now*: the scan
+    that produced the report can be minutes old, and a `target/` that kept
+    compiling in between is not the size it was measured at.
+    """
+
+    reason: str
+    measured: Measurement = None
+
+
+def _still_eligible(
+    path: pathlib.Path, cutoff, require_git_ignored: bool, workspace: pathlib.Path
+) -> Recheck:
+    """A `Recheck` whose `reason` is empty if *path* may still be deleted.
+
+    Re-run immediately before deletion, because everything known about a candidate
+    was learned during a scan that can take minutes across a large workspace. A
+    build started in that window creates fresh files, a colleague can `git add -f`
+    something into it, a clone can appear inside it -- and `--older-than`, whose
+    entire purpose is to protect work in progress, was evaluated against a
+    measurement taken before that work resumed.
+
+    **The order here is the substance, not a style choice**, because this function
+    had the same problem it exists to solve: its own early answers went stale while
+    its later work ran. Cheapest first, and whatever each answer protects must be
+    nothing that happens after it:
+
+    1. The **mount table**, before anything at all touches the candidate. Every other
+       question here is a syscall on the path, and a syscall on a dead mount does not
+       return.
+    2. The questions costing one `lstat`: symlink, still a directory, repository
+       storage above it.
+    3. The **nested-repository walk** -- expensive, and authoritative about the one
+       thing a fresh measurement cannot tell you.
+    4. Everything cheap enough to ask twice, in rising cost: the mount table again,
+       the repository-storage climb again, the git questions -- ignored, and holding
+       no tracked file.
+    5. The **measurement, last**. It supplies the age and the freed size, and both
+       must describe the tree as it is *after* all of the above: a build writing fresh
+       output during the nested walk or the git subprocesses left `newest` stale, and
+       `--older-than --apply` then deleted a tree that had just become active. It also
+       has the final word on readability and on crossing a filesystem boundary, since
+       nothing follows it.
+
+    What remains is the window between step 5 and `rmtree`, which no ordering closes:
+    the two are not atomic with respect to each other, and nothing short of a
+    filesystem-level guarantee would make them so. Narrowing it to one traversal is
+    the whole of what is available.
+
+    Fails closed: anything unreadable, or any git call that does not answer, is a
+    refusal rather than a pass.
+    """
+    # 1. Nothing has touched the candidate yet.
+    points = _mount_points()
+    mounted = _mount_refusal(path, None, points) or _mount_above(path, workspace, points)
+    if mounted:
+        return Recheck(mounted)
+
+    # 2. One `lstat` each.
+    if path.is_symlink():
+        # Before `is_dir`, which follows the link and answers about the target. A
+        # symlink appearing where a directory was is not the thing that was measured.
+        return Recheck("it is a symbolic link now")
+    if not path.is_dir():
+        return Recheck("it is no longer there")
+
+    storage = _git_storage_above(path)
+    if storage:
+        # An ancestor can become a bare repository in between -- `git init --bare` in
+        # a directory that already existed is enough -- and the candidate would then
+        # be a ref directory. No flag waives this one.
+        #
+        # Removing *this* call alone is an equivalent mutation: the repeat in step 4
+        # refuses the same candidate, so no test fails. It is kept because it saves two
+        # traversals on an already-doomed candidate, not because it is load-bearing.
+        return Recheck(storage)
+
+    # 3. The walk that answers what a measurement cannot.
+    nested, readable = _contains_nested_git(path)
+    if nested:
+        return Recheck("it now contains a repository")
+    if not readable:
+        return Recheck(
+            "it can no longer be read in full, so a repository inside it "
+            "cannot be ruled out"
+        )
+
+    # 4. The table again -- the snapshot in step 1 is a full traversal old by now --
+    # then the storage climb again, then git. Three `lstat`s per ancestor level and two
+    # subprocesses: cheap enough to repeat, where a traversal is not.
+    points = _mount_points()
+    mounted = (
+        _mount_refusal(path, None, points)
+        or _mount_above(path, workspace, points)
+    )
+    if mounted:
+        # Equivalent to step 5's check for any mount that is still there when step 5
+        # runs, which is every case a test can construct -- distinguishing them would
+        # need a mount that appears during the walk and vanishes again before the
+        # measurement. Kept because it refuses before paying for a traversal.
+        return Recheck(mounted)
+
+    storage = _git_storage_above(path)
+    if storage:
+        return Recheck(storage)
+
+    if require_git_ignored:
+        worktree = _worktree_of(path)
+        if worktree is None:
+            return Recheck("it is no longer inside a git worktree")
+        ignored, tracked, complete = _worktree_facts(worktree, [path])
+        if not complete:
+            return Recheck("git could not be consulted again")
+        if path not in ignored:
+            return Recheck("it is no longer ignored by its repository")
+        if any(str(t).startswith(str(path) + os.sep) for t in tracked):
+            # Defence in depth with no reachable case, which a mutation sweep confirms
+            # from the other direction: removing it fails no test. Measured against git
+            # 2.x, once anything under an ignored directory is tracked, `check-ignore`
+            # stops calling that directory ignored -- so the check above refuses the
+            # candidate first, with the pattern on the directory, on a parent, anchored,
+            # and with the tracked file several levels down. Kept in case that ever
+            # changes; not claimed as tested.
+            return Recheck("it now holds a tracked file")
+
+    # 5. Measured last, so the age and the size describe the tree after every check
+    # above rather than before them.
+    measured = _measure(path)
+    if not measured.complete:
+        return Recheck("it can no longer be read in full, so it cannot be trusted")
+    # The table again, because that traversal is the last expensive thing here and a
+    # bind mount of the same device -- at the candidate or above it -- appearing during
+    # it is invisible to both `crosses_mount` and the device comparison. Terminal this
+    # time: nothing after this line does any I/O but `rmtree`.
+    points = _mount_points()
+    mounted = (
+        _mount_refusal(path, measured, points)
+        or _mount_above(path, workspace, points)
+    )
+    if mounted:
+        return Recheck(mounted)
+    if cutoff is not None and measured.newest > cutoff:
+        return Recheck("something inside it changed during the scan")
+
+    return Recheck("", measured)
+
+
+def find_reclaimable(
+    workspace: pathlib.Path,
+    names: dict,
+    older_than_days: int = 0,
+    require_git_ignored: bool = True,
+):
+    """Artifact directories under *workspace*, **largest first**.
+
+    `.git` is never entered, and a candidate that *contains* a repository is
+    never offered: a repository's history is not build output however large it
+    grows, in either direction of containment.
+
+    With `require_git_ignored` (the default) a candidate must be **ignored by the
+    Git repository that contains it** and must hold **no tracked file**. The
+    directory's name is not evidence: `build/` and `target/` are ordinary names
+    for authored code. A candidate outside any worktree is not offered either --
+    there is nothing to ask.
+
+    Matching directories are **not pruned from the walk**, and that is a
+    deliberate trade rather than an oversight. Pruning at the match was faster
+    and wrong: an unignored authored `scripts/build/` can contain an ignored
+    `target/`, and stopping at the outer match rejected it while never visiting
+    the reclaimable inner one. Eligibility cannot be known during the walk
+    without a `git` call per directory, which would cost more than the traversal
+    it saves.
+
+    So the discovery walk descends through matched trees, and each accepted
+    candidate is then traversed again -- once for nested-repository detection,
+    once to measure. Correctness over a single pass. De-duplication afterwards is
+    what keeps a `node_modules` inside an accepted `build` counted once.
+    """
+    if older_than_days < 0:
+        raise ValueError("older_than_days cannot be negative")
+
+    # Resolved here, not only in the caller. Every ancestor question this function
+    # asks is answered by climbing the path it was handed, and a relative path has
+    # no ancestors to climb: `Path(".").parts` is empty, so the `.git` test cannot
+    # match, and `Path(".").parent` is `Path(".")`, so the climb stops after one
+    # step. Called from inside `repo.git/refs/heads` with `Path(".")`, the
+    # unconditional bare-repository refusal simply did not run. It also keeps the
+    # paths handed to `git` absolute, which is what `-C` expects to be unambiguous.
+    workspace = pathlib.Path(workspace).expanduser().resolve()
+
+    storage = _git_storage_above(workspace)
+    if storage:
+        raise ValueError(
+            f"refusing to scan {workspace}: {storage}, and a repository's own "
+            "storage is not build output"
+        )
+
+    cutoff = time.time() - (older_than_days * 86400) if older_than_days else None
+
+    # Read once, before discovery, and used for three things there: not descending
+    # past a mount, refusing a candidate that is or holds one, and doing both before
+    # anything touches the candidate.
+    #
+    # Descending mattered because a `target/` below a mount has the mount as an
+    # **ancestor**, and `_mount_refusal` answers about mounts at or below the path it
+    # is given -- so the refusal that protects a candidate *containing* a mount did
+    # nothing for one the walk found *inside* one, and `--apply` would have deleted
+    # somebody else's directory.
+    #
+    # Refusing early matters because every other question is a syscall on the path:
+    # `is_symlink`, the git eligibility calls, the traversals. A known mount is a
+    # string comparison against this table, so a dead one is skipped rather than
+    # blocking whatever asks about it first.
+    points = _mount_points()
+
+    candidates = []
+    for root, dirs, files in os.walk(workspace, onerror=lambda _: None):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        if _is_bare_repository(list(dirs) + list(files)):
+            # A bare repository has no `.git` child for the filter above to catch:
+            # `HEAD`, `objects` and `refs` are at its root. Descending into one put
+            # its *contents* in scope, and a loose ref is a path -- a branch called
+            # `build/main` is a directory named `build` under `refs/heads`, which
+            # the outer repository ignores by name and which `_contains_nested_git`
+            # cannot object to, because it only looks below a candidate. Deleting it
+            # would delete the branch.
+            dirs[:] = []
+            continue
+        for name in [d for d in dirs if d in names]:
+            path = pathlib.Path(root) / name
+            # `os.walk` lists a symlink to a directory in `dirs` even with
+            # `followlinks=False`, so a symlink named `build` arrived here as a
+            # candidate -- and then measured as its *target*, because handing a
+            # symlink to `os.walk` as the top path resolves it. The report claimed
+            # the target's size, and `shutil.rmtree` refuses a directory symlink
+            # outright, so `--apply` failed on it. Deleting one would free only the
+            # link anyway, and somebody made it on purpose.
+            # Before `is_symlink`, which is an `lstat`, and long before the git
+            # calls further down. For a known mount the table answers with a string
+            # comparison and no syscall at all -- so a dead mount named `build`, or
+            # one holding a `build`, is dropped here rather than hanging the scan in
+            # the first question asked about it. The screen used to sit after the git
+            # eligibility filter, which is two subprocesses and an `lstat` too late.
+            mounted = _mount_refusal(path, None, points)
+            if mounted:
+                print(f"  skipping {path}: {mounted}", file=sys.stderr)
+                continue
+            if path.is_symlink():
+                continue
+            candidates.append(path)
+
+        # Pruned *after* collecting, so a mount that is itself named like an
+        # artifact is still collected and then refused by name, with a message,
+        # rather than disappearing from the scan unexplained.
+        dirs[:] = _descendable(root, dirs, points)
+
+    if require_git_ignored:
+        by_worktree: dict = {}
+        worktree_cache: dict = {}
+        for path in candidates:
+            worktree = _worktree_of(path, worktree_cache)
+            if worktree is None:
+                # There is nothing to ask about a directory no repository contains.
+                # Equivalent mutation: without this, the candidate is grouped under a
+                # None worktree, `_worktree_facts` fails on it, and the whole group is
+                # skipped with a message about git instead. Same outcome, worse message.
+                continue
+            by_worktree.setdefault(worktree, []).append(path)
+        eligible = []
+        for worktree, paths in by_worktree.items():
+            ignored, tracked, complete = _worktree_facts(worktree, paths)
+            if not complete:
+                # Neither question was answered, so nothing here is offered.
+                print(
+                    f"  skipping {worktree}: git could not be consulted, "
+                    "so nothing there is offered",
+                    file=sys.stderr,
+                )
+                continue
+            for path in paths:
+                if path not in ignored:
+                    continue
+                # A tracked file under an ignored directory is authored content
+                # that deletion would destroy.
+                if any(str(t).startswith(str(path) + os.sep) for t in tracked):
+                    # The scan's copy of the same unreachable guard -- see the note in
+                    # `_still_eligible`. `check-ignore` has already refused anything this
+                    # would catch.
+                    continue
+                eligible.append(path)
+        candidates = eligible
+
+    searched = []
+    for path in candidates:
+        nested, readable = _contains_nested_git(path)
+        if nested:
+            continue
+        if not readable:
+            # Equivalent to the measurement's completeness refusal below, which catches
+            # the same candidate -- so a mutation sweep finds no test objecting when this
+            # is removed. Kept for the message: this one names the repository search, and
+            # the other names size and age.
+            print(
+                f"  skipping {path}: it could not be read in full, so a "
+                "repository inside it cannot be ruled out",
+                file=sys.stderr,
+            )
+            continue
+        searched.append(path)
+    candidates = searched
+
+    # Measured and age-filtered **before** containment de-duplication, because
+    # a candidate only absorbs its descendants if it is itself going to be
+    # deleted. Discarding `build/node_modules` because `build` matched, and then
+    # rejecting `build` for a fresh file somewhere else inside it, loses the
+    # reclaimable directory entirely -- the same mistake as pruning matched trees
+    # from the walk, made one stage later.
+    #
+    # The cost is real and accepted: a nested candidate is measured as well as
+    # the ancestor that contains it, so bytes inside both are traversed twice.
+    # Measured on one workspace of roughly a hundred repositories, where most of
+    # the 8,000-odd `__pycache__` directories sit inside a matched `build`, the
+    # scan takes tens of seconds rather than a few. The alternative is reporting
+    # less than is reclaimable, which is the bug this ordering fixes.
+    measured: dict = {}
+    for path in candidates:
+        m = _measure(path)
+        mounted = _mount_refusal(path, m, points)
+        if mounted:
+            # Not the candidate's storage to free. `rmtree` walks through a mount
+            # point like any other directory, so the mounted filesystem's contents
+            # would go and the space would not come back.
+            print(f"  skipping {path}: {mounted}", file=sys.stderr)
+            continue
+        if not m.complete:
+            # Refused whether or not `--older-than` is in play. With it, an
+            # unreadable fresh file leaves `newest` old and defeats the
+            # protection; without it the figure is merely wrong -- but a tree
+            # this process cannot finish reading is also one `rmtree` cannot
+            # finish removing, so offering it promises something it cannot do.
+            print(
+                f"  skipping {path}: it could not be read in full, so neither "
+                "its size nor its age can be trusted",
+                file=sys.stderr,
+            )
+            continue
+        # Checked against the newest thing inside, so an actively compiling tree
+        # is never old however stale its root entry looks.
+        if cutoff is not None and m.newest > cutoff:
+            continue
+        measured[path] = m
+
+    accepted: list = []
+    for path in sorted(measured, key=lambda p: len(p.parts)):
+        if any(str(path).startswith(str(a) + os.sep) for a in accepted):
+            continue
+        accepted.append(path)
+
+    # One hard-linked inode, counted once across the whole scan -- and only for
+    # trees that survived every filter above, so a rejected candidate cannot
+    # spend what an accepted one shares with it.
+    found = []
+    ledger: set = set()
+    for path in accepted:
+        m = measured[path]
+        linked = sum(size for inode, size in m.linked_inodes.items()
+                     if inode not in ledger)
+        ledger.update(m.linked_inodes)
+        found.append((path, m.total, m.newest, linked))
+
+    return sorted(found, key=lambda item: item[1], reverse=True)
+
+
+def run_reclaim(args: argparse.Namespace) -> None:
+    workspace_arg = args.workspace or developer_workspace()
+    workspace = pathlib.Path(workspace_arg).expanduser().resolve()
+    if not workspace.is_dir():
+        print(f"Not a directory: {workspace}", file=sys.stderr)
+        sys.exit(1)
+
+    storage = _git_storage_above(workspace)
+    if storage:
+        print(
+            f"Refusing to scan {workspace}: {storage}, and a repository's own "
+            "storage is not build output.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    names = dict(RECLAIM_ARTIFACTS)
+    if args.include_environments:
+        names.update(RECLAIM_ENVIRONMENTS)
+
+    found = find_reclaimable(
+        workspace, names, args.older_than,
+        require_git_ignored=not args.any_directory,
+    )
+    if not found:
+        print(f"Nothing reclaimable under {workspace}.")
+        return
+
+    by_kind: dict = {}
+    for path, size, _, _ in found:
+        by_kind.setdefault(path.name, [0, 0])
+        by_kind[path.name][0] += size
+        by_kind[path.name][1] += 1
+
+    total = sum(size for _, size, _, _ in found)
+    linked_total = sum(linked for _, _, _, linked in found)
+    print(f"Reclaimable under {workspace}:")
+    print()
+    for kind, (size, count) in sorted(by_kind.items(), key=lambda kv: kv[1][0], reverse=True):
+        print(f"  {_human_bytes(size):>9}  {count:>4}x  {kind:<16} {names.get(kind, '')}")
+    print()
+    print(f"  {_human_bytes(total):>9}         total")
+    if linked_total:
+        # Said rather than folded in: a hard-linked inode is only freed when
+        # every name for it goes, and this command cannot prove that without
+        # indexing the filesystem. The total above is therefore a floor.
+        print()
+        print(f"  {_human_bytes(linked_total)} of hard-linked content is excluded from that figure:")
+        print("  deleting one name frees nothing while another link survives.")
+
+    # ...except where blocks can be shared by reference. A reflinked file has
+    # `st_nlink == 1`, so the exclusion above cannot see it, and the figure stops
+    # being a floor. Said only when the filesystem can actually do it, because a
+    # caveat printed everywhere is one nobody reads.
+    kind = _filesystem_of(workspace)
+    if kind in _REFLINK_FILESYSTEMS:
+        print()
+        print(f"  {workspace} is on {kind}, where files can share blocks by reference.")
+        print("  Deleting one copy of shared extents frees nothing while another holds")
+        print("  them, and that sharing is invisible here -- so on this filesystem the")
+        print("  figure is neither a floor nor a ceiling. Shared extents inflate it;")
+        print("  the hard-linked content excluded above deflates it whenever every")
+        print("  link to an inode is inside what you are deleting.")
+
+    if args.list:
+        print()
+        for path, size, touched, _ in found[: args.list]:
+            age = (time.time() - touched) / 86400
+            print(f"  {_human_bytes(size):>9}  {age:>5.0f}d  {path}")
+
+    if not args.apply:
+        print()
+        print("  Nothing was deleted. Re-run with --apply to reclaim it.")
+        if not args.include_environments:
+            # A hint, not a guard. Nothing asserts it, deliberately: pinning the exact
+            # wording of advice makes the test an obstacle to improving the advice.
+            print("  Virtualenvs are excluded; --include-environments adds them, and")
+            print("  restoring one needs a network and a pip install.")
+        return
+
+    cutoff = time.time() - (args.older_than * 86400) if args.older_than else None
+    removed = 0
+    freed = 0
+    skipped = 0
+    failed = 0
+    for path, _, _, _ in found:
+        # Checked again here, not only during the scan. Between the two, a build
+        # can start, a file can be force-added, a clone can appear -- and the
+        # scan of a large workspace takes minutes.
+        check = _still_eligible(path, cutoff, not args.any_directory, workspace)
+        if check.reason:
+            print(f"  skipping {path}: {check.reason}")
+            skipped += 1
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            print(f"  could not remove {path}: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        removed += 1
+        # The size that check just measured, not the one the report printed: a
+        # tree that kept compiling through a minutes-long scan is not the size it
+        # was found at, and this figure claims to say what was freed.
+        freed += check.measured.total
+    print()
+    print(f"  Removed {removed} directory(ies), {_human_bytes(freed)} freed.")
+    if skipped:
+        print(f"  Skipped {skipped} that stopped being eligible during the scan.")
+    if failed:
+        # Nonzero only for removals that *failed*, and only after every other
+        # candidate has been attempted: one unreadable tree must not cost the
+        # rest of the run. Skips are deliberately not failures -- they are the
+        # safety re-check doing its job, and a caller that treated them as errors
+        # would have to choose between reading the exit status and keeping the
+        # protection.
+        print(
+            f"  {failed} could not be removed; see the errors above.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
@@ -5311,6 +6653,7 @@ def run_tui() -> None:
         ("git-aliases", "Tools: Configure git aliases"),
         ("automate", "Automation: Run Ansible pull"),
         ("net-tools", "Network: Run installed tools"),
+        ("settings", "Settings: Configure distrodeck"),
         ("config-edit", "System: Edit config files"),
         ("doctor", "Diagnostics: Check system prerequisites"),
         ("sysinfo", "Diagnostics: Full system info"),
@@ -5328,6 +6671,9 @@ def run_tui() -> None:
             break
         if choice == "about":
             show_about_dialog()
+            continue
+        if choice == "settings":
+            run_settings_tui()
             continue
         if choice == "export":
             output = dialog_input(
@@ -5915,6 +7261,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Previous kernel versions to keep in addition to the running kernel",
     )
     cleanup_cmd.set_defaults(func=run_cleanup_kernels_cmd)
+
+    reclaim_cmd = sub.add_parser(
+        "reclaim",
+        help="Report, and with --apply remove, build output under a workspace",
+    )
+    reclaim_cmd.add_argument(
+        "workspace",
+        nargs="?",
+        default=None,
+        help=(
+            "Developer workspace to scan (default: [developer] workspace in "
+            "distrodeck config, or ~/Projects)"
+        ),
+    )
+    # Deliberately the reverse of cleanup-kernels, which takes --dry-run. This
+    # one can delete tens of gigabytes across a hundred repositories in a
+    # second, so the safe direction is the default and acting is the flag.
+    reclaim_cmd.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete. Without it, this only reports what it would delete.",
+    )
+    reclaim_cmd.add_argument(
+        "--include-environments",
+        action="store_true",
+        help="Also virtualenvs. Restoring one needs a network and a pip install.",
+    )
+    reclaim_cmd.add_argument(
+        "--older-than",
+        type=_nonnegative_int,
+        default=0,
+        metavar="DAYS",
+        help="Only directories untouched for this many days. Protects work in progress.",
+    )
+    reclaim_cmd.add_argument(
+        "--any-directory",
+        action="store_true",
+        help=(
+            "Offer matching directories even when Git does not consider them "
+            "ignored. Off by default: `build/` and `target/` are ordinary names "
+            "for authored code, and being gitignored is the evidence that a "
+            "directory is output rather than source."
+        ),
+    )
+    reclaim_cmd.add_argument(
+        "--list",
+        type=_nonnegative_int,
+        default=0,
+        metavar="N",
+        help="Also list the N largest directories individually.",
+    )
+    reclaim_cmd.set_defaults(func=run_reclaim)
 
     security_cmd = sub.add_parser("security", help="Apply security upgrades")
     security_cmd.set_defaults(func=lambda _: run_security())

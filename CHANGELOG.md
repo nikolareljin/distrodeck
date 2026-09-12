@@ -4,27 +4,319 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
-### Changed
-- `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
-  looks for `~/Projects/iso-forge` first and still accepts an older
-  `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the
-  new site. The `ISOFORGE_*` and legacy `BURN_ISO_*` environment overrides are
-  unchanged, as is the `isoforge` package name.
-
-## [0.10.2]
-
-### Changed
-- Released the current packaging CI fixes as a patch version.
-
-## [0.10.1]
-
-### Fixed
-- Prevented recursive Debian and RPM package builds in CI.
-
-
-## [0.9.0]
 
 ### Added
+- **`distrodeck reclaim`: disk that a build can make again.** A workspace of
+  development checkouts is mostly not source. Measured on one machine, 90 GB
+  across roughly a hundred repositories: **34.1 GB of `build/`, 15.6 GB of Rust
+  `target/`, 5.2 GB of `.dart_tool/`, 3.2 GB of `node_modules/`** -- 60.0 GB in
+  total, about two thirds of the workspace, none of it authored by anybody.
+  Reports by default and deletes only with `--apply`. That is the reverse of its
+  sibling `cleanup-kernels`, deliberately: this command can remove tens of
+  gigabytes across a hundred repositories in a second, so the safe direction is
+  the default and acting is the flag.
+  The distinction it is built around is **regenerable versus
+  reproducible-at-a-cost**. A `target/` is the output of a command that runs
+  again offline in minutes. A virtualenv is also "rebuildable", and rebuilding
+  one holding torch and whisper is a multi-gigabyte download that fails entirely
+  without a network -- so virtualenvs are behind `--include-environments` rather
+  than offered as free.
+  `--older-than DAYS` protects work in progress. Measured on the same machine and
+  the same default set as the 60.0 GB above: **60.0 GB falls to 46.4 GB at seven
+  days and 29.6 GB at thirty**, the difference being projects actively being
+  built. (`--include-environments` is the flag that raises the baseline, to
+  69.5 GB -- an earlier draft of this entry quoted figures from that wider set
+  against the default total, which cannot be compared.)
+  A candidate must be **ignored by the Git repository that contains it**. The
+  name is not evidence: `build/` and `target/` are ordinary names for authored
+  code, and on the measured machine 8 of 101 `build/` directories were tracked
+  or unignored -- including a `scripts/build` and a `src/.../build`. Git already
+  knows which is which, because somebody wrote it in `.gitignore`. A directory
+  outside any worktree is not offered either; `--any-directory` waives the
+  requirement explicitly.
+
+  A candidate that *contains* a repository is refused too: an outer repository
+  can ignore `build/` while `build/vendor` is itself a clone, and filtering
+  `.git` out of the walk is the opposite containment -- it would not have saved
+  that history from `rmtree`. A `.git` file counts as well as a directory, since
+  that is how submodules and linked worktrees appear, and a **bare** repository
+  counts as well: `git clone --bare` has no `.git` entry at all, which made the
+  kind of repository somebody vendors into a build directory invisible to the
+  check meant to protect it. **Both ref backends count**: `git init --bare
+  --ref-format=reftable`, from git 2.45, stores refs in `reftable/` and has no `refs/`
+  at all, so requiring `refs` missed exactly the repository a newer git creates.
+
+  **Nothing inside a bare repository, and no scan rooted inside `.git`.** A loose
+  ref is a path: a branch called `build/main` is a directory named `build` under
+  `refs/heads`, ignored by the outer repository for the same reason every other
+  `build/` is, and invisible to the nested-repository check, which only looks
+  *below* a candidate -- so deleting it would have deleted the branch. Dropping
+  `.git` from the children a walk descends into helps with neither case: a bare
+  repository has no `.git` child, and the root handed to the walk is never a child.
+  Nor does pruning a bare repository when the walk *reaches* its root, if the
+  workspace is `repo.git/refs/heads` and the walk starts below it -- so the
+  workspace's ancestors are examined before any walking, and a workspace at or
+  inside a bare repository is refused outright. The markers are **probed by path
+  rather than listed**: `os.listdir` needs read permission where reaching a
+  workspace below `refs/heads` needs only search, so a bare repository granting `x`
+  without `r` read as an ordinary directory -- and a probe that cannot answer counts
+  as a marker being present, since failing closed costs a directory that is not
+  reclaimed while failing open costs a branch. The same question is asked again
+  immediately before each deletion, because `git init --bare` in a directory that
+  already existed is enough to turn an ancestor into one mid-scan.
+
+  A **symlink named like an artifact is not one**. `os.walk` lists a symlink to a
+  directory in `dirs` even with `followlinks=False`, so a symlink called `build`
+  arrived as a candidate and was then measured as its *target*, because handing a
+  symlink to `os.walk` as the top path resolves it -- the report claimed space that
+  removing the link would not free, and `shutil.rmtree` refuses a directory symlink
+  outright, so `--apply` failed on it. Refused during discovery and again
+  immediately before deletion, where `is_dir()` would have followed the link and
+  answered about the target.
+
+  A directory with **a filesystem mounted inside it is refused**, as is one that
+  is itself a mount point. `shutil.rmtree` walks through a mount point like any
+  other directory, so a bind mount, an NFS share or a mounted image inside an
+  ignored `build/` would have had its contents deleted -- data that is not the
+  candidate's to free, that no build reproduces, and whose space does not come
+  back to this disk. Three signals, because each sees something the others cannot:
+  a change of device number **inside** the tree catches a filesystem mounted under
+  the candidate; a device number differing from the **parent's** catches the
+  candidate being a mount point itself, which nothing inside it can see because
+  everything under a mount is one device; and `/proc/self/mountinfo` catches a bind
+  mount of the *same* filesystem, whose device number is its parent's and which
+  `os.path.ismount` cannot see either. Only the third needs `/proc`, so an
+  unreadable mount table loses the same-device bind mount case and nothing else --
+  refusing everything instead would make the command useless in a container. A path
+  whose own device cannot be read is refused. The table is re-read immediately
+  before each deletion, so a mount that appears during a minutes-long scan is still
+  caught.
+
+  The mount table is read **once more after that final measurement**, which is the last
+  expensive thing the check does: a bind mount of the same device, at the candidate or
+  above it, appearing during that traversal is invisible to both the crossing flag and
+  the device comparison, since every device number involved is identical. Terminal this
+  time -- nothing after that read does any I/O but `rmtree`.
+
+  **The pre-delete check measures last**, so the age and the freed size describe the
+  tree after every other question rather than before them. Captured before a full walk
+  and two subprocesses, `newest` went stale while they ran -- and a build writing
+  *untracked* output passes every git question, so nothing else objected:
+  `--older-than --apply` deleted a tree that had just become active, which is the one
+  thing that flag exists to prevent. The same refresh supplies the freed figure, so "N
+  freed" is not a number about the past.
+
+  **The pre-delete check no longer has the problem it exists to solve.** Its git and
+  nested-repository questions ran before a traversal that takes minutes on a large
+  candidate, and the only thing refreshed afterwards was the mount table -- so a file
+  force-added while the measurement ran reached `rmtree`, checked and then invalidated
+  by the same function. The order follows one rule -- **whatever an answer protects must
+  not be something that happens after it** -- and cheapest first within that:
+
+  1. the **mount table**, before anything at all touches the candidate, because every
+     other question here is a syscall on the path and a syscall on a dead mount does not
+     return;
+  2. the questions costing one `lstat`: symlink, still a directory, repository storage
+     above it;
+  3. the **nested-repository walk** -- expensive, and authoritative about the one thing a
+     measurement cannot tell you;
+  4. everything cheap enough to ask twice: the table again, the storage climb again, the
+     **git questions**;
+  5. the **measurement last**, supplying the age and the freed size, then one final
+     table read.
+
+  What remains is the window between step 5 and `rmtree` itself, which no ordering
+  closes -- the two are not atomic with respect to each other -- and the code says so
+  rather than implying otherwise.
+
+  The last check before each deletion **re-reads the table**, which the comment over
+  it had been claiming while the code used the snapshot taken before two full-tree
+  walks -- minutes old on a large candidate, and exactly as stale as the scan's was
+  when the re-check started. Both directions are asked again. The
+  nested-repository walk also stops at a device boundary, as the measurement already
+  did: it runs first, so on the degraded path with no mount table it was the walk that
+  crossed into a dead or enormous subtree while the refusal meant to prevent that
+  waited its turn. Recording the crossing stays the measurement's job; the search only
+  has to not walk through it. That costs one `stat` per directory and took the
+  whole-workspace scan from 29.5s to 31.8s.
+
+  **And a mount appearing *above* a candidate is refused before deletion.** Every
+  other mount check looks at or below the path it is given, and discovery's refusal to
+  descend uses one snapshot of the table -- so a mount appearing after that walk left a
+  candidate already collected whose ancestor was now a mount point, with its own device
+  and its parent's matching perfectly from inside the mounted filesystem. Only the
+  table can see that, and only upward. The climb stops at the workspace, deliberately:
+  a workspace on its own partition is ordinary -- `/home` frequently is one -- and
+  refusing every candidate inside it would refuse the normal case. Without the table
+  this one is undetectable, which is stated rather than implied.
+
+  A **directory symlink inside a candidate** is measured too. `os.walk` lists one in
+  `dirs` and never yields it as a root, so accounting for files alone missed it
+  entirely: no allocation, and no mtime -- a symlink created or repointed a minute ago
+  left a tree reading as untouched for weeks, against the rule that age comes from
+  anything inside. Measured with `lstat`, so it is the link and not what it points at.
+
+  The scan refuses a known mount **during discovery**, before `is_symlink` or any git
+  call touches the candidate -- for a known mount the table answers with a string
+  comparison and no syscall, so a dead mount named `build` is skipped rather than
+  hanging whatever asks about it first. The screen used to sit after the git eligibility
+  filter, which is two subprocesses and an `lstat` too late.
+
+  **The discovery walk does not descend past a mount at all.** Refusing afterwards
+  protected a candidate that *contains* a mount and did nothing for one found
+  *inside* one: a `target/` below a mount has the mount as an ancestor, and the
+  refusal answers about mounts at or below the path it is given, so that directory
+  was offered as an ordinary candidate on its own merits -- on somebody else's
+  storage -- and `--apply` would have deleted it. Pruning happens after a directory
+  is collected rather than before, so a mount that is itself named like an artifact is
+  still refused with a message instead of vanishing from the scan unexplained. With a
+  mount table this costs no syscalls; without one it compares device numbers, and a
+  device it cannot read is kept rather than dropped, because the measurement refuses
+  an unreadable tree later *with* a message.
+
+  The table and the parent comparison are consulted **before the candidate is
+  traversed**, not after. Rejecting a mount from its measurement meant the
+  measurement had already happened: on a slow share, minutes spent sizing somebody
+  else's storage for a candidate that is then skipped; on a dead one, no answer at
+  all. For a mount the table does not list -- which on Linux means `/proc` could not
+  be read -- the measurement stops at the device boundary and records the crossing
+  rather than descending through it, so one listing of the mount root is the whole
+  cost.
+
+  The library entry point **resolves its workspace**, which `run_reclaim` did and
+  `find_reclaimable` did not. Every ancestor question here is answered by climbing
+  the path it was handed, and a relative path has none to climb: `Path(".").parts` is
+  empty, so the `.git` test cannot match, and `Path(".").parent` is `Path(".")`, so
+  the climb stops after one step. Called from inside `repo.git/refs/heads` with
+  `Path(".")`, the bare-repository refusal -- the one no flag waives -- did not run.
+
+  A **mount point is bytes** as well. `mountinfo` octal-escapes the four characters
+  that would break its own field separation and nothing else, so a mount point whose
+  name is not valid UTF-8 arrives raw -- and decoding it strictly raised
+  `UnicodeDecodeError`, which is not an `OSError` and so was not the
+  unavailable-table fallback: it aborted the command, from inside the function added
+  to make mount detection safe. Read with the filesystem encoding and
+  `surrogateescape`, so the names stay comparable with the paths they are tested
+  against.
+
+  **A path is bytes.** `subprocess.run(..., text=True)` decodes strictly, so one
+  tracked filename that is not valid UTF-8 made `git ls-files -z` raise
+  `UnicodeDecodeError` -- neither `OSError` nor `SubprocessError`, so it escaped the
+  wrapper that exists to turn a failed `git` call into a refusal for that worktree,
+  and aborted the whole scan. The filesystem encoding with `surrogateescape` is used
+  instead, so those bytes round-trip and a path read out of `git` can still be
+  compared against the walk's own.
+
+  Deciding which repository a candidate belongs to no longer costs a subprocess
+  per candidate. `git rev-parse --show-toplevel` ran once per match: on the
+  measured workspace that is **8,523 git processes for 8,373 candidates across 75
+  repositories, now 225** -- three per repository, which is what batching the
+  ignore and index questions was for in the first place. Deciding which repository
+  each candidate belonged to had cost 37 times more than the questions it was
+  batching. Whole-workspace scan: 40.3s to 29.6s. The directory chain
+  is climbed with `stat` until a `.git` entry appears, `git` confirms that one
+  answer, and every directory climbed past is cached with it. Still `git` that
+  decides, because `GIT_DIR`, `.git` files for submodules and linked worktrees and
+  `core.worktree` all mean the first `.git` on the way up is evidence rather than
+  proof; and a tree with no `.git` anywhere above it is refused without asking,
+  which costs a directory that is not reclaimed rather than one deleted unchecked.
+
+  A tree it **could not read in full is refused**, not treated as empty. Both
+  walks over a candidate -- the nested-repository search and the measurement --
+  used to discard `scandir` failures, which turned "could not look" into "looked
+  and found nothing": one unreadable subtree is enough to hide a clone, and under
+  `--older-than` it is enough to hide the fresh file whose whole job is to say
+  somebody is working in there, leaving the tree reading as stale for weeks. It
+  is also a tree `rmtree` would abandon half-done, so the refusal does not depend
+  on a day count being given, and the skipped path is named on stderr.
+
+  Every one of those questions is asked **again immediately before each
+  deletion**, and any refusal or unanswered git call skips the directory.
+  Everything learned during a scan is minutes old by the time deletion starts on
+  a large workspace: a build can resume, a file can be force-added, a clone can
+  appear -- and `--older-than`, whose whole purpose is to protect work in
+  progress, was evaluated before that work restarted.
+
+  With `--apply` a failed removal now **exits nonzero**, after every remaining
+  candidate has been attempted. It printed `could not remove ...` and exited 0
+  before, so anything scripting this -- a cron entry, a CI step -- was told the
+  disk had been freed when it had not. A *skip* stays a success: it is the
+  pre-delete re-check working, and counting it as an error would make a caller
+  choose between reading the exit status and keeping the protection.
+
+  Matching directories are **not pruned before eligibility is known**. An
+  authored `scripts/build/` can hold an ignored `target/`; pruning at the match
+  rejected the outer candidate while never visiting the reclaimable inner one.
+  Containment de-duplication happens **after** the age filter for the same
+  reason: a candidate absorbs what is inside it only if it is itself going to be
+  deleted, so an old `build/node_modules` is still offered when `build` is
+  rejected for a fresh file elsewhere inside it. The cost is that a nested
+  candidate is traversed as well as its ancestor -- tens of seconds rather than a
+  few on a hundred-repository workspace, and the alternative is reporting less
+  than is reclaimable.
+
+  `--apply` reports **the size it measures at deletion**, not the one the scan
+  printed. The pre-delete re-check already walks the tree, so it hands its
+  measurement back rather than the total being accumulated from figures that can
+  be minutes old -- a `target/` that kept compiling in between was not the size
+  it was found at.
+
+  Age comes from the newest mtime of **anything inside, file or directory -- and of
+  the candidate itself**. All three contribute: the measurement starts from the
+  candidate's own `stat`, the walk yields it as its first root, and every descendant
+  is stat'd on the way, so adding or removing an immediate child does make a tree
+  recent. The reason descendants are included is that a directory's mtime changes
+  only when its *immediate* entries do, so an actively compiling `target/` whose
+  root entry is weeks old is no longer mistaken for stale -- which is an argument
+  for counting what is inside, not for ignoring the root. Directories count as well
+  as files,
+  which means creating or removing even an empty one makes a tree recent: that is
+  activity, and the mistake it causes is refusing to delete rather than deleting
+  something in use. Size is **allocated blocks**, not apparent length, and
+  directories are an allocation too -- counting only files made an empty artifact
+  directory report `0B` and understated every deep tree, and a `node_modules` is
+  mostly directories. A directory's `st_nlink` is above one for `.` and each
+  subdirectory, which is not a hard link in the sense that matters, so the
+  hard-link rule is not applied to them. **Hard-linked
+  content is excluded rather than counted once**: removing one name for an inode
+  frees nothing while another survives, and proving every name is inside the
+  deletion set would mean indexing the filesystem. 3.3 GB fell out of the
+  measured total that way, and the command now says so -- the figure is a floor **on a
+  filesystem without shared extents, and only there**. Copy-on-write filesystems
+  (btrfs, ZFS, bcachefs, XFS with `reflink=1`) let two files share blocks by reference,
+  and `st_blocks` reports those blocks for *each* file while `st_nlink` stays 1, so the
+  exclusion above cannot see them and the total overstates. The two errors point in
+  opposite directions and neither bounds the other, so on such a filesystem the figure
+  is **neither a floor nor a ceiling**: shared extents inflate it, and the hard-link
+  exclusion deflates it whenever every link to an inode is inside the deletion set --
+  the common case for a build tree that hard-links its own outputs. Detecting shared extents
+  needs `FIEMAP`, an `ioctl` with no stdlib binding and a syscall per file; saying so is
+  what is available, and `reclaim` now reads the filesystem type out of the mount table
+  and prints the caveat only where it applies -- a caveat printed everywhere is one
+  nobody reads.
+  That excluded figure is de-duplicated by inode, and the ledger records a
+  candidate only **after** it survives every filter: a tree the age filter
+  rejects used to consume the inodes it shared on its way out, so an accepted
+  candidate sharing them reported them as already counted and they vanished from
+  every figure.
+  `--older-than` and `--list` both refuse a negative value; the first would put
+  the cutoff in the future and disable the protection, the second would quietly
+  print every entry but the smallest.
+
+  Every guard in this command was **neutralised one at a time and the suite re-run**:
+  81 conditions, three passes. The first found 23 that no test objected to, including two
+  documented flags -- `--list N` and `--include-environments` -- that nothing had ever
+  executed, since every test passed `list=0` and `include_environments=False`. 17 tests
+  later, 70 are caught and the remaining 8 are each annotated at the site as equivalent,
+  unreachable or advisory, with the alternative that covers them named. Three are loop
+  terminators, where neutralising hangs instead of failing: detected, but not by an
+  assertion, which is a third outcome worth distinguishing.
+
+  It never enters `.git` -- a repository's history is not build output however
+  large it grows. It does **not** prune matched trees from the walk: eligibility
+  cannot be known without asking Git, so the scan descends through them and
+  de-duplicates accepted candidates afterwards, which keeps a `node_modules`
+  inside an accepted `build` counted once. Correctness over a single pass.
 - `distrodeck diff --input FILE` compares an export file against the current
   system without changing anything. Reports `missing` (in the export, not
   installed here) and `extra` (installed here, not in the export) per section,
@@ -46,6 +338,25 @@ This project follows Keep a Changelog and Semantic Versioning.
   switched per shell.
 - The PR CI gate now runs the test suite (pytest plus the installer argument
   tests); previously only `py_compile` ran, so tests never gated a PR.
+### Changed
+- `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
+  looks for `~/Projects/iso-forge` first and still accepts an older
+  `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the
+  new site. The `ISOFORGE_*` and legacy `BURN_ISO_*` environment overrides are
+  unchanged, as is the `isoforge` package name.
+
+## [0.10.2]
+
+### Changed
+- Released the current packaging CI fixes as a patch version.
+
+## [0.10.1]
+
+### Fixed
+- Prevented recursive Debian and RPM package builds in CI.
+
+
+## [0.9.0]
 
 ### Changed
 - Default Node.js major installed by the `node` tool is now 24. Node 20 reached

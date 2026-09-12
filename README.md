@@ -81,6 +81,14 @@ distrodeck upgrade
 
 distrodeck upgrade --cleanup-kernels
 
+distrodeck reclaim
+(Reports regenerable build output under the configured developer workspace.
+Deletes nothing without `--apply`.)
+
+distrodeck reclaim --older-than 30 --apply
+
+distrodeck reclaim ~/work
+
 distrodeck cleanup-kernels --dry-run
 
 distrodeck cleanup-kernels
@@ -270,6 +278,12 @@ official_hosts_ubuntu = archive.ubuntu.com, security.ubuntu.com
 official_hosts_debian = deb.debian.org, security.debian.org
 # To fully override defaults:
 # official_hosts_ubuntu_override = archive.ubuntu.com, security.ubuntu.com
+
+[developer]
+# Developer-only reclaim workspace. The default is ~/Projects.
+# Set this from the TUI's Settings entry, or override it per command:
+# distrodeck reclaim ~/work
+# workspace = ~/Projects
 ```
 
 Sample file: `examples/config.ini`.
