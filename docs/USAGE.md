@@ -262,7 +262,11 @@ Reported sizes are **allocated blocks**, not apparent file length -- directories
   directories -- and
 hard-linked content is excluded from the total and reported separately: removing
 one name for an inode frees nothing while another survives, so the figure is a
-floor rather than an estimate.
+floor rather than an estimate -- **on a filesystem without shared extents**. On btrfs,
+ZFS, bcachefs or XFS with `reflink=1`, two files can share blocks by reference while
+each reports them as its own and `st_nlink` stays 1, so deleting one copy frees nothing
+and the total overstates instead. `reclaim` reads the filesystem type from the mount
+table and says so when the workspace is on one of those.
 
 ### upgrade
 

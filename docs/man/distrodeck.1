@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-08-25" "distrodeck 0.10.3" "User Commands"
+.TH DISTRODECK 1 "2026-09-12" "distrodeck 0.10.3" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -34,6 +34,9 @@ Run distro upgrade
 .TP
 .B cleanup-kernels
 Clean up old auto-installed kernels
+.TP
+.B reclaim
+Report, and with --apply remove, build output under a workspace
 .TP
 .B security
 Apply security upgrades
@@ -191,6 +194,31 @@ options:
   --keep KEEP, --keep-kernels KEEP
                         Previous kernel versions to keep in addition to the
                         running kernel
+.fi
+.SS reclaim
+.nf
+usage: distrodeck reclaim [-h] [--apply] [--include-environments]
+                          [--older-than DAYS] [--any-directory] [--list N]
+                          [workspace]
+
+positional arguments:
+  workspace             Directory of checkouts to scan (default: ~/Projects)
+
+options:
+  -h, --help            show this help message and exit
+  --apply               Actually delete. Without it, this only reports what it
+                        would delete.
+  --include-environments
+                        Also virtualenvs. Restoring one needs a network and a
+                        pip install.
+  --older-than DAYS     Only directories untouched for this many days.
+                        Protects work in progress.
+  --any-directory       Offer matching directories even when Git does not
+                        consider them ignored. Off by default: `build/` and
+                        `target/` are ordinary names for authored code, and
+                        being gitignored is the evidence that a directory is
+                        output rather than source.
+  --list N              Also list the N largest directories individually.
 .fi
 .SS security
 .nf

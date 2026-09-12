@@ -2727,9 +2727,19 @@ def _measure(path: pathlib.Path) -> Measurement:
     same inode survives outside everything being deleted -- removing one of two
     names frees nothing. Establishing that every `st_nlink` name is inside the
     deletion set would mean indexing the whole filesystem, so the conservative
-    reading is taken: such inodes are left out and reported separately. The
-    figure is then an **underestimate**, which is the safe direction for a
-    promise about space.
+    reading is taken: such inodes are left out and reported separately.
+
+    **That makes the figure an underestimate on a filesystem without shared
+    extents, and only there.** Copy-on-write filesystems -- btrfs, ZFS, bcachefs,
+    XFS formatted with `reflink=1` -- let two files share blocks by reference
+    rather than by copy, and `st_blocks` reports those blocks for *each* file while
+    `st_nlink` stays 1, so the hard-link exclusion above cannot see them. Deleting
+    one reflinked copy frees nothing while the other survives, exactly as with a
+    hard link, and the total therefore overstates on such a filesystem. Detecting
+    shared extents needs `FIEMAP` per file, which is an `ioctl` Python has no
+    binding for and a syscall per file across a workspace; the honest alternative is
+    to say so, which `reclaim` does when it recognises the filesystem it is
+    measuring.
 
     Within this tree the figure is de-duplicated by inode: adding a linked file's
     size once per *name* would report an inode with three links as three times its
@@ -3001,14 +3011,69 @@ def _parse_mountinfo(lines) -> set:
     for line in lines:
         fields = line.split()
         if len(fields) > 4:
-            points.add(
-                fields[4]
-                .replace("\\040", " ")
-                .replace("\\011", "\t")
-                .replace("\\012", "\n")
-                .replace("\\134", "\\")
-            )
+            points.add(_unescape_mountinfo(fields[4]))
     return points
+
+
+def _unescape_mountinfo(field: str) -> str:
+    """Decode the four characters `mountinfo` escapes as octal."""
+    return (
+        field
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+# Filesystems where one file's blocks can be shared with another's by reference
+# rather than copied. `cp --reflink`, `btrfs subvolume snapshot` and `systemd-nspawn`
+# all produce them routinely. XFS only shares when formatted with `reflink=1`, which
+# cannot be read from the mount table, so it is listed and the wording hedged rather
+# than a guarantee being made either way.
+_REFLINK_FILESYSTEMS = {"btrfs", "xfs", "zfs", "bcachefs", "ocfs2"}
+
+
+def _parse_mountinfo_types(lines) -> dict:
+    """`{mount point: filesystem type}` out of `mountinfo` lines.
+
+    The type is the field after the lone `-`, which is where the optional fields
+    end. Counting from the left breaks on any line that has them.
+    """
+    types = {}
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 5 or "-" not in fields:
+            continue
+        separator = fields.index("-")
+        if separator + 1 >= len(fields):
+            continue
+        types[_unescape_mountinfo(fields[4])] = fields[separator + 1]
+    return types
+
+
+def _filesystem_of(path: pathlib.Path):
+    """The filesystem type *path* lives on, or None if it cannot be determined.
+
+    Longest matching mount point wins, which is what the kernel itself resolves to.
+    """
+    try:
+        with open(
+            _MOUNTINFO,
+            encoding=sys.getfilesystemencoding(),
+            errors="surrogateescape",
+        ) as handle:
+            types = _parse_mountinfo_types(handle)
+    except (OSError, UnicodeError):
+        return None
+
+    best = None
+    here = str(path)
+    for point, kind in types.items():
+        if here == point or here.startswith(point.rstrip(os.sep) + os.sep):
+            if best is None or len(point) > len(best[0]):
+                best = (point, kind)
+    return None if best is None else best[1]
 
 
 def _mount_points():
@@ -3683,6 +3748,18 @@ def run_reclaim(args: argparse.Namespace) -> None:
         print()
         print(f"  {_human_bytes(linked_total)} of hard-linked content is excluded from that figure:")
         print("  deleting one name frees nothing while another link survives.")
+
+    # ...except where blocks can be shared by reference. A reflinked file has
+    # `st_nlink == 1`, so the exclusion above cannot see it, and the figure stops
+    # being a floor. Said only when the filesystem can actually do it, because a
+    # caveat printed everywhere is one nobody reads.
+    kind = _filesystem_of(workspace)
+    if kind in _REFLINK_FILESYSTEMS:
+        print()
+        print(f"  {workspace} is on {kind}, where files can share blocks by reference.")
+        print("  Deleting one copy of shared extents frees nothing while another holds")
+        print("  them, and that sharing is invisible to this measurement, so treat the")
+        print("  figure as an upper bound rather than a floor.")
 
     if args.list:
         print()

@@ -2210,3 +2210,77 @@ class TestRepositoryStorageIsRecheckedAfterTheTraversals:
         """The control: repeating the climb must not refuse the ordinary case."""
         target = make_dir(repo, "build")
         assert distrodeck._still_eligible(target, None, False, repo.parent).reason == ""
+
+
+class TestTheFloorClaimIsQualifiedOnCopyOnWriteFilesystems:
+    """A reflinked file has `st_nlink == 1`, so the hard-link exclusion cannot see it.
+
+    btrfs, ZFS, bcachefs and XFS with `reflink=1` let two files share blocks by
+    reference rather than by copy, and `st_blocks` reports those blocks for *each*
+    file. Deleting one copy frees nothing while the other holds the extents -- exactly
+    the situation the hard-link exclusion exists for, and invisible to it. The total
+    therefore overstates there, so the documented "floor" was wrong on those
+    filesystems and the command says so when it recognises one.
+
+    Detecting shared extents needs `FIEMAP`, an `ioctl` with no stdlib binding, and a
+    syscall per file across a workspace. Saying so is what is actually available.
+    """
+
+    @staticmethod
+    def _table(tmp_path, point, fstype):
+        table = tmp_path / "mountinfo"
+        table.write_text(
+            "21 1 0:20 / / rw,relatime shared:1 - ext4 /dev/root rw\n"
+            f"22 21 0:21 / {point} rw,relatime shared:2 - {fstype} /dev/sdb rw\n"
+        )
+        return str(table)
+
+    def test_the_caveat_appears_on_btrfs(self, repo, monkeypatch, capsys):
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO",
+                            self._table(repo.parent, str(repo.parent), "btrfs"))
+        args = argparse.Namespace(workspace=str(repo.parent), apply=False,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        out = capsys.readouterr().out
+        assert "btrfs" in out and "upper bound rather than a floor" in out, out
+
+    def test_it_does_not_appear_on_ext4(self, repo, monkeypatch, capsys):
+        """A caveat printed everywhere is one nobody reads."""
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO",
+                            self._table(repo.parent, str(repo.parent), "ext4"))
+        args = argparse.Namespace(workspace=str(repo.parent), apply=False,
+                                  include_environments=False, older_than=0,
+                                  list=0, any_directory=False)
+        distrodeck.run_reclaim(args)
+        assert "upper bound" not in capsys.readouterr().out
+
+    def test_the_longest_mount_point_wins(self, tmp_path, monkeypatch):
+        """What the kernel resolves to, not the first line that matches."""
+        table = tmp_path / "mountinfo"
+        table.write_text(
+            "21 1 0:20 / / rw - ext4 /dev/root rw\n"
+            "22 21 0:21 / /work rw - xfs /dev/sdb rw\n"
+            "23 22 0:22 / /work/scratch rw - btrfs /dev/sdc rw\n"
+        )
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO", str(table))
+        assert distrodeck._filesystem_of(Path("/work/scratch/build")) == "btrfs"
+        assert distrodeck._filesystem_of(Path("/work/other/build")) == "xfs"
+        assert distrodeck._filesystem_of(Path("/elsewhere")) == "ext4"
+
+    def test_the_type_is_read_after_the_separator(self):
+        """Counting fields from the left breaks on any line with optional fields."""
+        with_optional = "22 1 0:5 / /mnt rw,relatime shared:2 master:3 - btrfs /dev/sda rw"
+        without = "22 1 0:5 / /mnt rw,relatime - ext4 /dev/sda rw"
+        assert distrodeck._parse_mountinfo_types([with_optional]) == {"/mnt": "btrfs"}
+        assert distrodeck._parse_mountinfo_types([without]) == {"/mnt": "ext4"}
+
+    def test_an_escaped_mount_point_keeps_its_type(self):
+        line = "22 1 0:5 / /mnt/my\\040disk rw - btrfs /dev/sda rw"
+        assert distrodeck._parse_mountinfo_types([line]) == {"/mnt/my disk": "btrfs"}
+
+    def test_an_unreadable_table_gives_no_filesystem(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(distrodeck, "_MOUNTINFO", str(tmp_path / "not-there"))
+        assert distrodeck._filesystem_of(Path("/anything")) is None

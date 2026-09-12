@@ -249,7 +249,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   content is excluded rather than counted once**: removing one name for an inode
   frees nothing while another survives, and proving every name is inside the
   deletion set would mean indexing the filesystem. 3.3 GB fell out of the
-  measured total that way, and the command now says so -- the figure is a floor.
+  measured total that way, and the command now says so -- the figure is a floor **on a
+  filesystem without shared extents, and only there**. Copy-on-write filesystems
+  (btrfs, ZFS, bcachefs, XFS with `reflink=1`) let two files share blocks by reference,
+  and `st_blocks` reports those blocks for *each* file while `st_nlink` stays 1, so the
+  exclusion above cannot see them and the total overstates. Detecting shared extents
+  needs `FIEMAP`, an `ioctl` with no stdlib binding and a syscall per file; saying so is
+  what is available, and `reclaim` now reads the filesystem type out of the mount table
+  and prints the caveat only where it applies -- a caveat printed everywhere is one
+  nobody reads.
   That excluded figure is de-duplicated by inode, and the ledger records a
   candidate only **after** it survives every filter: a tree the age filter
   rejects used to consume the inodes it shared on its way out, so an accepted
