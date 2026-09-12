@@ -3549,13 +3549,20 @@ def find_reclaimable(
 
     cutoff = time.time() - (older_than_days * 86400) if older_than_days else None
 
-    # Read once, before discovery. The walk needs it: descending past a mount put
-    # directories on *other* storage into the candidate list, and a `target/` below
-    # a mount has the mount as an **ancestor**, which `_mount_refusal` does not look
-    # at -- it answers about mounts at or below the path it is given. So the
-    # refusal that protects a candidate containing a mount did nothing for a
-    # candidate the walk found inside one, and `--apply` would have deleted somebody
-    # else's directory.
+    # Read once, before discovery, and used for three things there: not descending
+    # past a mount, refusing a candidate that is or holds one, and doing both before
+    # anything touches the candidate.
+    #
+    # Descending mattered because a `target/` below a mount has the mount as an
+    # **ancestor**, and `_mount_refusal` answers about mounts at or below the path it
+    # is given -- so the refusal that protects a candidate *containing* a mount did
+    # nothing for one the walk found *inside* one, and `--apply` would have deleted
+    # somebody else's directory.
+    #
+    # Refusing early matters because every other question is a syscall on the path:
+    # `is_symlink`, the git eligibility calls, the traversals. A known mount is a
+    # string comparison against this table, so a dead one is skipped rather than
+    # blocking whatever asks about it first.
     points = _mount_points()
 
     candidates = []
@@ -3580,6 +3587,16 @@ def find_reclaimable(
             # the target's size, and `shutil.rmtree` refuses a directory symlink
             # outright, so `--apply` failed on it. Deleting one would free only the
             # link anyway, and somebody made it on purpose.
+            # Before `is_symlink`, which is an `lstat`, and long before the git
+            # calls further down. For a known mount the table answers with a string
+            # comparison and no syscall at all -- so a dead mount named `build`, or
+            # one holding a `build`, is dropped here rather than hanging the scan in
+            # the first question asked about it. The screen used to sit after the git
+            # eligibility filter, which is two subprocesses and an `lstat` too late.
+            mounted = _mount_refusal(path, None, points)
+            if mounted:
+                print(f"  skipping {path}: {mounted}", file=sys.stderr)
+                continue
             if path.is_symlink():
                 continue
             candidates.append(path)
@@ -3617,23 +3634,6 @@ def find_reclaimable(
                     continue
                 eligible.append(path)
         candidates = eligible
-
-    # Before either walk. `_mount_refusal` answers from the mount table and a
-    # comparison with the parent's device, neither of which traverses anything --
-    # so a candidate holding an NFS share or a bind-mounted dataset is refused
-    # without its contents ever being read. Detecting that afterwards, from the
-    # measurement, meant the traversal had already happened: minutes of somebody
-    # else's storage on a slow mount, or no answer at all on a dead one. What is
-    # left for the measurement to catch is a mount the table does not list, which
-    # on Linux means `/proc` could not be read.
-    unmounted = []
-    for path in candidates:
-        mounted = _mount_refusal(path, None, points)
-        if mounted:
-            print(f"  skipping {path}: {mounted}", file=sys.stderr)
-            continue
-        unmounted.append(path)
-    candidates = unmounted
 
     searched = []
     for path in candidates:

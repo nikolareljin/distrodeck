@@ -108,14 +108,24 @@ This project follows Keep a Changelog and Semantic Versioning.
   nested-repository questions ran before a traversal that takes minutes on a large
   candidate, and the only thing refreshed afterwards was the mount table -- so a file
   force-added while the measurement ran reached `rmtree`, checked and then invalidated
-  by the same function. The order is now: the **mount table first**, before anything at
-  all touches the candidate, because every other question here is a syscall on the path
-  and a syscall on a dead mount does not return; then the one-`lstat` questions; then
-  the two traversals; then the table again and the **git questions last**, since those
-  are the two things a person changes with one command and they cost two subprocesses
-  rather than a walk. What remains is the window between the last check and `rmtree`
-  itself, which no ordering closes -- the two are not atomic with respect to each other
-  -- and the code says so rather than implying otherwise.
+  by the same function. The order follows one rule -- **whatever an answer protects must
+  not be something that happens after it** -- and cheapest first within that:
+
+  1. the **mount table**, before anything at all touches the candidate, because every
+     other question here is a syscall on the path and a syscall on a dead mount does not
+     return;
+  2. the questions costing one `lstat`: symlink, still a directory, repository storage
+     above it;
+  3. the **nested-repository walk** -- expensive, and authoritative about the one thing a
+     measurement cannot tell you;
+  4. everything cheap enough to ask twice: the table again, the storage climb again, the
+     **git questions**;
+  5. the **measurement last**, supplying the age and the freed size, then one final
+     table read.
+
+  What remains is the window between step 5 and `rmtree` itself, which no ordering
+  closes -- the two are not atomic with respect to each other -- and the code says so
+  rather than implying otherwise.
 
   The last check before each deletion **re-reads the table**, which the comment over
   it had been claiming while the code used the snapshot taken before two full-tree
@@ -143,6 +153,12 @@ This project follows Keep a Changelog and Semantic Versioning.
   entirely: no allocation, and no mtime -- a symlink created or repointed a minute ago
   left a tree reading as untouched for weeks, against the rule that age comes from
   anything inside. Measured with `lstat`, so it is the link and not what it points at.
+
+  The scan refuses a known mount **during discovery**, before `is_symlink` or any git
+  call touches the candidate -- for a known mount the table answers with a string
+  comparison and no syscall, so a dead mount named `build` is skipped rather than
+  hanging whatever asks about it first. The screen used to sit after the git eligibility
+  filter, which is two subprocesses and an `lstat` too late.
 
   **The discovery walk does not descend past a mount at all.** Refusing afterwards
   protected a candidate that *contains* a mount and did nothing for one found

@@ -2485,3 +2485,59 @@ class TestNeitherBoundIsClaimedWhereNeitherHolds:
         out = capsys.readouterr().out
         assert "neither a floor nor a ceiling" in out, out
         assert "upper bound" not in out, "the wording that claimed a bound is back"
+
+
+class TestAKnownMountIsRefusedBeforeAnythingTouchesIt:
+    """The scan's mount screen sat after the git eligibility filter.
+
+    Every question about a candidate is a syscall on it -- `Path.is_symlink` is an
+    `lstat`, the git eligibility calls stat and spawn -- and for a *known* mount the
+    table answers with a string comparison and no syscall at all. So a dead mount named
+    `build`, or one holding a `build`, could hang the scan inside the first thing that
+    asked about it, although the answer was already in hand.
+    """
+
+    def test_no_syscall_and_no_git_call_precede_the_refusal(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        touched, git_calls = [], []
+        real_lstat, real_stat, real_git = os.lstat, os.stat, distrodeck._git
+
+        def watched_lstat(path, *a, **k):
+            if str(path).startswith(str(target)):
+                touched.append(("lstat", str(path)))
+            return real_lstat(path, *a, **k)
+
+        def watched_stat(path, *a, **k):
+            if str(path).startswith(str(target)):
+                touched.append(("stat", str(path)))
+            return real_stat(path, *a, **k)
+
+        monkeypatch.setattr(os, "lstat", watched_lstat)
+        monkeypatch.setattr(os, "stat", watched_stat)
+        monkeypatch.setattr(distrodeck, "_git",
+                            lambda w, *a, **k: git_calls.append(a[0] if a else "?")
+                            or real_git(w, *a, **k))
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target)})
+
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+        assert touched == [], f"touched the mount before refusing it: {touched[:3]}"
+        assert "check-ignore" not in git_calls, git_calls
+        assert "ls-files" not in git_calls, git_calls
+
+    def test_it_is_reported_rather_than_silently_dropped(self, repo, monkeypatch, capsys):
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target)})
+        distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert "it is itself a mount point" in capsys.readouterr().err
+
+    def test_a_candidate_holding_a_mount_is_refused_there_too(self, repo, monkeypatch):
+        target = make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: {str(target / "share")})
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_an_ordinary_candidate_is_still_offered(self, repo, monkeypatch):
+        """The control: refusing earlier must not refuse more."""
+        make_dir(repo, "build")
+        monkeypatch.setattr(distrodeck, "_mount_points", lambda: set())
+        assert [p.name for p, _, _, _ in
+                distrodeck.find_reclaimable(repo.parent, ARTIFACTS)] == ["build"]

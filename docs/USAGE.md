@@ -231,7 +231,7 @@ What it will not offer, ever -- no flag lifts these:
   and the mount table, which is what catches a bind mount of the *same* filesystem.
   Only the last needs `/proc`, so where it cannot be read the same-device bind mount
   is the one case that goes undetected. Two of the three -- the parent comparison and
-  the mount table -- are answered **before the candidate is read at all**, so a slow
+  the mount table -- are answered **before the candidate is read at all -- before even the symlink check or any git call**, so a slow
   or dead mount is skipped rather than measured. The in-tree device change is
   necessarily found while measuring, since that is what notices it; what it gives is
   that the measurement **stops** at the boundary and goes no deeper, so the cost is
