@@ -263,6 +263,7 @@ mongo_out="$(
   chmod() { :; }
   dpkg() { echo amd64; }
   download_file() { : > "$2"; }
+  verify_key_fingerprint() { :; }  # covered with fixture keys below
   mongodb_repo_setup apt && cat "$MONGODB_APT_LIST"
 )"
 assert_contains "$mongo_out" "deb [arch=amd64 signed-by=$mongo_tmp/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/${MONGODB_SERIES} multiverse" "MongoDB apt source is signed-by its keyring"
@@ -823,6 +824,115 @@ pgv="$( detect_pkg_mgr() { echo apt; }; pg_major() { echo 17; }; native_pkg_inst
 assert_contains "$pgv" "ASKED postgresql-17-pgvector" "pgvector detection asks for the real package name"
 trixie_os="$(mktemp)"; printf 'ID=debian\nVERSION_CODENAME=trixie\n' > "$trixie_os"
 assert_contains "$(OS_RELEASE_FILE="$trixie_os" mongodb_apt_target 2>&1)" "debian trixie main" "MongoDB apt target for Debian trixie"
+
+# ── Signing key pins (fixture keys in tests/fixtures/keys) ───────────────────
+KEYS="$REPO_ROOT/tests/fixtures/keys"
+FPR_A=98BBB2E9F66810576B9A59034021A45345209A33
+FPR_B=5C8A6C806C39769FF516968319D85A1B7E79951C
+if command -v gpg >/dev/null 2>&1; then
+  assert_exit 0 "a key with the pinned fingerprint is accepted" verify_key_fingerprint "$KEYS/test-key-a.asc" "$FPR_A"
+  assert_exit 1 "a different key is refused" verify_key_fingerprint "$KEYS/test-key-b.asc" "$FPR_A"
+  assert_exit 1 "the pinned key plus an extra key is refused" verify_key_fingerprint "$KEYS/test-keys-ab.asc" "$FPR_A"
+  assert_exit 1 "a file with no key is refused" verify_key_fingerprint "$KEYS/not-a-key.txt" "$FPR_A"
+  [[ "$MONGODB_KEY_FINGERPRINT" == *41DE058A4E7DCA05 && ${#MONGODB_KEY_FINGERPRINT} -eq 40 ]] && pass "MongoDB pin is the full 8.0 key fingerprint" || fail "MongoDB pin is the full 8.0 key fingerprint"
+  [[ "$NEO4J_KEY_FINGERPRINT" == *59D700E4D37F5F19 && ${#NEO4J_KEY_FINGERPRINT} -eq 40 ]] && pass "Neo4j pin is the full key fingerprint" || fail "Neo4j pin is the full key fingerprint"
+  for case in "b:refuse" "a:accept"; do
+    key="${case%%:*}"
+    mongo_pin_tmp="$(mktemp -d)"
+    pin_out="$(
+      MONGODB_KEY_FINGERPRINT="$FPR_A"
+      # shellcheck disable=SC2034  # read by the sourced installer
+      MONGODB_YUM_REPO="$mongo_pin_tmp/mongodb-org.repo"
+      # shellcheck disable=SC2034  # read by the sourced installer
+      MONGODB_RPM_KEY="$mongo_pin_tmp/rpm.key"
+      printf 'ID=rocky\nVERSION_ID=9.4\n' > "$mongo_pin_tmp/os"; OS_RELEASE_FILE="$mongo_pin_tmp/os"
+      sudo() { "$@"; }
+      download_file() { cp "$KEYS/test-key-$key.asc" "$2"; }
+      mongodb_repo_setup dnf 2>&1; echo "rc=$?"; cat "$MONGODB_YUM_REPO" 2>/dev/null
+    )"
+    if [[ "$key" == b ]]; then
+      assert_contains "$pin_out" "fingerprint mismatch" "MongoDB dnf refuses a key with the wrong fingerprint"
+      [[ ! -e "$mongo_pin_tmp/mongodb-org.repo" && ! -e "$mongo_pin_tmp/rpm.key" ]] && pass "a refused key writes no repo file" || fail "a refused key writes no repo file"
+    else
+      assert_contains "$pin_out" "gpgkey=file://$mongo_pin_tmp/rpm.key" "MongoDB dnf repo uses the verified local key"
+    fi
+    rm -rf "$mongo_pin_tmp"
+  done
+  vend_tmp="$(mktemp -d)"
+  vend_out="$(
+    sudo() { "$@"; }
+    install() { cp "${@: -2:1}" "${@: -1}" 2>/dev/null || :; }
+    tee() { command tee "$vend_tmp/list" >/dev/null; }
+    download_file() { cp "$KEYS/$VEND_KEY" "$2"; }
+    VEND_KEY=test-key-b.asc apt_vendor_repo neo4j https://k https://r stable latest "$FPR_A" 2>&1; echo "pinned-wrong rc=$?"
+    VEND_KEY=test-keys-ab.asc apt_vendor_repo cassandra https://k https://r 50x main 2>&1; echo "unpinned rc=$?"
+    VEND_KEY=not-a-key.txt apt_vendor_repo cassandra https://k https://r 50x main 2>&1; echo "nokey rc=$?"
+  )"
+  assert_contains "$vend_out" "pinned-wrong rc=1" "apt_vendor_repo refuses a key that misses the pin"
+  assert_contains "$vend_out" "signing keys: $FPR_A $FPR_B" "cassandra logs every KEYS fingerprint"
+  assert_contains "$vend_out" "unpinned rc=0" "cassandra accepts a KEYS file with keys"
+  assert_contains "$vend_out" "nokey rc=1" "cassandra refuses a KEYS file with no key"
+  grep -q 'stable latest "\$NEO4J_KEY_FINGERPRINT"' "$INSTALLER" && pass "neo4j repo setup passes its pin" || fail "neo4j repo setup passes its pin"
+  rm -rf "$vend_tmp"
+else
+  echo "SKIP: gpg not available; key pin tests skipped."
+fi
+
+# ── Uninstall removes the concrete server packages ───────────────────────────
+dpkg_installed="postgresql postgresql-16 postgresql-17 postgresql-17-pgvector postgresql-client-17 postgresql-common mysql-server mysql-server-8.0 mysql-server-core-8.0 default-mysql-server default-mysql-server-core mariadb-server mariadb-server-core redis-server redis-tools apache2 apache2-bin nginx default-jdk default-jdk-headless openjdk-17-jdk openjdk-17-jdk-headless openjdk-21-jdk openjdk-21-jdk-headless"
+fake_dpkg_query() {
+  # dpkg-query -W -f=FMT PATTERN...; answers from $dpkg_installed with shell globs.
+  local fmt="" pat p out=1
+  shift  # -W
+  if [[ "$1" == -f=* ]]; then fmt="${1#-f=}"; shift; fi
+  if [[ "$fmt" == '${Depends}' ]]; then
+    [[ "$1" == default-jdk ]] && printf 'default-jdk-headless (= 2:1.17), openjdk-17-jdk, libc6'
+    return 0
+  fi
+  for pat in "$@"; do
+    for p in $dpkg_installed; do
+      # shellcheck disable=SC2053  # glob match on purpose
+      if [[ "$p" == $pat ]]; then printf 'installed %s\n' "$p"; out=0; fi
+    done
+  done
+  return "$out"
+}
+rm_out="$(
+  dpkg-query() { fake_dpkg_query "$@"; }
+  apt-cache() { printf 'Candidate: 8.0\n'; }
+  for t in postgresql pgvector mysql redis apache2 nginx; do echo "$t: $(server_remove_pkgs "$t" apt x)"; done
+  echo "dnf: $(server_remove_pkgs postgresql dnf postgresql-server)"
+)"
+assert_contains "$rm_out" "postgresql: postgresql postgresql-16 postgresql-17 postgresql-17-pgvector" "postgresql uninstall names every server major and its pgvector"
+assert_not_contains "$rm_out" "postgresql-client-17" "postgresql uninstall keeps the client"
+assert_not_contains "$rm_out" "postgresql-common" "postgresql uninstall keeps postgresql-common"
+assert_contains "$rm_out" "pgvector: postgresql-17-pgvector" "pgvector uninstall names the versioned package"
+assert_contains "$rm_out" "mysql: mysql-server mysql-server-8.0 mysql-server-core-8.0" "mysql uninstall names the versioned server"
+assert_not_contains "$(grep '^mysql:' <<< "$rm_out")" "mariadb" "mysql on Ubuntu never removes MariaDB"
+assert_contains "$rm_out" "redis: redis-server redis-tools" "redis uninstall removes the binary package"
+assert_contains "$rm_out" "apache2: apache2 apache2-bin" "apache2 uninstall removes apache2-bin"
+assert_contains "$rm_out" "dnf: postgresql-server" "dnf keeps the concrete spec package"
+deb_rm="$( dpkg-query() { fake_dpkg_query "$@"; }; apt-cache() { debian_cache "$@"; }; server_remove_pkgs mysql apt default-mysql-server )"
+assert_contains "$deb_rm" "default-mysql-server default-mysql-server-core mariadb-server mariadb-server-core" "mysql on Debian removes the MariaDB server it installed"
+full_rm="$(
+  dpkg-query() { fake_dpkg_query "$@"; }
+  apt-cache() { printf 'Candidate: 8.0\n'; }
+  sudo() { echo "SUDO $*"; }
+  systemctl() { :; }
+  uninstall_pkg() { echo "REMOVE $*"; }
+  uninstall_package_tool postgresql apt 2>&1
+)"
+assert_contains "$full_rm" "REMOVE apt postgresql postgresql-16 postgresql-17 postgresql-17-pgvector" "uninstall_package_tool removes the resolved packages"
+assert_contains "$full_rm" "Kept the postgresql data directory" "server uninstall says the data is kept"
+assert_not_contains "$full_rm" "autoremove" "server uninstall never autoremoves"
+java_rm="$(
+  dpkg-query() { fake_dpkg_query "$@"; }
+  uninstall_pkg() { echo "REMOVE $*"; }
+  JAVA_STATE_FILE=/nonexistent/java-version uninstall_java apt
+  JAVA_STATE_FILE="$(mktemp)"; echo 21 > "$JAVA_STATE_FILE"; uninstall_java apt
+)"
+assert_contains "$java_rm" "REMOVE apt default-jdk default-jdk-headless openjdk-17-jdk openjdk-17-jdk-headless" "legacy default-jdk uninstall removes the JDK behind it"
+assert_contains "$java_rm" "REMOVE apt openjdk-21-jdk openjdk-21-jdk-headless" "java uninstall removes the headless JDK too"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

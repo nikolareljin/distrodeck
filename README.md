@@ -207,7 +207,19 @@ default to localhost. On apt every server installs under a temporary
 `/usr/sbin/policy-rc.d` that answers 101, so its postinst cannot start it on
 0.0.0.0 before the bind is rewritten; the file is removed after the install,
 also on failure, and an existing policy-rc.d that distrodeck did not write is
-left alone. Uninstall stops the service and keeps the data directory.
+left alone. Uninstall stops the service, removes the concrete server
+packages behind a metapackage (resolved from dpkg at that moment, e.g.
+`postgresql-17` and `postgresql-17-pgvector`, `mysql-server-8.0`,
+`mariadb-server` for Debian's `default-mysql-server`, `apache2-bin`,
+`redis-tools`), never runs autoremove, and keeps the data directory.
+
+The MongoDB and Neo4j repository keys are pinned to their full fingerprints
+(MongoDB 8.0 `4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05`, Neo4j
+`1EEFB8767D4924B86EAD08A459D700E4D37F5F19`); a download holding any other key
+is refused. On dnf the verified MongoDB key is installed locally instead of
+letting dnf fetch it. Cassandra's KEYS file is not pinned (it is the changing
+set of release managers' keys); it must hold at least one key and every
+fingerprint is logged.
 
 Debian ships no `mysql-server`: there the `mysql` tool installs
 `default-mysql-server`, which is MariaDB, and says so (use the MySQL APT

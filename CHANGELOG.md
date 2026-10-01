@@ -26,7 +26,12 @@ This project follows Keep a Changelog and Semantic Versioning.
   the formula's service binds every interface); seaweedfs covers Linux. Milvus
   runs with the env, config mounts and seccomp setting of upstream
   `standalone_embed.sh`. Claude plugins install at user scope with no stdin and
-  a 300 s limit.
+  a 300 s limit. Uninstall removes the concrete server packages behind apt
+  metapackages (postgresql-N and its pgvector, mysql-server-N, mariadb-server,
+  apache2-bin, redis-tools, the JDK behind default-jdk and openjdk-N-jdk's
+  -headless), with no autoremove; data directories are kept. MongoDB and Neo4j
+  repository keys are pinned by full fingerprint; Cassandra's KEYS file must
+  hold a key and its fingerprints are logged.
 - **macOS.** The installer re-execs under Homebrew bash 5, installs with brew
   formulae and casks, and hides Linux-only tools. A `macos-latest` CI job runs
   the listing, the argument tests and one real brew install.

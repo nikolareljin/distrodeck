@@ -2055,7 +2055,54 @@ uninstall_package_tool() {
     return 1
   fi
   server_teardown "$tool" "$mgr"
-  uninstall_pkg "$mgr" "$pkg"
+  local remove=()
+  read -r -a remove <<< "$(server_remove_pkgs "$tool" "$mgr" "$pkg")"
+  uninstall_pkg "$mgr" "${remove[@]}"
+}
+
+# Print the installed apt packages matching dpkg-query patterns "$@".
+apt_installed_matching() {
+  dpkg-query -W -f='${db:Status-Status} ${Package}\n' "$@" 2>/dev/null | awk '$1 == "installed" {print $2}'
+}
+
+# Print the packages to remove for tool $1 on manager $2 (spec package $3),
+# space separated. On apt several tools install a metapackage and removing it
+# alone leaves the server installed (mysql-server -> mysql-server-8.0,
+# postgresql -> postgresql-17, default-mysql-server -> mariadb-server,
+# apache2 -> apache2-bin, redis-server -> redis-tools' binary), so the
+# concrete packages are resolved now from what dpkg has installed. No
+# autoremove: shared dependencies stay. dnf, pacman, zypper and brew names
+# in the spec table are the concrete packages already.
+server_remove_pkgs() {
+  local tool="$1" mgr="$2" pkg="$3" found=()
+  if [[ "$mgr" == "apt" ]]; then
+    case "$tool" in
+      postgresql)
+        # Server majors and their pgvector builds; postgresql-client-N and
+        # postgresql-common stay (clients may use them).
+        mapfile -t found < <(apt_installed_matching postgresql 'postgresql-[0-9]*' | grep -E '^postgresql(-[0-9]+(-pgvector)?)?$')
+        ;;
+      pgvector) mapfile -t found < <(apt_installed_matching 'postgresql-[0-9]*-pgvector');;
+      mysql)
+        if apt_mysql_is_mariadb; then
+          mapfile -t found < <(apt_installed_matching default-mysql-server 'default-mysql-server-core' mariadb-server 'mariadb-server-*')
+        else
+          mapfile -t found < <(apt_installed_matching mysql-server 'mysql-server-*')
+        fi
+        ;;
+      mariadb) mapfile -t found < <(apt_installed_matching mariadb-server 'mariadb-server-*');;
+      redis) mapfile -t found < <(apt_installed_matching redis-server redis-tools);;
+      valkey) mapfile -t found < <(apt_installed_matching valkey-server valkey-tools);;
+      apache2) mapfile -t found < <(apt_installed_matching apache2 apache2-bin);;
+      nginx) mapfile -t found < <(apt_installed_matching nginx nginx-core nginx-full nginx-light nginx-extras);;
+      cockpit) mapfile -t found < <(apt_installed_matching cockpit cockpit-ws cockpit-system cockpit-bridge);;
+    esac
+  fi
+  if [[ ${#found[@]} -gt 0 ]]; then
+    printf '%s\n' "${found[*]}"
+  else
+    printf '%s\n' "$pkg"
+  fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2237,9 +2284,31 @@ server_teardown() {
 # ─────────────────────────────────────────────────────────────────────────────
 # Vendor apt repositories (cassandra, neo4j), same signed-by pattern as MongoDB
 # ─────────────────────────────────────────────────────────────────────────────
-# Usage: apt_vendor_repo <name> <key-url> <repo-url> <suite> <component>
+# Print the primary-key fingerprints in key file $1, one per line.
+key_fingerprints() {
+  local home rc=0
+  home="$(mktemp -d)"
+  gpg --homedir "$home" --batch --show-keys --with-colons "$1" 2>/dev/null | \
+    awk -F: '$1 == "pub" {want = 1; next} $1 == "fpr" && want {print $10; want = 0}' || rc=$?
+  rm -rf "$home"
+  return "$rc"
+}
+
+# Refuse key file $1 unless every primary key in it is fingerprint $2: a file
+# that adds a second key would make apt or dnf trust that key as well.
+verify_key_fingerprint() {
+  local file="$1" expected="$2" fprs
+  fprs="$(key_fingerprints "$file")"
+  if [[ "$fprs" != "$expected" ]]; then
+    log_error "Signing key fingerprint mismatch: expected ${expected}, got: ${fprs:-no key}. Refusing it."
+    return 1
+  fi
+}
+
+# Usage: apt_vendor_repo <name> <key-url> <repo-url> <suite> <component> [fingerprint]
+# Without a fingerprint the file must still hold a key, and its fingerprints are logged.
 apt_vendor_repo() {
-  local name="$1" key_url="$2" url="$3" suite="$4" component="$5"
+  local name="$1" key_url="$2" url="$3" suite="$4" component="$5" fingerprint="${6:-}"
   local keyring="/usr/share/keyrings/${name}.gpg" tmp_key tmp_home
   command -v gpg >/dev/null 2>&1 || install_pkg apt gnupg || return 1
   tmp_key="$(mktemp)"; tmp_home="$(mktemp -d)"
@@ -2247,6 +2316,18 @@ apt_vendor_repo() {
     log_warn "Failed to download the $name signing key."
     rm -rf "$tmp_key" "$tmp_home"
     return 1
+  fi
+  if [[ -n "$fingerprint" ]]; then
+    verify_key_fingerprint "$tmp_key" "$fingerprint" || { rm -rf "$tmp_key" "$tmp_home"; return 1; }
+  else
+    local fprs
+    fprs="$(key_fingerprints "$tmp_key")"
+    if [[ -z "$fprs" ]]; then
+      log_error "The $name key file holds no OpenPGP key; refusing it."
+      rm -rf "$tmp_key" "$tmp_home"
+      return 1
+    fi
+    log_info "$name signing keys: $(tr '\n' ' ' <<< "$fprs")"
   fi
   # Import then export: a KEYS file holds several armored keys and
   # `gpg --dearmor` would keep only the first.
@@ -2271,6 +2352,9 @@ install_cassandra() {
     log_warn "cassandra: only the Apache apt repository (and brew) is supported; ${mgr} has no official package."
     return 1
   fi
+  # Not pinned: KEYS is the set of release managers' keys and changes when one
+  # joins, and Apache publishes no single repository fingerprint. The file is
+  # checked to hold keys and their fingerprints are logged.
   apt_vendor_repo cassandra https://downloads.apache.org/cassandra/KEYS \
     https://debian.cassandra.apache.org 50x main || return 1
   apt_install_no_autostart cassandra
@@ -2282,6 +2366,9 @@ uninstall_cassandra() {
   apt_vendor_repo_remove cassandra
 }
 
+# Neo4j Admins <admins@neotechnology.com>, key id 59D700E4D37F5F19.
+NEO4J_KEY_FINGERPRINT="1EEFB8767D4924B86EAD08A459D700E4D37F5F19"
+
 install_neo4j() {
   local mgr="$1"
   if [[ "$mgr" != "apt" ]]; then
@@ -2289,7 +2376,7 @@ install_neo4j() {
     return 1
   fi
   apt_vendor_repo neo4j https://debian.neo4j.com/neotechnology.gpg.key \
-    https://debian.neo4j.com stable latest || return 1
+    https://debian.neo4j.com stable latest "$NEO4J_KEY_FINGERPRINT" || return 1
   apt_install_no_autostart neo4j
 }
 
@@ -2600,6 +2687,9 @@ legacy_brew_name() {
 MONGODB_SERIES="${DISTRODECK_MONGODB_SERIES:-8.2}"
 MONGODB_SUPPORTED_SERIES="8.0 8.2"
 MONGODB_KEY_URL="https://pgp.mongodb.com/server-8.0.asc"
+# "MongoDB 8.0 Release Signing Key", key id 41DE058A4E7DCA05.
+MONGODB_KEY_FINGERPRINT="4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05"
+MONGODB_RPM_KEY="/etc/pki/rpm-gpg/RPM-GPG-KEY-mongodb-server-8.0"
 MONGODB_KEYRING="/usr/share/keyrings/mongodb-server.gpg"
 MONGODB_APT_LIST="/etc/apt/sources.list.d/mongodb-org.list"
 MONGODB_YUM_REPO="/etc/yum.repos.d/mongodb-org.repo"
@@ -2672,6 +2762,7 @@ mongodb_repo_setup() {
         rm -f "$tmp_key"
         return 1
       fi
+      verify_key_fingerprint "$tmp_key" "$MONGODB_KEY_FINGERPRINT" || { rm -f "$tmp_key"; return 1; }
       if ! sudo gpg --batch --yes -o "$MONGODB_KEYRING" --dearmor "$tmp_key"; then
         rm -f "$tmp_key"
         return 1
@@ -2684,13 +2775,26 @@ mongodb_repo_setup() {
     dnf)
       local release
       release="$(mongodb_rpm_release)" || return 1
+      # dnf would fetch gpgkey= itself and trust whatever came back; install
+      # the verified key locally and point the repo at it instead.
+      local rpm_key
+      command -v gpg >/dev/null 2>&1 || install_pkg "$mgr" gnupg2 || return 1
+      rpm_key="$(mktemp)"
+      if ! download_file "$MONGODB_KEY_URL" "$rpm_key"; then
+        log_warn "Failed to download the MongoDB signing key."
+        rm -f "$rpm_key"
+        return 1
+      fi
+      verify_key_fingerprint "$rpm_key" "$MONGODB_KEY_FINGERPRINT" || { rm -f "$rpm_key"; return 1; }
+      sudo install -D -m 644 "$rpm_key" "$MONGODB_RPM_KEY" || { rm -f "$rpm_key"; return 1; }
+      rm -f "$rpm_key"
       sudo tee "$MONGODB_YUM_REPO" >/dev/null <<REPO
 [mongodb-org-${MONGODB_SERIES}]
 name=MongoDB Repository
 baseurl=https://repo.mongodb.org/yum/redhat/${release}/mongodb-org/${MONGODB_SERIES}/\$basearch/
 gpgcheck=1
 enabled=1
-gpgkey=${MONGODB_KEY_URL}
+gpgkey=file://${MONGODB_RPM_KEY}
 REPO
       ;;
     *)
@@ -2716,7 +2820,7 @@ mongodb_repo_remove_if_unused() {
         log_info "Keeping the MongoDB repository: another MongoDB package still uses it."
         return 0
       fi
-      sudo rm -f "$MONGODB_YUM_REPO"
+      sudo rm -f "$MONGODB_YUM_REPO" "$MONGODB_RPM_KEY"
       ;;
   esac
 }
@@ -2868,7 +2972,25 @@ uninstall_java() {
     log_warn "Java uninstall not supported for this distro."
     return 1
   fi
-  uninstall_pkg "$mgr" "$pkg" || return 1
+  local remove=("$pkg")
+  if [[ "$mgr" == "apt" ]]; then
+    # openjdk-N-jdk holds only the GUI bits; the JDK is in -headless. The
+    # legacy default-jdk is a metapackage for the release's openjdk-N-jdk.
+    local deps
+    deps="$(dpkg-query -W -f='${Depends}' "$pkg" 2>/dev/null | tr ',|' '\n\n' | awk '{print $1}' | grep -E '^(default-jdk-headless|openjdk-[0-9]+-jdk(-headless)?)$' || true)"
+    mapfile -t remove < <(apt_installed_matching "$pkg" "${pkg}-headless" $deps | sort -u)
+    # Second level: default-jdk -> openjdk-N-jdk -> openjdk-N-jdk-headless.
+    local extra p
+    for p in "${remove[@]}"; do
+      [[ "$p" =~ ^openjdk-[0-9]+-jdk$ ]] && extra+=" ${p}-headless"
+    done
+    if [[ -n "${extra:-}" ]]; then
+      # shellcheck disable=SC2086  # package names, no globs
+      mapfile -t remove < <(apt_installed_matching "${remove[@]}" $extra | sort -u)
+    fi
+    [[ ${#remove[@]} -gt 0 ]] || remove=("$pkg")
+  fi
+  uninstall_pkg "$mgr" "${remove[@]}" || return 1
   rm -f "$JAVA_STATE_FILE"
 }
 
