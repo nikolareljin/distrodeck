@@ -709,22 +709,119 @@ assert_contains "$holder" "postgres" "port_holder names the process from ss"
 nocl="$( (command() { [[ "$2" == claude ]] && return 1; builtin command "$@"; }; install_claude_plugin plugin-code-review) 2>&1; echo "rc=$?")"
 assert_contains "$nocl" "needs the claude CLI" "a plugin without claude says so"
 assert_contains "$nocl" "rc=1" "a plugin without claude fails"
-cl_out="$(
-  claude() { echo "CLAUDE $*"; }
-  install_claude_plugin plugin-code-review 2>&1
-)"
-assert_contains "$cl_out" "CLAUDE plugin marketplace add anthropics/claude-plugins-official" "the official marketplace is added when missing"
-assert_contains "$cl_out" "CLAUDE plugin install code-review@claude-plugins-official" "plugins install from the official marketplace"
+# claude runs under timeout(1), so the stubs are executables on PATH.
+stub_bin="$(mktemp -d)"
+cat > "$stub_bin/claude" <<'STUB'
+#!/usr/bin/env bash
+state="${CLAUDE_STUB_STATE:?}"
+if [[ "$1 $2" == "plugin list" ]]; then cat "$state/plugins" 2>/dev/null; exit 0; fi
+if [[ "$1 $2 $3" == "plugin marketplace list" ]]; then exit 0; fi
+echo "CLAUDE $*"
+IFS= read -r -t 1 answer && echo "READ-STDIN $answer"
+if [[ "$2" == install ]]; then
+  [[ -n "${CLAUDE_STUB_HANG:-}" ]] && exec sleep 30
+  echo "$3" >> "$state/plugins"
+fi
+exit 0
+STUB
+chmod +x "$stub_bin/claude"
+claude_state="$(mktemp -d)"
+# A "y" waits on stdin: an install that could read it could answer a prompt.
+cl_out="$(PATH="$stub_bin:$PATH" CLAUDE_STUB_STATE="$claude_state" install_claude_plugin plugin-code-review 2>&1 <<< "y")"
+assert_contains "$cl_out" "CLAUDE plugin marketplace add anthropics/claude-plugins-official --scope user" "the official marketplace is added when missing"
+assert_contains "$cl_out" "CLAUDE plugin install code-review@claude-plugins-official --scope user" "plugins install from the official marketplace, user scope"
+assert_not_contains "$cl_out" "READ-STDIN" "claude plugin commands never read stdin"
 [[ "$CLAUDE_MARKETPLACE_REPO" == "anthropics/claude-plugins-official" && "$(grep -c 'marketplace add' "$INSTALLER")" -eq 1 ]] && pass "only the official marketplace is ever added" || fail "only the official marketplace is ever added"
+hang_start=$SECONDS
+hang_out="$(PATH="$stub_bin:$PATH" CLAUDE_STUB_STATE="$claude_state" CLAUDE_STUB_HANG=1 CLAUDE_PLUGIN_TIMEOUT=2 install_claude_plugin plugin-hookify 2>&1; echo "rc=$?")"
+assert_contains "$hang_out" "gave no answer in 2s" "a hung plugin install is stopped by the timeout"
+assert_not_contains "$hang_out" "rc=0" "a hung plugin install fails"
+(( SECONDS - hang_start < 20 )) && pass "the timeout ends the hang quickly" || fail "the timeout ends the hang quickly"
 
-verify_out="$(bash -c '
+verify_out="$(PATH="$stub_bin:$PATH" CLAUDE_STUB_STATE="$(mktemp -d)" bash -c '
   source "$1"
   detect_pkg_mgr() { echo apt; }
   STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
-  claude() { if [[ "$1 $2" == "plugin list" ]]; then cat "$STATE_DIR/plugins" 2>/dev/null; return 0; fi; echo "CLAUDE $*"; [[ "$2" == install ]] && echo "$3" >> "$STATE_DIR/plugins"; return 0; }
   main --tools plugin-hookify </dev/null
 ' _ "$INSTALLER" 2>&1)"
 assert_contains "$verify_out" "Successfully installed: plugin-hookify" "a plugin installed this run is detected (cache refreshed)"
+
+# ── Servers: no service start before the loopback bind (apt) ─────────────────
+policy_tmp="$(mktemp -d)"
+policy_out="$(
+  POLICY_RC_D="$policy_tmp/policy-rc.d"
+  sudo() { "$@"; }
+  install_pkg() { if [[ -x "$POLICY_RC_D" ]] && "$POLICY_RC_D" nginx start; then echo "POLICY-ALLOWS"; else echo "POLICY-DENIES rc=$?"; fi; echo "INSTALL $*"; return "${INSTALL_RC:-0}"; }
+  apt_install_no_autostart nginx
+  echo "after-ok exists=$([[ -e "$POLICY_RC_D" ]] && echo yes || echo no)"
+  INSTALL_RC=100 apt_install_no_autostart nginx; echo "fail-rc=$?"
+  echo "after-fail exists=$([[ -e "$POLICY_RC_D" ]] && echo yes || echo no)"
+)"
+assert_contains "$policy_out" "POLICY-DENIES rc=101" "apt server installs run under a policy-rc.d that answers 101"
+assert_contains "$policy_out" "after-ok exists=no" "policy-rc.d is removed after a good install"
+assert_contains "$policy_out" "fail-rc=100" "a failed install keeps its exit code"
+assert_contains "$policy_out" "after-fail exists=no" "policy-rc.d is removed after a failed install"
+printf '#!/bin/sh\nexit 0\n' > "$policy_tmp/policy-rc.d"
+foreign_out="$(POLICY_RC_D="$policy_tmp/policy-rc.d"; sudo() { "$@"; }; install_pkg() { echo "INSTALL $*"; }; apt_install_no_autostart nginx 2>&1; cat "$POLICY_RC_D")"
+assert_contains "$foreign_out" "not distrodeck's" "a foreign policy-rc.d is left in charge"
+assert_contains "$foreign_out" "exit 0" "a foreign policy-rc.d is not overwritten"
+order_out="$(
+  sudo() { "$@"; }
+  apt-cache() { printf 'Candidate: 1.0\n'; }
+  apt_install_no_autostart() { echo "NOSTART $*"; }
+  install_pkg() { echo "PLAIN $*"; }
+  server_setup() { echo "SETUP $*"; }
+  install_package_tool nginx apt; install_package_tool btop apt; install_package_tool redis apt
+)"
+assert_contains "$order_out" "NOSTART nginx" "nginx installs with service start held"
+assert_contains "$order_out" "NOSTART redis-server" "redis installs with service start held"
+assert_contains "$order_out" "PLAIN apt btop" "a non-server package installs normally"
+for t in cassandra neo4j; do
+  grep -A12 "^install_${t}()" "$INSTALLER" | grep -q "apt_install_no_autostart $t" && pass "$t installs with service start held" || fail "$t installs with service start held"
+done
+
+# ── Debian release names ─────────────────────────────────────────────────────
+debian_cache() { case "$2" in mysql-server|valkey-server) printf 'Candidate: (none)\n';; *) printf 'Candidate: 1:11.8\n';; esac; }
+deb_mysql="$( apt-cache() { debian_cache "$@"; }; package_tool_pkg mysql apt 2>&1 )"
+assert_contains "$deb_mysql" "default-mysql-server" "mysql on Debian installs default-mysql-server"
+assert_contains "$deb_mysql" "MariaDB" "mysql on Debian says it is MariaDB"
+assert_contains "$( apt-cache() { debian_cache "$@"; }; server_unit mysql apt )" "mariadb" "mysql on Debian runs the mariadb unit"
+deb_valkey="$( apt-cache() { debian_cache "$@"; }; package_tool_pkg valkey apt 2>&1; echo "pkg=[$(package_tool_pkg valkey apt 2>/dev/null)]" )"
+assert_contains "$deb_valkey" "bookworm-backports" "valkey on bookworm points at backports"
+assert_contains "$deb_valkey" "pkg=[]" "valkey on bookworm installs nothing"
+ub_mysql="$( apt-cache() { printf 'Candidate: 8.0\n'; }; package_tool_pkg mysql apt 2>/dev/null; server_unit mysql apt )"
+assert_contains "$ub_mysql" "mysql-server" "mysql on Ubuntu stays mysql-server"
+assert_not_contains "$ub_mysql" "mariadb" "mysql on Ubuntu keeps the mysql unit"
+
+# ── MinIO, Qdrant on macOS ───────────────────────────────────────────────────
+minio_out="$( brew() { echo "BREW $*"; }; server_setup minio brew 2>&1 )"
+assert_not_contains "$minio_out" "BREW services" "minio is never started by brew services (it binds :9000)"
+assert_contains "$minio_out" "--address 127.0.0.1:9000" "minio prints a loopback run command"
+[[ -z "$(spec_field qdrant brew)" ]] && pass "qdrant has no Homebrew formula" || fail "qdrant has no Homebrew formula"
+
+# ── Milvus matches standalone_embed.sh ───────────────────────────────────────
+milvus_state="$(mktemp -d)"
+milvus_args="$(STATE_DIR="$milvus_state" container_args milvus | tr '\n' ' ')"
+for want in "seccomp:unconfined" "ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml" "DEPLOY_MODE=STANDALONE" "$milvus_state/milvus/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml" "milvus run standalone"; do
+  assert_contains "$milvus_args" "$want" "milvus run has $want"
+done
+grep -q "quota-backend-bytes: 4294967296" "$milvus_state/milvus/embedEtcd.yaml" && pass "milvus embedEtcd.yaml is written" || fail "milvus embedEtcd.yaml is written"
+
+# ── Port check without ss ────────────────────────────────────────────────────
+ns_holder="$(
+  command() { [[ "$2" == ss ]] && return 1; builtin command "$@"; }
+  lsof() { :; }
+  netstat() { printf 'Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)\ntcp46      0      0  *.6333                 *.*                    LISTEN\n'; }
+  port_holder 6333; echo "rc=$?"; port_holder 6334; echo "rc=$?"
+)"
+assert_contains "$ns_holder" "another user's process" "port_holder sees another user's listener through netstat"
+assert_contains "$ns_holder" "rc=1" "port_holder reports a free port as free"
+
+# ── Detection and MongoDB releases ───────────────────────────────────────────
+pgv="$( detect_pkg_mgr() { echo apt; }; pg_major() { echo 17; }; native_pkg_installed() { echo "ASKED $2"; return 1; }; command() { [[ "$2" == pipx || "$2" == flatpak ]] && return 1; builtin command "$@"; }; package_tool_installed pgvector )"
+assert_contains "$pgv" "ASKED postgresql-17-pgvector" "pgvector detection asks for the real package name"
+trixie_os="$(mktemp)"; printf 'ID=debian\nVERSION_CODENAME=trixie\n' > "$trixie_os"
+assert_contains "$(OS_RELEASE_FILE="$trixie_os" mongodb_apt_target 2>&1)" "debian trixie main" "MongoDB apt target for Debian trixie"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

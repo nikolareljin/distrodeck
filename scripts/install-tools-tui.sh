@@ -1720,7 +1720,7 @@ package_tool_spec() {
     couchdb) echo "pkg - - couchdb - couchdb - - -";;
     neo4j) echo "repo neo4j - - - neo4j - - neo4j";;
     # ── Vector ──
-    qdrant) echo "container - - - - qdrant - - -";;
+    qdrant) echo "container - - - - - - - -";;
     chroma) echo "pipx - - - - chroma - chromadb chroma";;
     milvus) echo "container - - - - - - - -";;
     weaviate) echo "container - - - - - - - -";;
@@ -1809,6 +1809,42 @@ package_tool_pkg() {
     fi
     pkg="${pkg//@PG@/$major}"
   fi
+  if [[ "$2" == "apt" ]]; then
+    pkg="$(apt_release_pkg "$1" "$pkg")" || return 0
+  fi
+  printf '%s\n' "$pkg"
+}
+
+# Return 0 when apt has an install candidate for package $1.
+apt_has_candidate() {
+  local candidate
+  candidate="$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  [[ -n "$candidate" && "$candidate" != "(none)" ]]
+}
+
+# Debian (bookworm, trixie) ships no mysql-server; default-mysql-server is MariaDB.
+apt_mysql_is_mariadb() {
+  ! apt_has_candidate mysql-server && apt_has_candidate default-mysql-server
+}
+
+# Print the apt package for tool $1 on this release (default $2), or fail with
+# a message when the release does not ship it.
+apt_release_pkg() {
+  local tool="$1" pkg="$2"
+  case "$tool" in
+    mysql)
+      if apt_mysql_is_mariadb; then
+        log_warn "This release ships no mysql-server; installing default-mysql-server, which is MariaDB, not Oracle MySQL. For MySQL itself use the MySQL APT repository: https://dev.mysql.com/downloads/repo/apt/"
+        pkg="default-mysql-server"
+      fi
+      ;;
+    valkey)
+      if ! apt_has_candidate "$pkg"; then
+        log_warn "This release ships no $pkg. On Debian bookworm it is in bookworm-backports: enable it, then run: sudo apt install -t bookworm-backports $pkg"
+        return 1
+      fi
+      ;;
+  esac
   printf '%s\n' "$pkg"
 }
 
@@ -1883,7 +1919,7 @@ package_tool_installed() {
     command -v "$bin" >/dev/null 2>&1 && return 0
   done
   mgr="$(detect_pkg_mgr)"
-  native_pkg_installed "$mgr" "$(spec_field "$tool" "$mgr")" && return 0
+  native_pkg_installed "$mgr" "$(package_tool_pkg "$tool" "$mgr" 2>/dev/null)" && return 0
   extra="$(spec_field "$tool" extra)"
   if [[ -n "$extra" && "$kind" != "container" ]] && pipx_has "$extra"; then
     return 0
@@ -1953,7 +1989,11 @@ install_package_tool() {
   esac
   pkg="$(package_tool_pkg "$tool" "$mgr")"
   if [[ -n "$pkg" ]]; then
-    install_pkg "$mgr" "$pkg" || return 1
+    if [[ "$mgr" == "apt" && -n "$(server_unit "$tool" "$mgr")" ]]; then
+      apt_install_no_autostart "$pkg" || return 1
+    else
+      install_pkg "$mgr" "$pkg" || return 1
+    fi
     server_setup "$tool" "$mgr"
     return
   fi
@@ -2027,7 +2067,7 @@ server_unit() {
   case "$tool:$mgr" in
     postgresql:brew) echo "postgresql@18";;
     postgresql:*) echo "postgresql";;
-    mysql:apt) echo "mysql";;
+    mysql:apt) if apt_mysql_is_mariadb; then echo "mariadb"; else echo "mysql"; fi;;
     mysql:*) echo "mysqld";;
     mariadb:*) echo "mariadb";;
     redis:apt) echo "redis-server";;
@@ -2037,8 +2077,6 @@ server_unit() {
     couchdb:*) echo "couchdb";;
     neo4j:*) echo "neo4j";;
     cassandra:*) echo "cassandra";;
-    minio:brew) echo "minio";;
-    qdrant:brew) echo "qdrant";;
     nginx:*) echo "nginx";;
     apache2:apt|apache2:zypper) echo "apache2";;
     apache2:*) echo "httpd";;
@@ -2048,6 +2086,36 @@ server_unit() {
     cockpit:*) echo "cockpit.socket";;
     *) ;;
   esac
+}
+
+# A Debian/Ubuntu postinst starts its service at once: nginx, apache2 and
+# caddy on 0.0.0.0:80 and cockpit.socket on *:9090, before server_setup can
+# rewrite the bind. A policy-rc.d that answers 101 makes invoke-rc.d and
+# deb-systemd-invoke skip that start; server_setup then binds 127.0.0.1 and
+# starts it. Every apt server goes through here, although these already ship
+# loopback-only defaults: mysql-server mysqld.cnf and mariadb 50-server.cnf
+# "bind-address = 127.0.0.1", redis/valkey "bind 127.0.0.1 -::1", postgresql
+# listen_addresses 'localhost', cassandra listen_address/rpc_address
+# localhost, neo4j server.default_listen_address 127.0.0.1.
+POLICY_RC_D="${POLICY_RC_D:-/usr/sbin/policy-rc.d}"
+POLICY_RC_D_MARK="# distrodeck: hold service starts during install"
+
+apt_install_no_autostart() {
+  if [[ -e "$POLICY_RC_D" ]] && ! grep -qF "$POLICY_RC_D_MARK" "$POLICY_RC_D" 2>/dev/null; then
+    # Someone else's policy (a container image, a build host): it decides.
+    log_warn "$POLICY_RC_D exists and is not distrodeck's; leaving it in charge of service starts."
+    install_pkg apt "$@"
+    return
+  fi
+  # Subshell: its EXIT trap removes the file on success, failure and Ctrl-C,
+  # without replacing the caller's traps.
+  (
+    trap 'sudo rm -f "$POLICY_RC_D"' EXIT
+    trap 'exit 130' INT TERM
+    printf '#!/bin/sh\n%s\nexit 101\n' "$POLICY_RC_D_MARK" | sudo tee "$POLICY_RC_D" >/dev/null || exit 1
+    sudo chmod 755 "$POLICY_RC_D" || exit 1
+    install_pkg apt "$@"
+  )
 }
 
 # Rewrite listen directives so a server never binds 0.0.0.0. Each step is a
@@ -2076,7 +2144,9 @@ server_bind_localhost() {
       for file in "$root"/etc/caddy/Caddyfile "$(brew_prefix_safe)/etc/Caddyfile"; do
         [[ -f "$file" ]] || continue
         grep -q 'bind 127.0.0.1' "$file" && continue
-        sudo_if_needed "$file" sed -i.distrodeck -E 's/^(:[0-9]+[[:space:]]*\{)[[:space:]]*$/\1\n\tbind 127.0.0.1/' "$file"
+        # A backslash-newline, not "\n": BSD sed (Homebrew caddy) writes a literal n.
+        sudo_if_needed "$file" sed -i.distrodeck -E 's/^(:[0-9]+[[:space:]]*\{)[[:space:]]*$/\1\
+	bind 127.0.0.1/' "$file"
       done
       ;;
     mysql|mariadb)
@@ -2125,6 +2195,14 @@ postgresql_init() {
 
 server_setup() {
   local tool="$1" mgr="$2" unit
+  if [[ "$tool:$mgr" == minio:brew ]]; then
+    # The formula's service runs `--address=:9000`, every interface, so it is
+    # not started for you. MinIO archived the open-source server; the formula
+    # is deprecated and Homebrew disables it on 2027-02-17.
+    log_warn "MinIO's open-source server is archived upstream and the minio formula is deprecated; seaweedfs is the maintained S3 option."
+    log_info "Run MinIO on loopback only: minio server --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 \"\$(brew --prefix)/var/minio\""
+    return 0
+  fi
   unit="$(server_unit "$tool" "$mgr")"
   [[ -n "$unit" ]] || return 0
   [[ "$tool" == postgresql ]] && { postgresql_init "$mgr" || return 1; }
@@ -2195,7 +2273,7 @@ install_cassandra() {
   fi
   apt_vendor_repo cassandra https://downloads.apache.org/cassandra/KEYS \
     https://debian.cassandra.apache.org 50x main || return 1
-  install_pkg apt cassandra
+  apt_install_no_autostart cassandra
 }
 
 uninstall_cassandra() {
@@ -2212,7 +2290,7 @@ install_neo4j() {
   fi
   apt_vendor_repo neo4j https://debian.neo4j.com/neotechnology.gpg.key \
     https://debian.neo4j.com stable latest || return 1
-  install_pkg apt neo4j
+  apt_install_no_autostart neo4j
 }
 
 uninstall_neo4j() {
@@ -2258,13 +2336,40 @@ container_args() {
   case "$1" in
     # The password goes in through a 600 env file, never on the command line.
     oracle-free) printf '%s\n' --env-file "$(container_env_file oracle-free ORACLE_PASSWORD)";;
-    milvus) printf '%s\n' -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
-      -e COMMON_STORAGETYPE=local -- milvus run standalone;;
+    # As milvus scripts/standalone_embed.sh at the pinned tag (v2.6.25) runs
+    # it: same env, config mounts and seccomp:unconfined. The embedded etcd
+    # listens on 2379 inside the container only; that port is not published.
+    milvus)
+      local conf
+      conf="$(milvus_config_dir)" || return 1
+      printf '%s\n' --security-opt seccomp:unconfined \
+        -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
+        -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml \
+        -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE \
+        -v "$conf/embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro,Z" \
+        -v "$conf/user.yaml:/milvus/configs/user.yaml:ro,Z" \
+        -- milvus run standalone
+      ;;
     weaviate) printf '%s\n' -e PERSISTENCE_DATA_PATH=/var/lib/weaviate \
       -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true -e DEFAULT_VECTORIZER_MODULE=none \
       -e CLUSTER_HOSTNAME=node1;;
     seaweedfs) printf '%s\n' -- server -s3 -dir=/data;;
   esac
+}
+
+# Write the embedded-etcd and user configs standalone_embed.sh mounts; print the dir.
+milvus_config_dir() {
+  local dir="$STATE_DIR/milvus"
+  mkdir -p "$dir" || return 1
+  cat > "$dir/embedEtcd.yaml" <<'YAML'
+listen-client-urls: http://0.0.0.0:2379
+advertise-client-urls: http://0.0.0.0:2379
+quota-backend-bytes: 4294967296
+auto-compaction-mode: revision
+auto-compaction-retention: '1000'
+YAML
+  [[ -f "$dir/user.yaml" ]] || echo "# Extra config to override default milvus.yaml" > "$dir/user.yaml"
+  printf '%s\n' "$dir"
 }
 
 # A random password kept in the state dir (mode 600), created once.
@@ -2290,6 +2395,8 @@ container_cli() {
   if command -v docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then echo docker; return 0; fi
     if sudo -n docker info >/dev/null 2>&1; then echo "sudo docker"; return 0; fi
+    # A docker CLI whose daemon is unreachable: podman works without one.
+    if command -v podman >/dev/null 2>&1; then echo podman; return 0; fi
     echo "sudo docker"; return 0
   fi
   if command -v podman >/dev/null 2>&1; then echo podman; return 0; fi
@@ -2302,12 +2409,24 @@ port_holder() {
   if command -v ss >/dev/null 2>&1; then
     line="$(ss -ltnpH "sport = :$port" 2>/dev/null | head -n 1)"
     [[ -n "$line" ]] || return 1
-  elif command -v lsof >/dev/null 2>&1; then
-    line="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n 2p)"
-    [[ -n "$line" ]] || return 1
-    awk '{print $1}' <<< "$line"
-    return 0
   else
+    # Unprivileged lsof lists only this user's sockets, so a root or other
+    # user's listener needs netstat (every socket, tcp4/tcp6/tcp46, no names).
+    if command -v lsof >/dev/null 2>&1; then
+      line="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n 2p)"
+      if [[ -n "$line" ]]; then
+        awk '{print $1}' <<< "$line"
+        return 0
+      fi
+    fi
+    if command -v netstat >/dev/null 2>&1 && \
+       netstat -an 2>/dev/null | awk -v p="$port" '
+         toupper($0) ~ /LISTEN/ && $1 ~ /^tcp/ {
+           n = split($4, a, /[.:]/); if (a[n] == p) found = 1
+         } END { exit !found }'; then
+      printf '%s\n' "another user's process (run as root to see it)"
+      return 0
+    fi
     return 1
   fi
   if [[ "$line" =~ users:\(\(\"([^\"]+)\" ]]; then
@@ -2350,6 +2469,9 @@ install_container_tool() {
     fi
     publish+=(-p "127.0.0.1:${port}:${port}")
   done
+  if [[ "$tool" == milvus ]]; then
+    milvus_config_dir >/dev/null || { log_error "Could not write the Milvus config in $STATE_DIR/milvus."; return 1; }
+  fi
   local extra=() run_cmd=() arg seen_cmd=false
   while IFS= read -r arg; do
     [[ -z "$arg" ]] && continue
@@ -2370,6 +2492,9 @@ uninstall_container_tool() {
   $cli rm -f "distrodeck-$tool" >/dev/null || return 1
   if [[ "${DISTRODECK_PURGE:-}" == "1" ]]; then
     $cli volume rm "distrodeck-$tool" >/dev/null && log_info "Removed volume distrodeck-$tool."
+    # The data is gone, so its generated password and configs go too.
+    rm -f -- "$STATE_DIR/$tool.password" "$STATE_DIR/$tool.env"
+    if [[ "$tool" == milvus ]]; then rm -rf -- "$STATE_DIR/milvus"; fi
   else
     log_info "Kept volume distrodeck-$tool with the data; --purge removes it."
   fi
@@ -2402,15 +2527,36 @@ install_claude_plugin() {
     log_warn "$tool is a Claude Code plugin and needs the claude CLI. Install the claude-code tool (AI tools) first."
     return 1
   fi
-  if ! claude plugin marketplace list 2>/dev/null | grep -q "$CLAUDE_MARKETPLACE"; then
-    claude plugin marketplace add "$CLAUDE_MARKETPLACE_REPO" || return 1
+  if ! claude plugin marketplace list 2>/dev/null | grep -qF "$CLAUDE_MARKETPLACE"; then
+    claude_bounded plugin marketplace add "$CLAUDE_MARKETPLACE_REPO" --scope user || return 1
   fi
-  claude plugin install "$(claude_plugin_id "$tool")"
+  claude_bounded plugin install "$(claude_plugin_id "$tool")" --scope user
 }
 
 uninstall_claude_plugin() {
   command -v claude >/dev/null 2>&1 || { log_warn "claude CLI not found."; return 1; }
-  claude plugin uninstall "$(claude_plugin_id "$1")"
+  claude_bounded plugin uninstall "$(claude_plugin_id "$1")" --scope user
+}
+
+# Run `claude "$@"` with no stdin and a time limit, so a prompt can never hold
+# up a --tools or --all run. Without a TTY `plugin install` refuses (rather
+# than asks) when a plugin needs a confirmed command; -y is deliberately not
+# passed, so such a plugin fails and must be installed by hand.
+CLAUDE_PLUGIN_TIMEOUT="${DISTRODECK_PLUGIN_TIMEOUT:-300}"
+claude_bounded() {
+  local rc=0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
+  else
+    # macOS without coreutils: the alarm survives exec and SIGALRM ends claude.
+    perl -e 'alarm shift; exec @ARGV or die "exec: $!\n"' "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
+  fi
+  if [[ "$rc" -eq 124 || "$rc" -eq 142 ]]; then
+    log_error "claude $* gave no answer in ${CLAUDE_PLUGIN_TIMEOUT}s; stopped it."
+  fi
+  return "$rc"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2478,9 +2624,9 @@ mongodb_apt_target() {
   [[ -n "$codename" ]] || codename="$(os_release_value VERSION_CODENAME)"
   case "$codename" in
     jammy|noble) echo "ubuntu $codename multiverse";;
-    bookworm) echo "debian $codename main";;
+    bookworm|trixie) echo "debian $codename main";;
     *)
-      log_warn "MongoDB publishes apt packages for Ubuntu jammy/noble and Debian bookworm; this system is ${id:-unknown} ${codename:-unknown}."
+      log_warn "MongoDB publishes apt packages for Ubuntu jammy/noble and Debian bookworm/trixie; this system is ${id:-unknown} ${codename:-unknown}."
       return 1
       ;;
   esac
@@ -3194,7 +3340,7 @@ tool_desc() {
     milvus) echo "[Vector] Milvus standalone (container)";;
     weaviate) echo "[Vector] Weaviate (container)";;
     # ── Object storage ──
-    minio) echo "[Storage] MinIO server (Homebrew)";;
+    minio) echo "[Storage] MinIO server (Homebrew; archived upstream)";;
     minio-client) echo "[Storage] MinIO client mcli (brew: conflicts with mc)";;
     seaweedfs) echo "[Storage] SeaweedFS S3 server (container)";;
     rclone) echo "[Storage] rclone - cloud storage sync";;
@@ -3485,7 +3631,6 @@ is_opt_in_tool() {
   return 1
 }
 
-# Print the default --all selection: the whole catalog minus opt-in tools.
 # Print the default --all selection: the whole catalog minus opt-in tools,
 # and on manager $1 (when given) minus tools that manager cannot install.
 default_all_selection() {
@@ -4300,11 +4445,13 @@ main() {
   else
     # Derived from the catalog so a new tool is never silently missing here.
     selected="$(default_all_selection "$mgr")"
-    opt_in_tools="${OPT_IN_TOOLS[*]}"
     include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
     if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
       unset DISTRODECK_NONINTERACTIVE
-      selected+=" ${opt_in_tools}"
+      # Same filter as the default set: no Linux-only tools on macOS.
+      for tool in "${OPT_IN_TOOLS[@]}"; do
+        if tool_supported_on "$tool" "$mgr"; then selected+=" $tool"; fi
+      done
     else
       export DISTRODECK_NONINTERACTIVE=true
       if [[ "$include_opt_in_tools" == "true" ]]; then
