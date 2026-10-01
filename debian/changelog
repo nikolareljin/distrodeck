@@ -1,3 +1,10 @@
+distrodeck (0.11.0) unstable; urgency=medium
+
+  * Install tools by category; databases, admin, web, programming and Claude
+    plugin tools; Ollama model groups; macOS via Homebrew.
+
+ -- Nikola Reljin <nikola.reljin@gmail.com>  Thu, 01 Oct 2026 00:00:00 +0000
+
 distrodeck (0.10.3) unstable; urgency=medium
 
   * Fix Debian artifact staging and RPM CI build paths.

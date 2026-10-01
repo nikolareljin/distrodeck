@@ -4,6 +4,8 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## 2026-10-01 — 0.11.0
+
 
 ### Added
 - **Catalog expansion.** New categories: Relational (postgresql, pgvector,
