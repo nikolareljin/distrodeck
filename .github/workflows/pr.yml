@@ -42,6 +42,7 @@ jobs:
           awk -F'\t' 'NF != 6 { bad = 1 } END { exit bad }' catalog.tsv
           wc -l catalog.tsv
       - name: Installer argument tests
+        timeout-minutes: 5
         run: bash tests/test_install_tools_args.sh
       - name: Real install through brew
         run: |

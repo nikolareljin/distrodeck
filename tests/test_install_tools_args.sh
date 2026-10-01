@@ -609,7 +609,8 @@ assert_contains "$reexec_out" "/bin/bash" "bash 3.2 on macOS re-execs under Home
 assert_contains "$reexec_out" "--tools jq" "the re-exec keeps the arguments"
 noreexec_rc="$( ( uname() { echo Darwin; }; command() { [[ "$2" == brew ]] && return 1; builtin command "$@"; }; ensure_modern_bash 3 2 ) >/dev/null 2>&1; echo $? )"
 [[ "$noreexec_rc" == "2" ]] && pass "bash 3.2 without Homebrew bash exits 2" || fail "bash 3.2 without Homebrew bash exits 2" "rc=$noreexec_rc"
-( ensure_modern_bash 4 3 ) >/dev/null 2>&1 && fail "bash 4.3 is refused (empty arrays under set -u)" || pass "bash 4.3 is refused (empty arrays under set -u)"
+# uname is stubbed: on a Mac runner the real one would re-exec this test file.
+( uname() { echo Linux; }; ensure_modern_bash 4 3 ) >/dev/null 2>&1 && fail "bash 4.3 is refused (empty arrays under set -u)" || pass "bash 4.3 is refused (empty arrays under set -u)"
 ( ensure_modern_bash 5 2 ) && pass "bash 5 needs no re-exec" || fail "bash 5 needs no re-exec"
 
 # pgvector follows the installed PostgreSQL major.
@@ -712,6 +713,15 @@ cl_out="$(
 assert_contains "$cl_out" "CLAUDE plugin marketplace add anthropics/claude-plugins-official" "the official marketplace is added when missing"
 assert_contains "$cl_out" "CLAUDE plugin install code-review@claude-plugins-official" "plugins install from the official marketplace"
 [[ "$CLAUDE_MARKETPLACE_REPO" == "anthropics/claude-plugins-official" && "$(grep -c 'marketplace add' "$INSTALLER")" -eq 1 ]] && pass "only the official marketplace is ever added" || fail "only the official marketplace is ever added"
+
+verify_out="$(bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  claude() { if [[ "$1 $2" == "plugin list" ]]; then cat "$STATE_DIR/plugins" 2>/dev/null; return 0; fi; echo "CLAUDE $*"; [[ "$2" == install ]] && echo "$3" >> "$STATE_DIR/plugins"; return 0; }
+  main --tools plugin-hookify </dev/null
+' _ "$INSTALLER" 2>&1)"
+assert_contains "$verify_out" "Successfully installed: plugin-hookify" "a plugin installed this run is detected (cache refreshed)"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

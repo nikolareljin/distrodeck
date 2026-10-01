@@ -3891,7 +3891,9 @@ process_selection() {
     log_info "Installing: $choice"
     # Run installation in subshell to catch errors without exiting
     if ( install_tool "$choice" "$mgr" ); then
-      # Installation command succeeded, verify tool is now installed
+      # Installation command succeeded, verify tool is now installed. The
+      # install ran in a subshell, so drop the per-run detection caches first.
+      CLAUDE_PLUGIN_LIST_CACHE=""; PIPX_LIST_CACHE=""; CONTAINER_CLI_CACHE=""
       if is_installed_tool "$choice"; then
         add_tracked_tool "$choice"
         successful_installs+=("$choice")
