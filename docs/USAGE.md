@@ -147,6 +147,13 @@ Package-managed installs use their native updater and require sudo except Homebr
 Update and upgrade installed packages across apt/nala, snap, and flatpak.
 Old kernel cleanup is opt-in and keeps the running kernel plus one previous kernel by default.
 
+After the package managers, `update` refreshes install-tools catalog entries
+that no package manager owns: the `git-lantern` and `ai-runner` checkouts
+(`git pull --ff-only`), the npm CLIs `codex`, `copilot` and `gemini` (reinstalled
+at `@latest`), and `claude-code` (`claude update`). A tool is refreshed when it
+is present on the system, whether or not the install-tools state file lists it.
+One failing refresh does not stop the others; any failure makes `update` exit 1.
+
 ```
 distrodeck update
 distrodeck update --cleanup-kernels

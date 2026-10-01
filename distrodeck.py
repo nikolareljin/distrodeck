@@ -3973,6 +3973,83 @@ def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def tools_state_dir() -> Path:
+    """Where install-tools keeps managed checkouts (matches STATE_DIR there)."""
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "distrodeck" / "tools"
+
+
+def _npm_global_installed(package: str) -> bool:
+    if not cmd_exists("npm"):
+        return False
+    probe = run(["npm", "ls", "-g", "--depth=0", package], check=False, capture_output=True)
+    return probe.returncode == 0
+
+
+def _checkout_adapter(name: str):
+    def detect() -> bool:
+        return (tools_state_dir() / name / ".git").is_dir()
+
+    def command() -> List[str]:
+        return ["git", "-C", str(tools_state_dir() / name), "pull", "--ff-only"]
+
+    return detect, command
+
+
+def _npm_adapter(package: str):
+    return (
+        lambda: _npm_global_installed(package),
+        lambda: ["sudo", "npm", "install", "-g", f"{package}@latest"],
+    )
+
+
+# One updater per install-tools catalog entry that the system package manager
+# does not already upgrade. Every other catalog tool comes from apt/dnf/pacman/
+# zypper, snap or Flatpak, and the steps above refresh it. Keys must be catalog
+# names (tests/test_update_tools.py checks them against --list-tools).
+TOOL_UPDATERS = {
+    "git-lantern": _checkout_adapter("git-lantern"),
+    "ai-runner": _checkout_adapter("ai-runner"),
+    "codex": _npm_adapter("@openai/codex"),
+    "copilot": _npm_adapter("@github/copilot"),
+    "gemini": _npm_adapter("@google/gemini-cli"),
+    "claude-code": (lambda: cmd_exists("claude"), lambda: ["claude", "update"]),
+}
+
+
+def refresh_catalog_tools() -> bool:
+    """Refresh every detected catalog tool with its own updater.
+
+    Detection looks at the system, not the install-tools state file, so a tool
+    installed before distrodeck tracked it is refreshed too. One failure does
+    not stop the rest; the result is reported once at the end.
+    """
+    refreshed: List[str] = []
+    failed: List[str] = []
+    for name, (detect, command) in TOOL_UPDATERS.items():
+        try:
+            present = detect()
+        except OSError:
+            present = False
+        if not present:
+            continue
+        log(f"Refreshing {name}")
+        try:
+            ok = run(command(), check=False).returncode == 0
+        except OSError as exc:
+            warn(f"{name}: {exc}")
+            ok = False
+        (refreshed if ok else failed).append(name)
+    if not refreshed and not failed:
+        log("No installed catalog tools need a separate refresh.")
+        return True
+    if refreshed:
+        log(f"Refreshed tools: {', '.join(refreshed)}")
+    if failed:
+        warn(f"Tool refresh failed: {', '.join(failed)}")
+    return not failed
+
+
 def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     log_action_start("update")
     had_errors = False
@@ -4021,8 +4098,13 @@ def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     if cmd_exists("flatpak"):
         if run(["flatpak", "update", "-y"], check=False).returncode != 0:
             had_errors = True
+    # After the package managers, so a tool that also has a native package is
+    # already current; independent of their result, since a broken PPA says
+    # nothing about a git checkout.
+    tools_ok = refresh_catalog_tools()
     if cleanup_kernels and not had_errors:
         maybe_cleanup_kernels(keep_kernels)
+    had_errors = had_errors or not tools_ok
     log_action_end("update", "errors" if had_errors else "ok")
     return not had_errors
 
@@ -7551,7 +7633,7 @@ def main() -> None:
     global VERBOSE
     VERBOSE = args.verbose
     result = args.func(args)
-    if getattr(args, "command", None) in {"self-update", "self-upgrade"} and result is False:
+    if getattr(args, "command", None) in {"self-update", "self-upgrade", "update"} and result is False:
         raise SystemExit(1)
 
 

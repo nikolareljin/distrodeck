@@ -6,6 +6,11 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- **`update` refreshes install-tools catalog entries no package manager owns**
+  (git-lantern and ai-runner checkouts, codex/copilot/gemini via npm,
+  claude-code). Detected on the system, not from the state file; one failure
+  does not stop the rest. `distrodeck update` now exits 1 when anything failed;
+  it used to exit 0.
 - **`install-tools --java-version 17|21|25`** (or `DISTRODECK_JAVA_VERSION`).
   The `java` tool now installs OpenJDK 21 by default on every package manager;
   it was `default-jdk` on apt and 17 on dnf and zypper.
