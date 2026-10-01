@@ -2786,7 +2786,8 @@ mongodb_repo_setup() {
         return 1
       fi
       verify_key_fingerprint "$rpm_key" "$MONGODB_KEY_FINGERPRINT" || { rm -f "$rpm_key"; return 1; }
-      sudo install -D -m 644 "$rpm_key" "$MONGODB_RPM_KEY" || { rm -f "$rpm_key"; return 1; }
+      # mkdir + install, not install -D: BSD install (macOS test runs) has no -D.
+      { sudo mkdir -p "$(dirname "$MONGODB_RPM_KEY")" && sudo install -m 644 "$rpm_key" "$MONGODB_RPM_KEY"; } || { rm -f "$rpm_key"; return 1; }
       rm -f "$rpm_key"
       sudo tee "$MONGODB_YUM_REPO" >/dev/null <<REPO
 [mongodb-org-${MONGODB_SERIES}]
