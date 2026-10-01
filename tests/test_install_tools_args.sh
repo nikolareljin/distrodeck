@@ -466,6 +466,16 @@ un_out="$(
 assert_contains "$un_out" "UNPKG zypper krita" "krita uninstall removes the zypper package"
 assert_contains "$un_out" "zed has no apt package to remove" "zed uninstall without Flatpak or package says so"
 
+notty_out="$(bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  dialog() { echo "DIALOG CALLED"; }
+  main </dev/null
+' _ "$INSTALLER" 2>&1 | cat)"
+assert_contains "$notty_out" "needs a terminal" "no-argument run without a terminal explains itself"
+assert_not_contains "$notty_out" "DIALOG CALLED" "no-argument run without a terminal never calls dialog"
+assert_exit 2 "no-argument run without a terminal exits 2" bash -c 'source "$1"; detect_pkg_mgr() { echo apt; }; main </dev/null >/dev/null' _ "$INSTALLER"
+
 # The interactive menu: open one category, install its block, quit.
 tui_out="$(timeout 30 bash -c '
   source "$1"
@@ -492,7 +502,7 @@ tui_out="$(timeout 30 bash -c '
       *) return 0;;
     esac
   }
-  main </dev/null
+  DISTRODECK_FORCE_TUI=1 main </dev/null
 ' _ "$INSTALLER" 2>&1)"; rc=$?
 [[ "$rc" -eq 0 ]] && pass "category menu exits 0 on Quit" || fail "category menu exits 0 on Quit" "$tui_out"
 assert_contains "$tui_out" "MENU 2" "category menu returns to the menu after a block"

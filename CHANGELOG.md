@@ -384,6 +384,8 @@ This project follows Keep a Changelog and Semantic Versioning.
 - `mongodb` is opt-in like `atlas`: never preselected, not in `--all`.
 - `vscode` is opt-in with the other IDEs and no longer part of `--all`.
 - Tools in a block install in catalog order, not hash order.
+- `install-tools` with no arguments and no terminal exits 2 with a message;
+  it used to fail inside dialog and exit 0.
 - `git-lantern` and `ai-runner` are preselected on a first run and part of
   `--all`; `ai-runner` is no longer opt-in (it is a git clone, no script runs).
 - `reclaim` no longer offers a `build/` (or any artifact name) inside a Python

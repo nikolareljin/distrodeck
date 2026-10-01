@@ -3398,7 +3398,13 @@ main() {
   fi
 
   if [[ ${#requested[@]} -eq 0 ]] && ! $all; then
-    # Interactive: the category menu, one block at a time.
+    # Interactive: the category menu, one block at a time. Without a terminal
+    # dialog cannot draw it, and a silent exit 0 would read as "done".
+    # DISTRODECK_FORCE_TUI=1 exists for tests that stub dialog.
+    if [[ "${DISTRODECK_FORCE_TUI:-}" != "1" ]] && ! { [[ -t 0 ]] && [[ -t 1 ]]; }; then
+      log_error "The category menu needs a terminal. Use --category, --tools or --all instead."
+      exit 2
+    fi
     tui=true
     ensure_dialog
     dialog_init
