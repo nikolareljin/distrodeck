@@ -185,6 +185,7 @@ rm -f "$profile"
 # A custom NVM_DIR must be preserved in the profile, and nvm itself must not
 # count as Node after distrodeck removes the system Node package.
 custom_nvm_dir="$(mktemp -d)"
+# shellcheck disable=SC2034  # read by the sourced installer
 NVM_INSTALL_DIR="$custom_nvm_dir"
 profile="$(mktemp)"
 # API tags are retained for the release path while artifact names omit v.
@@ -208,6 +209,7 @@ assert_contains "$profile_contents" "export NVM_DIR=$custom_nvm_dir" "wire_nvm_p
 rm -f "$profile"
 
 touch "$custom_nvm_dir/nvm.sh"
+# shellcheck disable=SC2123  # an empty PATH is the point: nothing is on it
 if (PATH=""; is_installed_tool node); then
   fail "nvm checkout alone does not count as Node installed"
 else
@@ -239,6 +241,7 @@ assert_contains "$(mongodb_rpm_release 2>/dev/null)" "9" "MongoDB rpm release us
 printf 'ID=ubuntu\nVERSION_CODENAME=jammy\nUBUNTU_CODENAME=jammy\n' > "$OS_RELEASE_FILE"
 mongo_out="$(
   MONGODB_APT_LIST="$mongo_tmp/mongodb-org.list"
+  # shellcheck disable=SC2034  # read by the sourced installer
   MONGODB_KEYRING="$mongo_tmp/mongodb.gpg"
   sudo() { "$@"; }
   gpg() { :; }
@@ -276,7 +279,9 @@ assert_contains "$(java_package pacman 21)" "jdk21-openjdk" "java 21 on pacman"
 [[ "$JAVA_VERSION" == "21" ]] && pass "java defaults to 21" || fail "java defaults to 21" "$JAVA_VERSION"
 java_tmp="$(mktemp -d)"
 java_out="$(
+  # shellcheck disable=SC2034  # read by the sourced installer
   JAVA_STATE_FILE="$java_tmp/java-version"
+  # shellcheck disable=SC2034
   STATE_DIR="$java_tmp"
   JAVA_VERSION=25
   install_pkg() { echo "install $*"; }
@@ -293,6 +298,31 @@ if (JAVA_VERSION=11; install_java apt >/dev/null 2>&1); then
 else
   pass "install_java refuses an unsupported version"
 fi
+
+# ── Managed source checkouts (git-lantern, ai-runner) ────────────────────────
+
+all_selection="$(default_all_selection)"
+assert_contains " $all_selection " " git-lantern " "--all selection includes git-lantern"
+assert_contains " $all_selection " " ai-runner " "--all selection includes ai-runner"
+is_default_selected_tool ai-runner && pass "ai-runner is preselected" || fail "ai-runner is preselected"
+checkout_tmp="$(mktemp -d)"
+checkout_out="$(
+  STATE_DIR="$checkout_tmp"
+  git() { echo "git $*"; }
+  managed_source_checkout ai-runner https://example.invalid/ai-runner.git
+)"
+assert_contains "$checkout_out" "git clone https://example.invalid/ai-runner.git $checkout_tmp/tools/ai-runner" "managed checkout clones into tools/<name>"
+mkdir -p "$checkout_tmp/tools/git-lantern"
+if (STATE_DIR="$checkout_tmp"; uninstall_source_checkout git-lantern >/dev/null 2>&1); then
+  fail "uninstall_source_checkout refuses a directory without .git"
+else
+  pass "uninstall_source_checkout refuses a directory without .git"
+fi
+mkdir -p "$checkout_tmp/tools/git-lantern/.git"
+# shellcheck disable=SC2034
+(STATE_DIR="$checkout_tmp"; uninstall_source_checkout git-lantern >/dev/null 2>&1)
+[[ ! -e "$checkout_tmp/tools/git-lantern" ]] && pass "uninstall_source_checkout removes a managed checkout" || fail "uninstall_source_checkout removes a managed checkout"
+rm -rf "$checkout_tmp"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

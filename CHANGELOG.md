@@ -352,6 +352,14 @@ This project follows Keep a Changelog and Semantic Versioning.
   tests); previously only `py_compile` ran, so tests never gated a PR.
 
 ### Fixed
+- `install-tools` cloned `git-lantern` and `ai-runner` into
+  `~/.local/state/distrodeck/tools/` itself rather than `tools/<name>/`: one
+  `local` statement read `$name` before assigning it. Both now land in their
+  own directory, are detected, and uninstall removes the checkout (a directory
+  without `.git` is left alone). Before, unchecking either reported a
+  successful uninstall without doing anything; an unwired tool now fails.
+- `git-lantern` and `ai-runner` are preselected on a first run and part of
+  `--all`; `ai-runner` is no longer opt-in (it is a git clone, no script runs).
 - `reclaim` no longer offers a `build/` (or any artifact name) inside a Python
   virtualenv: a path under `site-packages` or below a `pyvenv.cfg` is installed
   code. The venv itself is still offered with `--include-environments`.

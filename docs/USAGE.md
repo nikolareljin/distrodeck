@@ -469,8 +469,8 @@ unreadable tools file).
 | System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
 | Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
 | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
-| Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
-| AI | aider, antigravity, claude-code, codex, copilot, cursor, gemini, kiro, ollama |
+| Development | bfg, build-tools, composer, delta, gh, git, git-lantern, git-lfs, lazygit, tokei |
+| AI | aider, ai-runner, antigravity, claude-code, codex, copilot, cursor, gemini, kiro, ollama |
 | Languages | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |

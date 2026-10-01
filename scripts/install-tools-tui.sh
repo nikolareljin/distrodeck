@@ -1636,15 +1636,24 @@ MONGODB_KEYRING="/usr/share/keyrings/mongodb-server.gpg"
 MONGODB_APT_LIST="/etc/apt/sources.list.d/mongodb-org.list"
 MONGODB_YUM_REPO="/etc/yum.repos.d/mongodb-org.repo"
 
+# Print the value of KEY from os-release (OS_RELEASE_FILE overrides the path).
+# Parsed, not sourced: the file is data, and sourcing it runs it.
+os_release_value() {
+  local key="$1" file="${OS_RELEASE_FILE:-/etc/os-release}" value
+  [[ -r "$file" ]] || return 0
+  value="$(sed -n "s/^${key}=//p" "$file" | head -n 1)"
+  value="${value#[\"\']}"
+  value="${value%[\"\']}"
+  printf '%s\n' "$value"
+}
+
 # Print "<distro-path> <codename> <component>" for the apt repository, or
 # nothing when this release has no MongoDB packages.
 mongodb_apt_target() {
-  local id="" codename=""
-  local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
-  if [[ -r "$os_release" ]]; then
-    id="$(. "$os_release" && echo "${ID:-}")"
-    codename="$(. "$os_release" && echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")"
-  fi
+  local id codename
+  id="$(os_release_value ID)"
+  codename="$(os_release_value UBUNTU_CODENAME)"
+  [[ -n "$codename" ]] || codename="$(os_release_value VERSION_CODENAME)"
   case "$codename" in
     jammy|noble) echo "ubuntu $codename multiverse";;
     bookworm) echo "debian $codename main";;
@@ -1657,12 +1666,9 @@ mongodb_apt_target() {
 
 # Print the RHEL major used in the yum repository path.
 mongodb_rpm_release() {
-  local id="" version=""
-  local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
-  if [[ -r "$os_release" ]]; then
-    id="$(. "$os_release" && echo "${ID:-}")"
-    version="$(. "$os_release" && echo "${VERSION_ID:-}")"
-  fi
+  local id version
+  id="$(os_release_value ID)"
+  version="$(os_release_value VERSION_ID)"
   version="${version%%.*}"
   case "$id" in
     fedora)
@@ -2421,7 +2427,10 @@ is_installed_tool() {
 # Single source of truth: the interactive checklist, --all, and --tools
 # validation all read this array. Order defines the checklist order.
 managed_source_checkout() {
-  local name="$1" url="$2" dest="$STATE_DIR/tools/$name"
+  # Two locals: bash expands every word of one `local` before assigning any,
+  # so dest would have been "$STATE_DIR/tools/" with an empty name.
+  local name="$1" url="$2"
+  local dest="$STATE_DIR/tools/$name"
   mkdir -p "$STATE_DIR/tools"
   if [[ -d "$dest/.git" ]]; then
     git -C "$dest" pull --ff-only
@@ -2441,6 +2450,29 @@ install_git_lantern() {
 install_ai_runner() {
   command -v git >/dev/null 2>&1 || install_git "$1" || return 1
   managed_source_checkout ai-runner https://github.com/nikolareljin/ai-runner.git
+}
+
+# Remove a checkout created by managed_source_checkout. Refuses anything that
+# is not a git checkout, so a user's own directory there is never deleted.
+uninstall_source_checkout() {
+  local name="$1"
+  local dest="$STATE_DIR/tools/$name"
+  if [[ ! -d "$dest/.git" ]]; then
+    log_warn "$dest is not a managed checkout; leaving it alone."
+    return 1
+  fi
+  rm -rf -- "$dest"
+}
+
+# Selected in the checklist by default, and part of --all.
+DEFAULT_SELECTED_TOOLS=(git-lantern ai-runner)
+
+is_default_selected_tool() {
+  local needle="$1" tool
+  for tool in "${DEFAULT_SELECTED_TOOLS[@]}"; do
+    [[ "$tool" == "$needle" ]] && return 0
+  done
+  return 1
 }
 
 TOOL_CATALOG=(
@@ -2473,7 +2505,7 @@ TOOL_CATALOG=(
 # Tools whose installers fetch and execute upstream scripts. They are held out
 # of --all unless DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true, but an explicit
 # --tools request counts as consent and installs them.
-OPT_IN_TOOLS=(aider ai-runner antigravity atlas claude-code codex copilot cursor gemini kiro ollama)
+OPT_IN_TOOLS=(aider antigravity atlas claude-code codex copilot cursor gemini kiro ollama)
 
 # Return 0 when $1 is a known catalog tool.
 is_catalog_tool() {
@@ -2667,6 +2699,10 @@ main() {
       status="off"
       if [[ "${installed[$tool]}" == "true" ]]; then
         desc+=" (installed)"
+        status="on"
+      elif is_default_selected_tool "$tool" && [[ ! -f "$INSTALLED_TOOLS_FILE" ]]; then
+        # Preselected only before distrodeck has tracked anything, so a tool
+        # the user unchecked and removed is not offered back every run.
         status="on"
       fi
       items+=("$tool" "$desc" "$status")
@@ -2868,6 +2904,7 @@ main() {
       gimp) install_gimp "$mgr";;
       nemo) install_pkg_simple "$mgr" nemo;;
       rustdesk) install_rustdesk "$mgr";;
+      *) log_error "No installer is wired for $choice."; false;;
     esac
     ); then
       # Installation command succeeded, verify tool is now installed
@@ -2915,6 +2952,8 @@ main() {
         bfg) uninstall_bfg "$mgr";;
         gh) uninstall_gh "$mgr";;
         aider) uninstall_aider "$mgr";;
+        ai-runner) uninstall_source_checkout ai-runner;;
+        git-lantern) uninstall_source_checkout git-lantern;;
         antigravity) uninstall_antigravity "$mgr";;
         claude-code) uninstall_claude_code "$mgr";;
         codex) uninstall_codex "$mgr";;
@@ -2980,6 +3019,7 @@ main() {
         gimp) uninstall_gimp "$mgr";;
         nemo) uninstall_pkg_simple "$mgr" nemo;;
         rustdesk) uninstall_rustdesk "$mgr";;
+        *) log_error "No uninstaller is wired for $tool."; false;;
       esac
       ); then
         # Uninstallation succeeded
