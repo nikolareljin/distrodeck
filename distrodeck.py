@@ -3996,10 +3996,24 @@ def _checkout_adapter(name: str):
     return detect, command
 
 
+def _npm_global_command(package: str) -> List[str]:
+    """`npm install -g pkg@latest`, with sudo only when the prefix needs it.
+
+    install-tools uses sudo for a system npm; an nvm or user prefix is writable,
+    and sudo there would install a second copy with root's npm instead.
+    """
+    command = ["npm", "install", "-g", f"{package}@latest"]
+    prefix = run(["npm", "prefix", "-g"], check=False, capture_output=True)
+    path = (prefix.stdout or "").strip() if prefix.returncode == 0 else ""
+    if path and os.access(path, os.W_OK):
+        return command
+    return ["sudo"] + command
+
+
 def _npm_adapter(package: str):
     return (
         lambda: _npm_global_installed(package),
-        lambda: ["sudo", "npm", "install", "-g", f"{package}@latest"],
+        lambda: _npm_global_command(package),
     )
 
 

@@ -60,11 +60,26 @@ def test_a_failure_does_not_stop_later_updaters(env, monkeypatch, capsys):
     assert "Tool refresh failed: git-lantern" in err
 
 
-def test_npm_tools_are_detected_by_npm_and_reinstalled_at_latest(env, monkeypatch):
+def test_npm_tools_use_sudo_for_a_system_prefix(env, monkeypatch):
     monkeypatch.setattr(distrodeck, "cmd_exists", lambda name: name == "npm")
+    monkeypatch.setattr(distrodeck.os, "access", lambda path, mode: False)
     distrodeck.refresh_catalog_tools()
     assert ["npm", "ls", "-g", "--depth=0", "@openai/codex"] in env.calls
     assert ["sudo", "npm", "install", "-g", "@openai/codex@latest"] in env.calls
+
+
+def test_npm_tools_skip_sudo_for_a_writable_prefix(env, monkeypatch, tmp_path):
+    monkeypatch.setattr(distrodeck, "cmd_exists", lambda name: name == "npm")
+
+    def fake_run(command, **_kwargs):
+        env.calls.append(command)
+        out = str(tmp_path) if command == ["npm", "prefix", "-g"] else ""
+        return SimpleNamespace(returncode=0, stdout=out)
+
+    monkeypatch.setattr(distrodeck, "run", fake_run)
+    distrodeck.refresh_catalog_tools()
+    assert ["npm", "install", "-g", "@google/gemini-cli@latest"] in env.calls
+    assert not any(c[0] == "sudo" for c in env.calls)
 
 
 def test_update_dispatches_tool_refresh_and_reports_its_failure(env, monkeypatch):
