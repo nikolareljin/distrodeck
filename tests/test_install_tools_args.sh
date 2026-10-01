@@ -639,6 +639,7 @@ assert_contains "$(cat "$etc/etc/nginx/sites-available/default")" "listen [::1]:
 assert_contains "$(cat "$etc/etc/apache2/ports.conf")" "Listen 127.0.0.1:80" "apache binds 127.0.0.1"
 assert_contains "$(cat "$etc/etc/apache2/ports.conf")" "Listen 127.0.0.1:443" "apache binds 127.0.0.1 for TLS"
 assert_contains "$(cat "$etc/etc/caddy/Caddyfile")" "bind 127.0.0.1" "caddy binds 127.0.0.1"
+[[ "$(sed -n 2p "$etc/etc/caddy/Caddyfile")" == $'\tbind 127.0.0.1' ]] && pass "caddy bind is its own line (no literal n from sed)" || fail "caddy bind is its own line (no literal n from sed)"
 assert_contains "$(cat "$etc/etc/mysql/conf.d/99-distrodeck-bind.cnf")" "bind-address = 127.0.0.1" "mariadb binds 127.0.0.1"
 rm -rf "$etc"
 srv_out="$(

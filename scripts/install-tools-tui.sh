@@ -2546,14 +2546,14 @@ CLAUDE_PLUGIN_TIMEOUT="${DISTRODECK_PLUGIN_TIMEOUT:-300}"
 claude_bounded() {
   local rc=0
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
+    timeout -k 10 "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
   elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
+    gtimeout -k 10 "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
   else
     # macOS without coreutils: the alarm survives exec and SIGALRM ends claude.
     perl -e 'alarm shift; exec @ARGV or die "exec: $!\n"' "$CLAUDE_PLUGIN_TIMEOUT" claude "$@" </dev/null || rc=$?
   fi
-  if [[ "$rc" -eq 124 || "$rc" -eq 142 ]]; then
+  if [[ "$rc" -eq 124 || "$rc" -eq 137 || "$rc" -eq 142 ]]; then
     log_error "claude $* gave no answer in ${CLAUDE_PLUGIN_TIMEOUT}s; stopped it."
   fi
   return "$rc"
