@@ -429,10 +429,15 @@ distrodeck ollama models remove vision
 
 ### install-tools
 
-Install optional developer tools via a TUI checklist. Tools are organized by category.
+Install optional tools one category at a time. The TUI opens a category menu;
+each category opens its own checklist (installed tools are checked and marked),
+installs that block, and returns to the menu. Quit ends the session.
 
 ```
-distrodeck install-tools                      # opens TUI checklist
+distrodeck install-tools                      # opens the category menu
+distrodeck install-tools --category media     # default-on tools of one category
+distrodeck install-tools --list-categories    # id<TAB>label
+distrodeck install-tools --list-catalog --format tsv
 distrodeck install-tools --all                # installs the default non-interactive tool set
 distrodeck install-tools --tools bat,eza,gh   # installs only these, no checklist
 distrodeck install-tools --tools-file tools.txt
@@ -446,6 +451,16 @@ Options:
   lines and `#` comments are ignored, and `-` reads from stdin
 - `--reconcile`: with `--tools`, also uninstall previously tracked tools that
   are not in the requested set
+- `--category IDS`: install the default-on tools of these categories (comma
+  separated, repeatable), one block per category. Opt-in tools are never
+  included; name them with `--tools`. Cannot be combined with `--all`,
+  `--tools` or `--reconcile`; an unknown id exits 2.
+- `--list-categories`: print `id<TAB>label` per category and exit
+- `--list-catalog --format tsv`: print one line per tool and exit. Columns, in
+  this order and tab separated: `category_id`, `category_label`, `tool`,
+  `label`, `opt_in` (0/1), `installed` (0/1). No colour, no dialog, no root,
+  no package manager needed. The column order is a contract: new columns are
+  only ever appended.
 - `--list-tools`: print the tool catalog and exit
 
 `--tools` and `--tools-file` are the noninteractive entry points for scripts and
@@ -462,27 +477,35 @@ unreadable tools file).
 `--all` skips tools that require downloaded installer confirmation or hosted account CLIs. To include those tools, run from an interactive terminal with `DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true`. The older `DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS=true` name is also accepted for compatibility.
 
 **Features:**
-- Tools are grouped by category with prefixes: `[Shell]`, `[Editor]`, `[System]`, `[Net]`, `[Backup]`, `[Dev]`, `[AI]`, `[Lang]`, `[DevOps]`, `[Util]`, `[App]`
-- Already installed tools are pre-checked and marked "(installed)"
-- **Uninstall support**: Unchecking a tool prompts to uninstall it
+- A category menu shows each category with its installed count; each opens a
+  checklist of only that category's tools
+- Already installed tools are pre-checked and marked "(installed)"; opt-in
+  tools are marked "[opt-in]" and never preselected
+- **Uninstall support**: Unchecking an installed tool in a category prompts to
+  uninstall it; tools in other categories are never touched
+- Media, Graphics and the JetBrains/Zed IDEs use the distro package where one
+  exists and the Flathub Flatpak otherwise
 - State tracking: Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`
 
 **Available tools by category:**
 
-| Category | Tools |
-|----------|-------|
-| Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
-| Editors & Terminal | mc, meld, micro, neovim, screen, tmux, vscode |
-| System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
-| Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
-| Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
-| Development | bfg, build-tools, composer, delta, gh, git, git-lantern, git-lfs, lazygit, tokei |
-| AI | aider, ai-runner, antigravity, claude-code, codex, copilot, cursor, gemini, kiro, ollama |
-| Languages | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
-| DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
-| Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
-| Databases | atlas (opt-in), mongodb |
-| Apps | gimp, image-view, isoforge, nemo, rustdesk, streamcontroller |
+| Id | Category | Tools (opt-in marked *) |
+|----|----------|-------|
+| `shell` | Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
+| `editors` | Editors & Terminal | mc, meld, micro, neovim, screen, tmux |
+| `system` | System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
+| `network` | Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
+| `backup` | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
+| `dev` | Development | bfg, build-tools, composer, delta, gh, git, git-lantern, git-lfs, lazygit, tokei |
+| `ai` | AI tools | aider*, ai-runner, claude-code*, codex*, copilot*, gemini*, ollama* |
+| `ides` | IDEs | antigravity*, cursor*, intellij-idea-community*, kiro*, pycharm-community*, vscode*, zed* |
+| `lang` | Languages & Runtimes | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
+| `devops` | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
+| `media` | Media | audacity, ffmpeg, handbrake, kdenlive, mpv, obs-studio, vlc |
+| `graphics` | Graphics | blender, darktable, gimp, inkscape, krita |
+| `util` | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
+| `db` | Databases | atlas*, mongodb* |
+| `apps` | Apps | image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 **Notable tools:**
 - `bfg` - BFG Repo-Cleaner for removing large files from git history
@@ -500,7 +523,7 @@ unreadable tools file).
   `openjdk-N-jdk` (apt), `java-N-openjdk-devel` (dnf, zypper) or `jdkN-openjdk`
   (pacman). Any existing `java` on PATH counts as installed. Uninstall removes
   the JDK distrodeck installed.
-- `mongodb` - MongoDB Community server and mongosh from the official
+- `mongodb` (opt-in) - MongoDB Community server and mongosh from the official
   repository (apt: Ubuntu jammy/noble, Debian bookworm; dnf: RHEL 8-10, Fedora
   via the RHEL 9 repository). Series 8.2 by default; `DISTRODECK_MONGODB_SERIES=8.0`
   picks the previous one. `mongod` is enabled and listens on 127.0.0.1 only. pacman and

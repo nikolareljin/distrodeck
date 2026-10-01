@@ -162,25 +162,33 @@ distrodeck install-tools --list-tools
 
 ### Install-tools categories
 
-The `install-tools` command offers tools organized by category:
+`distrodeck install-tools` opens a category menu. Pick a category, check the
+tools you want in its own checklist, install that block, and come back to the
+menu for the next one; Quit ends. Nothing is preselected in bulk.
 
-| Category | Examples |
-|----------|----------|
-| `[Shell]` | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide |
-| `[Editor]` | mc, meld, micro, neovim, vscode |
-| `[System]` | bandwhich, duf, htop, ncdu |
-| `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
-| `[Dev]` | bfg, delta, gh, git, git-lantern, lazygit, tokei |
-| `[AI]` | aider, ai-runner, antigravity, codex, copilot, claude-code, gemini, ollama, cursor, kiro |
-| `[Lang]` | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
-| `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
-| `[Util]` | flatpak, ntfs-3g, wine |
-| `[DB]` | mongodb (server + mongosh), atlas (Atlas CLI, opt-in) |
-| `[App]` | gimp, nemo, rustdesk, streamcontroller |
+| Id | Category | Tools (opt-in marked *) |
+|----|----------|-------|
+| `shell` | Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
+| `editors` | Editors & Terminal | mc, meld, micro, neovim, screen, tmux |
+| `system` | System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
+| `network` | Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
+| `backup` | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
+| `dev` | Development | bfg, build-tools, composer, delta, gh, git, git-lantern, git-lfs, lazygit, tokei |
+| `ai` | AI tools | aider*, ai-runner, claude-code*, codex*, copilot*, gemini*, ollama* |
+| `ides` | IDEs | antigravity*, cursor*, intellij-idea-community*, kiro*, pycharm-community*, vscode*, zed* |
+| `lang` | Languages & Runtimes | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
+| `devops` | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
+| `media` | Media | audacity, ffmpeg, handbrake, kdenlive, mpv, obs-studio, vlc |
+| `graphics` | Graphics | blender, darktable, gimp, inkscape, krita |
+| `util` | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
+| `db` | Databases | atlas*, mongodb* |
+| `apps` | Apps | image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 
-For scripts and external integrators, `--tools LIST` and `--tools-file PATH` install a named set without opening the checklist. Unknown tool names exit 2 before anything is installed, and tools outside the requested set are left alone unless `--reconcile` is passed. `--list-tools` prints the catalog.
+For scripts and external integrators, `--tools LIST` and `--tools-file PATH` install a named set without opening the checklist. Unknown tool names exit 2 before anything is installed, and tools outside the requested set are left alone unless `--reconcile` is passed. `--list-tools` prints the catalog. `--category media,graphics` installs the default-on tools of those categories, one block each; opt-in tools (*) install only when named with `--tools`. `--list-categories` prints the ids, and `--list-catalog --format tsv` prints one line per tool: `category_id`, `category_label`, `tool`, `label`, `opt_in` (0/1), `installed` (0/1), tab separated, with no colour, no dialog and no root.
+
+Media, Graphics and the JetBrains/Zed IDEs install from the distro package where one exists and fall back to the Flathub Flatpak where it does not (for example HandBrake on Fedora and openSUSE, Zed on Ubuntu). A tool with neither fails on its own with a message.
 
 Selecting `node` installs Node 24 from the system repository and nvm (Node 24 and 22, default 24), so versions can be switched per shell with `nvm use 22`.
 

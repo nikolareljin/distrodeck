@@ -296,10 +296,11 @@ else
 fi
 unset OS_RELEASE_FILE
 rm -rf "$mongo_tmp"
-if is_opt_in_tool atlas && ! is_opt_in_tool mongodb; then
-  pass "atlas is opt-in, mongodb is in --all"
+all_selection="$(default_all_selection)"
+if is_opt_in_tool atlas && is_opt_in_tool mongodb && [[ " $all_selection " != *" mongodb "* && " $all_selection " != *" atlas "* ]]; then
+  pass "mongodb and atlas are opt-in and not in --all"
 else
-  fail "atlas is opt-in, mongodb is in --all"
+  fail "mongodb and atlas are opt-in and not in --all"
 fi
 
 # ── Java version choice ──────────────────────────────────────────────────────
@@ -364,6 +365,142 @@ mkdir -p "$checkout_tmp/tools/git-lantern/.git"
 (STATE_DIR="$checkout_tmp"; uninstall_source_checkout git-lantern >/dev/null 2>&1)
 [[ ! -e "$checkout_tmp/tools/git-lantern" ]] && pass "uninstall_source_checkout removes a managed checkout" || fail "uninstall_source_checkout removes a managed checkout"
 rm -rf "$checkout_tmp"
+
+# ── Categories and the TSV catalog ───────────────────────────────────────────
+
+set +e
+tsv="$("$INSTALLER" --list-catalog --format tsv 2>&1)"; rc=$?
+[[ "$rc" -eq 0 ]] && pass "--list-catalog --format tsv exits 0" || fail "--list-catalog --format tsv exits 0" "rc=$rc"
+bad_lines="$(awk -F'\t' 'NF != 6 || $5 !~ /^[01]$/ || $6 !~ /^[01]$/' <<< "$tsv")"
+[[ -z "$bad_lines" ]] && pass "every TSV line has 6 columns with 0/1 flags" || fail "every TSV line has 6 columns with 0/1 flags" "$bad_lines"
+[[ "$tsv" != *$'\e'* ]] && pass "TSV catalog has no ANSI" || fail "TSV catalog has no ANSI"
+mongo_line="$(grep -P '\tmongodb\t' <<< "$tsv")"
+expected_prefix="$(printf 'db\tDatabases\tmongodb\tMongoDB Community server + mongosh\t1\t')"
+if [[ "$mongo_line" == "$expected_prefix"[01] ]]; then
+  pass "TSV column order is category_id, category_label, tool, label, opt_in, installed"
+else
+  fail "TSV column order is category_id, category_label, tool, label, opt_in, installed" "$mongo_line"
+fi
+[[ "$(wc -l <<< "$tsv")" -eq "$("$INSTALLER" --list-tools | wc -l)" ]] && pass "TSV has one line per catalog tool" || fail "TSV has one line per catalog tool"
+assert_exit 0 "--list-catalog works without a package manager" bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo unknown; }
+  main --list-catalog --format tsv >/dev/null
+' _ "$INSTALLER"
+assert_exit 2 "--list-catalog rejects --format json" "$INSTALLER" --list-catalog --format json
+assert_exit 2 "--format without --list-catalog is refused" "$INSTALLER" --format tsv --tools bat
+assert_exit 2 "unknown --category exits 2" "$INSTALLER" --category media,nope
+assert_exit 2 "--category with --tools exits 2" "$INSTALLER" --category media --tools vlc
+cats="$("$INSTALLER" --list-categories)"
+for id in shell editors system network backup dev ai ides lang devops media graphics util db apps; do
+  [[ "$cats" == *"$id"$'\t'* ]] || fail "--list-categories includes $id"
+done
+pass "--list-categories lists every category"
+
+# Every catalog tool belongs to exactly one category and has a label.
+dupes="$(printf '%s\n' "${TOOL_CATALOG[@]}" | sort | uniq -d)"
+[[ -z "$dupes" ]] && pass "no tool is in two categories" || fail "no tool is in two categories" "$dupes"
+nolabel=""
+for t in "${TOOL_CATALOG[@]}"; do [[ "$(tool_desc "$t")" == "$t" ]] && nolabel+=" $t"; done
+[[ -z "$nolabel" ]] && pass "every catalog tool has a label" || fail "every catalog tool has a label" "$nolabel"
+for t in vscode zed intellij-idea-community pycharm-community cursor kiro antigravity; do
+  is_opt_in_tool "$t" || fail "IDE $t is opt-in"
+done
+pass "every IDE is opt-in"
+
+# --category installs default-on tools only, one block per category, never uninstalls.
+cat_out="$(bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  is_installed_tool() { [[ -e "$STATE_DIR/$1" ]]; }
+  install_package_tool() { echo "INSTALL $1"; touch "$STATE_DIR/$1"; }
+  install_mongodb() { echo "INSTALL mongodb"; }
+  install_gimp() { echo "INSTALL gimp"; touch "$STATE_DIR/gimp"; }
+  install_pkg() { echo "UNEXPECTED install_pkg $*"; return 1; }
+  main --category graphics,db </dev/null
+' _ "$INSTALLER" 2>&1)"; rc=$?
+[[ "$rc" -eq 0 ]] && pass "--category graphics,db exits 0" || fail "--category graphics,db exits 0" "$cat_out"
+assert_contains "$cat_out" "INSTALL krita" "--category installs the category's tools"
+order="$(grep -o '^INSTALL [a-z]*' <<< "$cat_out" | tr '\n' ' ')"
+[[ "$order" == "INSTALL blender INSTALL darktable INSTALL gimp INSTALL inkscape INSTALL krita " ]] && pass "--category installs in catalog order" || fail "--category installs in catalog order" "$order"
+assert_not_contains "$cat_out" "INSTALL mongodb" "--category never installs an opt-in tool"
+assert_contains "$cat_out" "Category db has only opt-in tools" "--category explains an all-opt-in category"
+all_inst_out="$(bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  is_installed_tool() { return 0; }
+  install_package_tool() { echo "INSTALL $1"; }
+  install_pkg() { echo "INSTALL pkg $*"; }
+  main --category media </dev/null
+' _ "$INSTALLER" 2>&1)"; rc=$?
+[[ "$rc" -eq 0 ]] && pass "--category with every tool installed exits 0" || fail "--category with every tool installed exits 0" "$all_inst_out"
+assert_not_contains "$all_inst_out" "INSTALL" "--category with every tool installed installs nothing"
+
+# Package tools: distro package first, Flathub when the manager has none.
+assert_contains "$(package_tool_pkg ffmpeg dnf)" "ffmpeg-free" "ffmpeg is ffmpeg-free on dnf"
+assert_contains "$(package_tool_pkg intellij-idea-community pacman)" "intellij-idea-community-edition" "IntelliJ CE package on pacman"
+fp_out="$(
+  install_pkg() { echo "PKG $*"; }
+  flatpak() { echo "FLATPAK $*"; }
+  install_package_tool handbrake dnf 2>&1
+  install_package_tool zed zypper 2>&1
+  install_package_tool vlc pacman 2>&1
+)"
+assert_contains "$fp_out" "FLATPAK install -y flathub fr.handbrake.ghb" "handbrake on dnf falls back to Flathub"
+assert_contains "$fp_out" "FLATPAK install -y flathub dev.zed.Zed" "zed on zypper falls back to Flathub"
+assert_contains "$fp_out" "PKG pacman vlc" "vlc on pacman uses the distro package"
+nopkg_out="$(
+  package_tool_spec() { echo "- - - - - nothing"; }
+  install_package_tool fake apt 2>&1; echo "rc=$?"
+)"
+assert_contains "$nopkg_out" "has no apt package and no Flatpak" "a tool with no package and no Flatpak says so"
+assert_contains "$nopkg_out" "rc=1" "a tool with no package and no Flatpak fails"
+un_out="$(
+  uninstall_pkg() { echo "UNPKG $*"; }
+  flatpak() { [[ "$1" == info ]] && return 1; echo "FLATPAK $*"; }
+  uninstall_package_tool krita zypper 2>&1
+  uninstall_package_tool zed apt 2>&1; echo "rc=$?"
+)"
+assert_contains "$un_out" "UNPKG zypper krita" "krita uninstall removes the zypper package"
+assert_contains "$un_out" "zed has no apt package to remove" "zed uninstall without Flatpak or package says so"
+
+# The interactive menu: open one category, install its block, quit.
+tui_out="$(timeout 30 bash -c '
+  source "$1"
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  echo bat > "$INSTALLED_TOOLS_FILE"
+  detect_pkg_mgr() { echo apt; }
+  ensure_dialog() { :; }
+  dialog_init() { DIALOG_HEIGHT=20; DIALOG_WIDTH=60; }
+  clear() { :; }
+  is_installed_tool() { [[ -e "$STATE_DIR/$1" ]]; }
+  install_package_tool() { echo "INSTALL $1"; touch "$STATE_DIR/$1"; }
+  # dialog runs in a command substitution, so the count lives in a file.
+  echo 0 > "$STATE_DIR/menu-calls"
+  dialog() {
+    local calls
+    case " $* " in
+      *" --menu "*)
+        calls=$(( $(cat "$STATE_DIR/menu-calls") + 1 ))
+        echo "$calls" > "$STATE_DIR/menu-calls"
+        echo "MENU $calls" >&2
+        [[ $calls -eq 1 ]] && { echo media; return 0; }
+        return 1;;
+      *" --checklist "*) echo "CHECKLIST $*" >&2; echo "vlc mpv"; return 0;;
+      *) return 0;;
+    esac
+  }
+  main </dev/null
+' _ "$INSTALLER" 2>&1)"; rc=$?
+[[ "$rc" -eq 0 ]] && pass "category menu exits 0 on Quit" || fail "category menu exits 0 on Quit" "$tui_out"
+assert_contains "$tui_out" "MENU 2" "category menu returns to the menu after a block"
+assert_contains "$tui_out" "INSTALL vlc" "category block installs checked tools"
+assert_not_contains "$tui_out" "INSTALL audacity" "category block leaves unchecked tools alone"
+checklist_line="$(grep '^CHECKLIST' <<< "$tui_out")"
+assert_not_contains "$checklist_line" " krita " "a category checklist shows only its own tools"
+assert_contains "$checklist_line" "vlc" "a category checklist shows its tools"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

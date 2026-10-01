@@ -1626,6 +1626,101 @@ install_aider() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Table-driven package tools (IDEs, Media, Graphics)
+# ─────────────────────────────────────────────────────────────────────────────
+# Fields: apt dnf pacman zypper flatpak-id binaries(comma). "-" = none.
+# Package names were checked against packages.ubuntu.com (noble), Fedora
+# rawhide (mdapi), archlinux.org and the openSUSE Tumbleweed oss repodata;
+# Flatpak ids against flathub.org. Where a manager has no package the Flatpak
+# from Flathub is used; with neither the tool fails with a clear message.
+package_tool_spec() {
+  case "$1" in
+    vlc) echo "vlc vlc vlc vlc org.videolan.VLC vlc";;
+    mpv) echo "mpv mpv mpv mpv io.mpv.Mpv mpv";;
+    ffmpeg) echo "ffmpeg ffmpeg-free ffmpeg ffmpeg - ffmpeg";;
+    obs-studio) echo "obs-studio obs-studio obs-studio obs-studio com.obsproject.Studio obs";;
+    audacity) echo "audacity audacity audacity audacity org.audacityteam.Audacity audacity";;
+    kdenlive) echo "kdenlive kdenlive kdenlive kdenlive org.kde.kdenlive kdenlive";;
+    handbrake) echo "handbrake - handbrake - fr.handbrake.ghb ghb";;
+    inkscape) echo "inkscape inkscape inkscape inkscape org.inkscape.Inkscape inkscape";;
+    krita) echo "krita krita krita krita org.kde.krita krita";;
+    blender) echo "blender blender blender blender org.blender.Blender blender";;
+    darktable) echo "darktable darktable darktable darktable org.darktable.Darktable darktable";;
+    zed) echo "- - zed - dev.zed.Zed zeditor,zed";;
+    intellij-idea-community) echo "- - intellij-idea-community-edition - com.jetbrains.IntelliJ-IDEA-Community idea,idea.sh";;
+    pycharm-community) echo "- - pycharm-community-edition - com.jetbrains.PyCharm-Community pycharm,pycharm.sh";;
+    *) return 1;;
+  esac
+}
+
+# Print the distro package for tool $1 on manager $2, or nothing.
+package_tool_pkg() {
+  local apt dnf pacman zypper flatpak_id bins pkg=""
+  read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$1")"
+  case "$2" in
+    apt) pkg="$apt";; dnf) pkg="$dnf";; pacman) pkg="$pacman";; zypper) pkg="$zypper";;
+  esac
+  [[ "$pkg" == "-" ]] && pkg=""
+  printf '%s\n' "$pkg"
+}
+
+package_tool_flatpak() {
+  local apt dnf pacman zypper flatpak_id bins
+  read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$1")"
+  [[ "$flatpak_id" == "-" ]] && flatpak_id=""
+  printf '%s\n' "$flatpak_id"
+}
+
+is_package_tool() {
+  package_tool_spec "$1" >/dev/null 2>&1
+}
+
+package_tool_installed() {
+  local tool="$1" apt dnf pacman zypper flatpak_id bins bin
+  read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$tool")"
+  for bin in ${bins//,/ }; do
+    command -v "$bin" >/dev/null 2>&1 && return 0
+  done
+  [[ "$flatpak_id" != "-" ]] && command -v flatpak >/dev/null 2>&1 && \
+    flatpak info "$flatpak_id" >/dev/null 2>&1
+}
+
+install_package_tool() {
+  local tool="$1" mgr="$2" pkg flatpak_id
+  pkg="$(package_tool_pkg "$tool" "$mgr")"
+  if [[ -n "$pkg" ]]; then
+    install_pkg "$mgr" "$pkg"
+    return
+  fi
+  flatpak_id="$(package_tool_flatpak "$tool")"
+  if [[ -z "$flatpak_id" ]]; then
+    log_warn "$tool has no ${mgr} package and no Flatpak; skipping it on this system."
+    return 1
+  fi
+  log_info "$tool has no ${mgr} package; installing the Flathub Flatpak ${flatpak_id}."
+  command -v flatpak >/dev/null 2>&1 || install_flatpak "$mgr" || return 1
+  command -v flatpak >/dev/null 2>&1 || { log_warn "Flatpak is unavailable; cannot install $tool."; return 1; }
+  flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || return 1
+  flatpak install -y flathub "$flatpak_id"
+}
+
+uninstall_package_tool() {
+  local tool="$1" mgr="$2" pkg flatpak_id
+  flatpak_id="$(package_tool_flatpak "$tool")"
+  if [[ -n "$flatpak_id" ]] && command -v flatpak >/dev/null 2>&1 && \
+     flatpak info "$flatpak_id" >/dev/null 2>&1; then
+    flatpak uninstall -y "$flatpak_id"
+    return
+  fi
+  pkg="$(package_tool_pkg "$tool" "$mgr")"
+  if [[ -z "$pkg" ]]; then
+    log_warn "$tool has no ${mgr} package to remove."
+    return 1
+  fi
+  uninstall_pkg "$mgr" "$pkg"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MongoDB (official repository, shared by mongodb and atlas)
 # ─────────────────────────────────────────────────────────────────────────────
 # 8.2 is the current on-premises series; DISTRODECK_MONGODB_SERIES=8.0 picks
@@ -2265,7 +2360,6 @@ tool_desc() {
     neovim) echo "[Editor] Neovim - vim fork";;
     screen) echo "[Term] screen - terminal multiplexer";;
     tmux) echo "[Term] tmux - terminal multiplexer";;
-    vscode) echo "[Editor] VS Code";;
     # ── System & Monitoring ──
     bandwhich) echo "[System] bandwhich - bandwidth by process";;
     cron) echo "[System] cron - task scheduler";;
@@ -2302,16 +2396,15 @@ tool_desc() {
     git) echo "[Dev] git - version control";;
     git-lfs) echo "[Dev] git-lfs - large file storage";;
     lazygit) echo "[Dev] LazyGit - git TUI";;
+    git-lantern) echo "[Dev] git-lantern - local and GitHub repo dashboard";;
     tokei) echo "[Dev] tokei - code statistics";;
     # ── AI tools ──
     aider) echo "[AI] aider - AI pair programming";;
-    antigravity) echo "[AI] Antigravity - AI development environment";;
+    ai-runner) echo "[AI] ai-runner - pick and run local Ollama models";;
     claude-code) echo "[AI] Claude Code";;
     codex) echo "[AI] OpenAI Codex CLI";;
     copilot) echo "[AI] GitHub Copilot CLI";;
-    cursor) echo "[AI] Cursor IDE / Agent";;
     gemini) echo "[AI] Gemini CLI";;
-    kiro) echo "[AI] Kiro IDE / CLI";;
     ollama) echo "[AI] Ollama local models";;
     # ── Languages & Runtimes ──
     go) echo "[Lang] Go";;
@@ -2335,11 +2428,32 @@ tool_desc() {
     wine) echo "[Util] Wine - Windows compatibility";;
     # ── Networking ── (additional)
     tor) echo "[Net] Tor - anonymous browsing";;
+    # ── IDEs ──
+    antigravity) echo "[IDE] Antigravity - AI development environment";;
+    cursor) echo "[IDE] Cursor IDE / Agent";;
+    intellij-idea-community) echo "[IDE] IntelliJ IDEA Community";;
+    kiro) echo "[IDE] Kiro IDE / CLI";;
+    pycharm-community) echo "[IDE] PyCharm Community";;
+    vscode) echo "[IDE] Visual Studio Code";;
+    zed) echo "[IDE] Zed editor";;
+    # ── Media ──
+    audacity) echo "[Media] Audacity - audio editor";;
+    ffmpeg) echo "[Media] FFmpeg - audio/video converter";;
+    handbrake) echo "[Media] HandBrake - video transcoder";;
+    kdenlive) echo "[Media] Kdenlive - video editor";;
+    mpv) echo "[Media] mpv - media player";;
+    obs-studio) echo "[Media] OBS Studio - recording and streaming";;
+    vlc) echo "[Media] VLC - media player";;
+    # ── Graphics ──
+    blender) echo "[Graphics] Blender - 3D creation";;
+    darktable) echo "[Graphics] darktable - photo workflow";;
+    gimp) echo "[Graphics] GIMP - image editor";;
+    inkscape) echo "[Graphics] Inkscape - vector graphics";;
+    krita) echo "[Graphics] Krita - digital painting";;
     # ── Databases ──
     atlas) echo "[DB] MongoDB Atlas CLI (local deployments)";;
     mongodb) echo "[DB] MongoDB Community server + mongosh";;
     # ── Apps ──
-    gimp) echo "[App] GIMP - image editor";;
     image-view) echo "[App] image-view - terminal image viewer";;
     isoforge) echo "[App] Isoforge - ISO burner";;
     nemo) echo "[App] Nemo - file manager";;
@@ -2441,7 +2555,7 @@ is_installed_tool() {
     gimp) command -v gimp >/dev/null 2>&1;;
     nemo) command -v nemo >/dev/null 2>&1;;
     rustdesk) command -v rustdesk >/dev/null 2>&1 || { command -v flatpak >/dev/null 2>&1 && flatpak list 2>/dev/null | grep -q "com.rustdesk.RustDesk"; };;
-    *) return 1;;
+    *) is_package_tool "$1" && package_tool_installed "$1";;
   esac
 }
 
@@ -2499,37 +2613,52 @@ is_default_selected_tool() {
   return 1
 }
 
-TOOL_CATALOG=(
-  # ── Shell & CLI ──
-  bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh
-  # ── Editors & Terminal ──
-  mc meld micro neovim screen tmux vscode
-  # ── System & Monitoring ──
-  bandwhich cron duf htop lm-sensors ncdu pciutils usbutils
-  # ── Networking ──
-  bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget
-  # ── Backup & Storage ──
-  borgbackup duplicity fdupes lz4 tar unzip
-  # ── Development ──
-  bfg build-tools composer delta gh git git-lantern git-lfs lazygit tokei
-  # ── AI tools ──
-  aider ai-runner antigravity claude-code codex copilot cursor gemini kiro ollama
-  # ── Languages & Runtimes ──
-  go java node php ruby rust
-  # ── DevOps & Containers ──
-  ansible docker k9s lazydocker podman
-  # ── Utilities ──
-  adb dialog flatpak nala ntfs wine
-  # ── Databases ──
-  atlas mongodb
-  # ── Apps ──
-  gimp image-view isoforge nemo rustdesk streamcontroller
+# Categories: "id|label|tools". Single source of truth: the category menu,
+# the checklists, --category, --all, --tools validation and --list-catalog all
+# read it, and TOOL_CATALOG is derived from it. Order defines display order.
+TOOL_CATEGORIES=(
+  "shell|Shell & CLI|bat eza fd fzf glow jq ripgrep tldr tree yq zoxide zsh"
+  "editors|Editors & Terminal|mc meld micro neovim screen tmux"
+  "system|System & Monitoring|bandwhich cron duf htop lm-sensors ncdu pciutils usbutils"
+  "network|Networking|bind-tools curl iperf3 mtr net-tools nmap tcpdump tor traceroute ufw wget"
+  "backup|Backup & Storage|borgbackup duplicity fdupes lz4 tar unzip"
+  "dev|Development|bfg build-tools composer delta gh git git-lantern git-lfs lazygit tokei"
+  "ai|AI tools|aider ai-runner claude-code codex copilot gemini ollama"
+  "ides|IDEs|antigravity cursor intellij-idea-community kiro pycharm-community vscode zed"
+  "lang|Languages & Runtimes|go java node php ruby rust"
+  "devops|DevOps & Containers|ansible docker k9s lazydocker podman"
+  "media|Media|audacity ffmpeg handbrake kdenlive mpv obs-studio vlc"
+  "graphics|Graphics|blender darktable gimp inkscape krita"
+  "util|Utilities|adb dialog flatpak nala ntfs wine"
+  "db|Databases|atlas mongodb"
+  "apps|Apps|image-view isoforge nemo rustdesk streamcontroller"
 )
+
+# Print field $2 (1=id, 2=label, 3=tools) of category $1; return 1 if unknown.
+category_field() {
+  local id="$1" field="$2" entry
+  for entry in "${TOOL_CATEGORIES[@]}"; do
+    if [[ "${entry%%|*}" == "$id" ]]; then
+      cut -d'|' -f"$field" <<< "$entry"
+      return 0
+    fi
+  done
+  return 1
+}
+
+TOOL_CATALOG=()
+for _category in "${TOOL_CATEGORIES[@]}"; do
+  read -r -a _category_tools <<< "${_category##*|}"
+  TOOL_CATALOG+=("${_category_tools[@]}")
+done
+unset _category _category_tools
 
 # Tools whose installers fetch and execute upstream scripts. They are held out
 # of --all unless DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true, but an explicit
 # --tools request counts as consent and installs them.
-OPT_IN_TOOLS=(aider antigravity atlas claude-code codex copilot cursor gemini kiro ollama)
+# Also held out: every IDE and the databases, which only install when chosen.
+OPT_IN_TOOLS=(aider antigravity atlas claude-code codex copilot cursor gemini
+  intellij-idea-community kiro mongodb ollama pycharm-community vscode zed)
 
 # Return 0 when $1 is a known catalog tool.
 is_catalog_tool() {
@@ -2578,7 +2707,16 @@ Options:
                         DISTRODECK_JAVA_VERSION sets the same default; an
                         invalid flag exits 2, an invalid variable fails
                         only the java tool.
+  --category IDS        Install the default-on tools of these categories
+                        (comma separated), one category block at a time.
+                        Opt-in tools are never included; name them with
+                        --tools. Repeatable.
   --list-tools          Print the tool catalog, one per line, and exit.
+  --list-categories     Print "id<TAB>label" per category and exit.
+  --list-catalog --format tsv
+                        Print one line per tool and exit:
+                        category_id, category_label, tool, label,
+                        opt_in (0|1), installed (0|1), tab separated.
   -h, --help            Show this help and exit.
 
 Exit codes:
@@ -2616,159 +2754,23 @@ collect_tools_file() {
   done < <(if [[ "$path" == "-" ]]; then cat; else cat "$path"; fi)
 }
 
-main() {
-
-  local selected=""
-  local all=false
-  local reconcile=false
-  local java_flag=false
-  local requested=()
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --all) all=true;;
-      --tools)
-        [[ $# -ge 2 ]] || { log_error "--tools requires a value."; usage; exit 2; }
-        collect_tools "$2" requested
-        shift
-        ;;
-      --tools=*) collect_tools "${1#*=}" requested;;
-      --tools-file)
-        [[ $# -ge 2 ]] || { log_error "--tools-file requires a path."; usage; exit 2; }
-        collect_tools_file "$2" requested || exit 2
-        shift
-        ;;
-      --tools-file=*) collect_tools_file "${1#*=}" requested || exit 2;;
-      --reconcile) reconcile=true;;
-      --java-version)
-        [[ $# -ge 2 ]] || { log_error "--java-version requires a value."; usage; exit 2; }
-        JAVA_VERSION="$2"
-        java_flag=true
-        shift
-        ;;
-      --java-version=*) JAVA_VERSION="${1#*=}"; java_flag=true;;
-      --list-tools)
-        printf '%s\n' "${TOOL_CATALOG[@]}"
-        exit 0
-        ;;
-      -h|--help) usage; exit 0;;
-      *) log_error "Unknown option: $1"; usage; exit 2;;
-    esac
-    shift
-  done
-
-  # A bad --java-version flag is a usage error and exits 2 whatever is selected.
-  # A bad DISTRODECK_JAVA_VERSION only fails the java tool, in install_java,
-  # so a stale environment does not block installing anything else.
-  if $java_flag && ! is_supported_java_version "$JAVA_VERSION"; then
-    log_error "Unsupported Java version '$JAVA_VERSION'; choose one of: $JAVA_SUPPORTED_VERSIONS."
-    exit 2
-  fi
-
-  # Validate the requested set before touching the system, so a typo cannot
-  # half-install a machine.
-  if [[ ${#requested[@]} -gt 0 ]]; then
-    if $all; then
-      log_error "--all cannot be combined with --tools/--tools-file."
-      exit 2
-    fi
-    local unknown=() tool
-    for tool in "${requested[@]}"; do
-      is_catalog_tool "$tool" || unknown+=("$tool")
-    done
-    if [[ ${#unknown[@]} -gt 0 ]]; then
-      log_error "Unknown tool(s): ${unknown[*]}"
-      log_error "Run with --list-tools to see the catalog."
-      exit 2
-    fi
-  elif $reconcile; then
-    log_error "--reconcile only applies to --tools/--tools-file runs."
-    exit 2
-  fi
-  # Informational and validation-only modes above deliberately work without a
-  # package manager. Detect one only once an install or TUI run is required.
-  local mgr
-  mgr="$(detect_pkg_mgr)"
-  if [[ "$mgr" == "unknown" ]]; then
-    log_error "No supported package manager found."
-    exit 1
-  fi
-
-
-  # Load previously tracked tools (installed via distrodeck)
-  declare -A tracked=()
-  load_tracked_tools tracked
-
-  declare -A installed=()
-  local tools=("${TOOL_CATALOG[@]}")
-
-  for tool in "${tools[@]}"; do
-    if is_installed_tool "$tool"; then
-      installed["$tool"]="true"
-    else
-      installed["$tool"]="false"
-    fi
-  done
-  if [[ ${#requested[@]} -gt 0 ]]; then
-    selected="${requested[*]}"
-    # Naming a tool explicitly is consent to install it, opt-in or not; but its
-    # installer must not block on prompts when there is no terminal attached.
-    if [[ ! -t 0 ]]; then
-      export DISTRODECK_NONINTERACTIVE=true
-    fi
-  elif ! $all; then
-    ensure_dialog
-    dialog_init
-    dialog --stdout --title "Distrodeck Installer" \
-      --infobox "Checking installed tools..." "$DIALOG_HEIGHT" "$DIALOG_WIDTH"
-    dialog --clear
-
-    local items=()
-    for tool in "${tools[@]}"; do
-      local desc status
-      desc="$(tool_desc "$tool")"
-      status="off"
-      if [[ "${installed[$tool]}" == "true" ]]; then
-        desc+=" (installed)"
-        status="on"
-      elif is_default_selected_tool "$tool" && [[ ! -f "$INSTALLED_TOOLS_FILE" ]]; then
-        # Preselected only before distrodeck has tracked anything, so a tool
-        # the user unchecked and removed is not offered back every run.
-        status="on"
-      fi
-      items+=("$tool" "$desc" "$status")
-    done
-    local list_height=$((DIALOG_HEIGHT - 8))
-    (( list_height < 10 )) && list_height=10
-    selected=$(dialog --stdout --title "Distrodeck Installer" \
-      --scrollbar \
-      --checklist "Select tools to install/keep:" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" \
-      "${items[@]}") || true  # User may cancel/escape
-    # Clear the screen after dialog closes before showing installation output
-    clear
-  else
-    # Derived from the catalog so a new tool is never silently missing here.
-    selected="$(default_all_selection)"
-    opt_in_tools="${OPT_IN_TOOLS[*]}"
-    include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
-    if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
-      unset DISTRODECK_NONINTERACTIVE
-      selected+=" ${opt_in_tools}"
-    else
-      export DISTRODECK_NONINTERACTIVE=true
-      if [[ "$include_opt_in_tools" == "true" ]]; then
-        log_warn "Skipping opt-in tools in --all mode because no interactive terminal is available."
-      fi
-    fi
-  fi
-
-  # Build set of selected tools
+# Install the selected tools in scope and offer to remove unchecked tracked
+# ones. Reads main's locals (bash scoping is dynamic): selected, tools,
+# installed, tracked, requested, reconcile, all, mgr, tui. Returns 1 on any
+# failure.
+process_selection() {
+  # Build set of selected tools, keeping the order they were given in, so a
+  # block installs in catalog order rather than hash order.
   declare -A selected_set=()
+  local ordered=() choice
   if [[ -n "$selected" ]]; then
+    local choices_arr=()
     IFS=' ' read -r -a choices_arr <<< "$selected"
     for choice in "${choices_arr[@]}"; do
       choice="${choice//\"/}"
+      [[ -z "$choice" || -n "${selected_set[$choice]:-}" ]] && continue
       selected_set["$choice"]="true"
+      ordered+=("$choice")
     done
   fi
 
@@ -2791,7 +2793,7 @@ main() {
   if [[ ${#to_uninstall[@]} -gt 0 ]] && [[ ${#requested[@]} -gt 0 ]] && $reconcile; then
     log_info "Reconciling: uninstalling ${#to_uninstall[@]} tracked tool(s) not in the requested set."
     do_uninstall=true
-  elif [[ ${#to_uninstall[@]} -gt 0 ]] && ! $all && [[ ${#requested[@]} -eq 0 ]]; then
+  elif [[ ${#to_uninstall[@]} -gt 0 ]] && $tui; then
     local uninstall_list=""
     for tool in "${to_uninstall[@]}"; do
       uninstall_list+="  - $(tool_desc "$tool")\n"
@@ -2805,10 +2807,10 @@ main() {
     clear
   fi
 
-  # If no selections and no uninstalls, exit
+  # If no selections and no uninstalls, there is nothing to do.
   if [[ -z "$selected" ]] && [[ "$do_uninstall" != "true" ]]; then
     log_warn "No selections made."
-    exit 0
+    return 0
   fi
 
   # Track installation/uninstallation results
@@ -2819,7 +2821,7 @@ main() {
   local already_installed=()
 
   # Install selected tools
-  for choice in "${!selected_set[@]}"; do
+  for choice in "${ordered[@]}"; do
     if [[ "${installed[$choice]:-}" == "true" ]]; then
       log_info "Already installed: $choice"
       # Track it if not already tracked
@@ -2935,6 +2937,8 @@ main() {
       gimp) install_gimp "$mgr";;
       nemo) install_pkg_simple "$mgr" nemo;;
       rustdesk) install_rustdesk "$mgr";;
+      audacity|blender|darktable|ffmpeg|handbrake|inkscape|intellij-idea-community|kdenlive|krita|mpv|obs-studio|pycharm-community|vlc|zed)
+        install_package_tool "$choice" "$mgr";;
       *) log_error "No installer is wired for $choice."; false;;
     esac
     ); then
@@ -3050,6 +3054,8 @@ main() {
         gimp) uninstall_gimp "$mgr";;
         nemo) uninstall_pkg_simple "$mgr" nemo;;
         rustdesk) uninstall_rustdesk "$mgr";;
+        audacity|blender|darktable|ffmpeg|handbrake|inkscape|intellij-idea-community|kdenlive|krita|mpv|obs-studio|pycharm-community|vlc|zed)
+          uninstall_package_tool "$tool" "$mgr";;
         *) log_error "No uninstaller is wired for $tool."; false;;
       esac
       ); then
@@ -3131,7 +3137,7 @@ main() {
   # Show results in dialog (TUI mode) or log (non-TUI mode)
   # Only the checklist run opened dialog (and set DIALOG_HEIGHT); --tools and
   # --all print the summary, which also keeps them usable without a terminal.
-  if ! $all && [[ ${#requested[@]} -eq 0 ]] && command -v dialog >/dev/null 2>&1; then
+  if $tui; then
     dialog --stdout --title "$title" --msgbox "$summary" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" || true
     clear
   else
@@ -3144,6 +3150,294 @@ main() {
   if [[ ${#failed_installs[@]} -gt 0 ]] || [[ ${#failed_uninstalls[@]} -gt 0 ]]; then
     return 1
   fi
+}
+
+# Print the catalog for scripts: one tab-separated line per tool,
+#   category_id  category_label  tool  label  opt_in(0|1)  installed(0|1)
+# No colour, no dialog, no root. The column order is a contract (NikOS parses
+# it; tests/test_install_tools_args.sh pins it): only ever append columns.
+print_catalog_tsv() {
+  local entry id label tools tool desc opt inst
+  for entry in "${TOOL_CATEGORIES[@]}"; do
+    id="${entry%%|*}"
+    label="$(cut -d'|' -f2 <<< "$entry")"
+    read -r -a tools <<< "${entry##*|}"
+    for tool in "${tools[@]}"; do
+      desc="$(tool_desc "$tool")"
+      desc="${desc#\[*\] }"
+      desc="${desc//$'\t'/ }"
+      opt=0; is_opt_in_tool "$tool" && opt=1
+      inst=0; is_installed_tool "$tool" >/dev/null 2>&1 && inst=1
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$label" "$tool" "$desc" "$opt" "$inst"
+    done
+  done
+}
+
+# Run the checklist for one category; returns process_selection's status.
+run_category_block() {
+  local category="$1" label tool
+  label="$(category_field "$category" 2)"
+  read -r -a tools <<< "$(category_field "$category" 3)"
+  for tool in "${tools[@]}"; do
+    if is_installed_tool "$tool"; then installed["$tool"]="true"; else installed["$tool"]="false"; fi
+  done
+  local items=() desc status
+  for tool in "${tools[@]}"; do
+    desc="$(tool_desc "$tool")"
+    status="off"
+    if [[ "${installed[$tool]}" == "true" ]]; then
+      desc+=" (installed)"
+      status="on"
+    elif is_default_selected_tool "$tool" && [[ ! -f "$INSTALLED_TOOLS_FILE" ]]; then
+      # Preselected only before distrodeck has tracked anything, so a tool
+      # the user unchecked and removed is not offered back every run.
+      status="on"
+    fi
+    is_opt_in_tool "$tool" && desc+=" [opt-in]"
+    items+=("$tool" "$desc" "$status")
+  done
+  local list_height=$((DIALOG_HEIGHT - 8))
+  (( list_height < 10 )) && list_height=10
+  if ! selected=$(dialog --stdout --title "$label" --scrollbar \
+      --checklist "Checked tools are installed or kept; unchecking an installed tool offers to remove it:" \
+      "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$list_height" "${items[@]}"); then
+    clear
+    return 0  # Cancel/Esc returns to the category menu without changes.
+  fi
+  clear
+  process_selection
+}
+
+# Category menu: open one category, install that block, come back. Quit ends.
+run_category_menu() {
+  local status=0 choice entry id label total count tool menu_items cat_tools
+  while true; do
+    menu_items=()
+    for entry in "${TOOL_CATEGORIES[@]}"; do
+      id="${entry%%|*}"
+      label="$(cut -d'|' -f2 <<< "$entry")"
+      read -r -a cat_tools <<< "${entry##*|}"
+      total=${#cat_tools[@]}; count=0
+      for tool in "${cat_tools[@]}"; do
+        is_installed_tool "$tool" && count=$((count + 1))
+      done
+      menu_items+=("$id" "$label ($count/$total installed)")
+    done
+    choice=$(dialog --stdout --title "Distrodeck Installer" --cancel-label "Quit" \
+      --menu "Pick a category. Each one is installed as its own block." \
+      "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$((DIALOG_HEIGHT - 8))" "${menu_items[@]}") || break
+    clear
+    run_category_block "$choice" || status=1
+  done
+  clear
+  return "$status"
+}
+
+main() {
+
+  local selected=""
+  local all=false
+  local reconcile=false
+  local java_flag=false
+  local tui=false
+  local list_catalog=false
+  local format=""
+  local categories=()
+  local requested=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all) all=true;;
+      --tools)
+        [[ $# -ge 2 ]] || { log_error "--tools requires a value."; usage; exit 2; }
+        collect_tools "$2" requested
+        shift
+        ;;
+      --tools=*) collect_tools "${1#*=}" requested;;
+      --tools-file)
+        [[ $# -ge 2 ]] || { log_error "--tools-file requires a path."; usage; exit 2; }
+        collect_tools_file "$2" requested || exit 2
+        shift
+        ;;
+      --tools-file=*) collect_tools_file "${1#*=}" requested || exit 2;;
+      --reconcile) reconcile=true;;
+      --java-version)
+        [[ $# -ge 2 ]] || { log_error "--java-version requires a value."; usage; exit 2; }
+        JAVA_VERSION="$2"
+        java_flag=true
+        shift
+        ;;
+      --java-version=*) JAVA_VERSION="${1#*=}"; java_flag=true;;
+      --list-tools)
+        printf '%s\n' "${TOOL_CATALOG[@]}"
+        exit 0
+        ;;
+      --list-categories)
+        local entry
+        for entry in "${TOOL_CATEGORIES[@]}"; do
+          printf '%s\t%s\n' "${entry%%|*}" "$(cut -d'|' -f2 <<< "$entry")"
+        done
+        exit 0
+        ;;
+      --list-catalog) list_catalog=true;;
+      --format)
+        [[ $# -ge 2 ]] || { log_error "--format requires a value."; usage; exit 2; }
+        format="$2"
+        shift
+        ;;
+      --format=*) format="${1#*=}";;
+      --category)
+        [[ $# -ge 2 ]] || { log_error "--category requires a value."; usage; exit 2; }
+        collect_tools "$2" categories
+        shift
+        ;;
+      --category=*) collect_tools "${1#*=}" categories;;
+      -h|--help) usage; exit 0;;
+      *) log_error "Unknown option: $1"; usage; exit 2;;
+    esac
+    shift
+  done
+
+  if $list_catalog; then
+    if [[ "$format" != "tsv" ]]; then
+      log_error "--list-catalog needs --format tsv."
+      exit 2
+    fi
+    print_catalog_tsv
+    exit 0
+  elif [[ -n "$format" ]]; then
+    log_error "--format only applies to --list-catalog."
+    exit 2
+  fi
+
+  # --category installs the default-on tools of each named category, one
+  # block per category, in the order given. Opt-in tools need --tools.
+  if [[ ${#categories[@]} -gt 0 ]]; then
+    if $all || [[ ${#requested[@]} -gt 0 ]] || $reconcile; then
+      log_error "--category cannot be combined with --all, --tools, --tools-file or --reconcile."
+      exit 2
+    fi
+    local category bad_categories=()
+    for category in "${categories[@]}"; do
+      category_field "$category" 1 >/dev/null || bad_categories+=("$category")
+    done
+    if [[ ${#bad_categories[@]} -gt 0 ]]; then
+      log_error "Unknown category: ${bad_categories[*]}"
+      log_error "Run with --list-categories to see them."
+      exit 2
+    fi
+  fi
+
+  # A bad --java-version flag is a usage error and exits 2 whatever is selected.
+  # A bad DISTRODECK_JAVA_VERSION only fails the java tool, in install_java,
+  # so a stale environment does not block installing anything else.
+  if $java_flag && ! is_supported_java_version "$JAVA_VERSION"; then
+    log_error "Unsupported Java version '$JAVA_VERSION'; choose one of: $JAVA_SUPPORTED_VERSIONS."
+    exit 2
+  fi
+
+  # Validate the requested set before touching the system, so a typo cannot
+  # half-install a machine.
+  if [[ ${#requested[@]} -gt 0 ]]; then
+    if $all; then
+      log_error "--all cannot be combined with --tools/--tools-file."
+      exit 2
+    fi
+    local unknown=() tool
+    for tool in "${requested[@]}"; do
+      is_catalog_tool "$tool" || unknown+=("$tool")
+    done
+    if [[ ${#unknown[@]} -gt 0 ]]; then
+      log_error "Unknown tool(s): ${unknown[*]}"
+      log_error "Run with --list-tools to see the catalog."
+      exit 2
+    fi
+  elif $reconcile; then
+    log_error "--reconcile only applies to --tools/--tools-file runs."
+    exit 2
+  fi
+  # Informational and validation-only modes above deliberately work without a
+  # package manager. Detect one only once an install or TUI run is required.
+  local mgr
+  mgr="$(detect_pkg_mgr)"
+  if [[ "$mgr" == "unknown" ]]; then
+    log_error "No supported package manager found."
+    exit 1
+  fi
+
+
+  # Load previously tracked tools (installed via distrodeck)
+  declare -A tracked=()
+  load_tracked_tools tracked
+
+  declare -A installed=()
+  local tools=()
+
+  if [[ ${#categories[@]} -gt 0 ]]; then
+    [[ -t 0 ]] || export DISTRODECK_NONINTERACTIVE=true
+    local block_status=0 skipped
+    for category in "${categories[@]}"; do
+      read -r -a tools <<< "$(category_field "$category" 3)"
+      selected=""; skipped=""
+      for tool in "${tools[@]}"; do
+        if is_opt_in_tool "$tool"; then skipped+=" $tool"; else selected+=" $tool"; fi
+        if is_installed_tool "$tool"; then installed["$tool"]="true"; else installed["$tool"]="false"; fi
+      done
+      selected="${selected# }"
+      log_info "== Category: $(category_field "$category" 2) =="
+      [[ -n "$skipped" ]] && log_info "Opt-in, install with --tools:${skipped}"
+      if [[ -z "$selected" ]]; then
+        log_warn "Category $category has only opt-in tools; name them with --tools."
+        continue
+      fi
+      # A request, so this block never considers uninstalling anything.
+      read -r -a requested <<< "$selected"
+      process_selection || block_status=1
+    done
+    return "$block_status"
+  fi
+
+  if [[ ${#requested[@]} -eq 0 ]] && ! $all; then
+    # Interactive: the category menu, one block at a time.
+    tui=true
+    ensure_dialog
+    dialog_init
+    run_category_menu
+    return
+  fi
+
+  tools=("${TOOL_CATALOG[@]}")
+  for tool in "${tools[@]}"; do
+    if is_installed_tool "$tool"; then
+      installed["$tool"]="true"
+    else
+      installed["$tool"]="false"
+    fi
+  done
+  if [[ ${#requested[@]} -gt 0 ]]; then
+    selected="${requested[*]}"
+    # Naming a tool explicitly is consent to install it, opt-in or not; but its
+    # installer must not block on prompts when there is no terminal attached.
+    if [[ ! -t 0 ]]; then
+      export DISTRODECK_NONINTERACTIVE=true
+    fi
+  else
+    # Derived from the catalog so a new tool is never silently missing here.
+    selected="$(default_all_selection)"
+    opt_in_tools="${OPT_IN_TOOLS[*]}"
+    include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
+    if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
+      unset DISTRODECK_NONINTERACTIVE
+      selected+=" ${opt_in_tools}"
+    else
+      export DISTRODECK_NONINTERACTIVE=true
+      if [[ "$include_opt_in_tools" == "true" ]]; then
+        log_warn "Skipping opt-in tools in --all mode because no interactive terminal is available."
+      fi
+    fi
+  fi
+
+  process_selection
 }
 
 # Allow tests to source this file and exercise individual helpers without

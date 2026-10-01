@@ -5763,6 +5763,13 @@ def run_install_tools(args: argparse.Namespace) -> None:
     cmd = [str(script)]
     if getattr(args, "list_tools", False):
         cmd.append("--list-tools")
+    elif getattr(args, "list_categories", False):
+        cmd.append("--list-categories")
+    elif getattr(args, "list_catalog", False):
+        cmd.extend(["--list-catalog", "--format", args.format])
+    elif getattr(args, "category", None):
+        for value in args.category:
+            cmd.extend(["--category", value])
     elif args.all:
         cmd.append("--all")
     else:
@@ -5774,10 +5781,22 @@ def run_install_tools(args: argparse.Namespace) -> None:
         if getattr(args, "reconcile", False):
             cmd.append("--reconcile")
     java_version = getattr(args, "java_version", None)
-    if java_version and not getattr(args, "list_tools", False):
+    listing = any(getattr(args, name, False) for name in ("list_tools", "list_categories", "list_catalog"))
+    if java_version and not listing:
         cmd.extend(["--java-version", java_version])
     # Use check=False to allow partial failures (script reports them)
     result = run(cmd, check=False)
+    if listing:
+        # Machine-readable output: add nothing to stdout, pass the exit code
+        # through, and stay quiet when the reader closes the pipe early.
+        try:
+            sys.stdout.flush()
+        except BrokenPipeError:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        log_action_end("install-tools")
+        # The script dies of SIGPIPE when the reader stops early (| head):
+        # that is a normal end for a listing, not a failure.
+        sys.exit(0 if result.returncode == -signal.SIGPIPE else result.returncode)
     if result.returncode == 2:
         # Usage error (unknown tool/option): propagate so callers can tell a
         # bad request apart from a partially failed install.
@@ -7553,6 +7572,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--java-version",
         choices=["17", "21", "25"],
         help="JDK major installed by the java tool (default 21)",
+    )
+    install_cmd.add_argument(
+        "--category",
+        action="append",
+        metavar="IDS",
+        help="Install the default-on tools of these categories, one block each (repeatable)",
+    )
+    install_cmd.add_argument(
+        "--list-categories",
+        action="store_true",
+        help="Print category ids and labels and exit",
+    )
+    install_cmd.add_argument(
+        "--list-catalog",
+        action="store_true",
+        help="Print the catalog for scripts (needs --format tsv) and exit",
+    )
+    install_cmd.add_argument(
+        "--format",
+        choices=["tsv"],
+        default="tsv",
+        help="Output format for --list-catalog",
     )
     install_cmd.add_argument(
         "--list-tools",

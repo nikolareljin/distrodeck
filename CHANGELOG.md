@@ -6,6 +6,17 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- **install-tools works by category.** The TUI opens a category menu; each
+  category opens its own checklist, installs that block and returns to the
+  menu. `--category IDS` does the same without the TUI (default-on tools only),
+  `--list-categories` prints the ids, and `--list-catalog --format tsv` prints
+  `category_id, category_label, tool, label, opt_in, installed` per tool for
+  scripts. One `TOOL_CATEGORIES` table drives all of it.
+- **New categories:** IDEs (antigravity, cursor, kiro and vscode moved here,
+  plus zed, intellij-idea-community, pycharm-community; all opt-in), Media (vlc,
+  mpv, ffmpeg, obs-studio, audacity, kdenlive, handbrake) and Graphics (gimp
+  moved here, plus inkscape, krita, blender, darktable). Distro package where
+  one exists, Flathub Flatpak otherwise.
 - `git dhelp` tests now render the alias under dash, bash in POSIX mode (macOS
   `/bin/sh`) and zsh sh-emulation when present, on a pty and piped, with and
   without `NO_COLOR`.
@@ -370,6 +381,9 @@ This project follows Keep a Changelog and Semantic Versioning.
   own directory, are detected, and uninstall removes the checkout (a directory
   without `.git` is left alone). Before, unchecking either reported a
   successful uninstall without doing anything; an unwired tool now fails.
+- `mongodb` is opt-in like `atlas`: never preselected, not in `--all`.
+- `vscode` is opt-in with the other IDEs and no longer part of `--all`.
+- Tools in a block install in catalog order, not hash order.
 - `git-lantern` and `ai-runner` are preselected on a first run and part of
   `--all`; `ai-runner` is no longer opt-in (it is a git clone, no script runs).
 - `reclaim` no longer offers a `build/` (or any artifact name) inside a Python
