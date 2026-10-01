@@ -6,6 +6,9 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- **`install-tools --java-version 17|21|25`** (or `DISTRODECK_JAVA_VERSION`).
+  The `java` tool now installs OpenJDK 21 by default on every package manager;
+  it was `default-jdk` on apt and 17 on dnf and zypper.
 - **`distrodeck ollama models list|pull|remove <group>`.** Six groups
   (default, reasoning, coding, text, vision, embedding) of current Ollama models
   in one table; every tag checked against ollama.com/library. Without the

@@ -172,7 +172,7 @@ The `install-tools` command offers tools organized by category:
 | `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
 | `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
 | `[AI]` | aider, antigravity, codex, copilot, claude-code, gemini, ollama, cursor, kiro |
-| `[Lang]` | go, java, node (24 LTS + nvm), php, ruby, rust |
+| `[Lang]` | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
 | `[DB]` | mongodb (server + mongosh), atlas (Atlas CLI, opt-in) |

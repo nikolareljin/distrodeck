@@ -112,6 +112,9 @@ assert_contains "$file_output" "definitely-not-a-tool" "tools file rejection nam
 assert_not_contains "$file_output" "a comment" "comments are stripped from tools files"
 rm -f "$tools_file"
 
+assert_exit 2 "--java-version rejects 11" "$INSTALLER" --java-version 11 --tools java
+assert_exit 2 "DISTRODECK_JAVA_VERSION rejects 8" env DISTRODECK_JAVA_VERSION=8 "$INSTALLER" --tools java
+
 # ── Helper functions (sourced, installer not run) ────────────────────────────
 
 # shellcheck source=/dev/null
@@ -262,6 +265,33 @@ if is_opt_in_tool atlas && ! is_opt_in_tool mongodb; then
   pass "atlas is opt-in, mongodb is in --all"
 else
   fail "atlas is opt-in, mongodb is in --all"
+fi
+
+# ── Java version choice ──────────────────────────────────────────────────────
+
+assert_contains "$(java_package apt 21)" "openjdk-21-jdk" "java 21 on apt"
+assert_contains "$(java_package dnf 25)" "java-25-openjdk-devel" "java 25 on dnf"
+assert_contains "$(java_package zypper 17)" "java-17-openjdk-devel" "java 17 on zypper"
+assert_contains "$(java_package pacman 21)" "jdk21-openjdk" "java 21 on pacman"
+[[ "$JAVA_VERSION" == "21" ]] && pass "java defaults to 21" || fail "java defaults to 21" "$JAVA_VERSION"
+java_tmp="$(mktemp -d)"
+java_out="$(
+  JAVA_STATE_FILE="$java_tmp/java-version"
+  STATE_DIR="$java_tmp"
+  JAVA_VERSION=25
+  install_pkg() { echo "install $*"; }
+  uninstall_pkg() { echo "remove $*"; }
+  install_java apt
+  JAVA_VERSION=17
+  uninstall_java apt
+)"
+assert_contains "$java_out" "install apt openjdk-25-jdk" "install_java honours JAVA_VERSION"
+assert_contains "$java_out" "remove apt openjdk-25-jdk" "uninstall_java removes the JDK it installed"
+rm -rf "$java_tmp"
+if (JAVA_VERSION=11; install_java apt >/dev/null 2>&1); then
+  fail "install_java refuses an unsupported version"
+else
+  pass "install_java refuses an unsupported version"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────

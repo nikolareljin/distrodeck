@@ -250,18 +250,20 @@ options:
 .nf
 usage: distrodeck install-tools [-h] [--all] [--tools LIST]
                                 [--tools-file PATH] [--reconcile]
-                                [--list-tools]
+                                [--java-version {17,21,25}] [--list-tools]
 
 options:
-  -h, --help         show this help message and exit
-  --all              Install all tools without showing the TUI
-  --tools LIST       Install only these tools without showing the TUI (comma
-                     or space separated; repeatable)
-  --tools-file PATH  Install only the tools listed in PATH, one per line ('-'
-                     for stdin)
-  --reconcile        With --tools, also uninstall tracked tools outside the
-                     requested set
-  --list-tools       Print the tool catalog and exit
+  -h, --help            show this help message and exit
+  --all                 Install all tools without showing the TUI
+  --tools LIST          Install only these tools without showing the TUI
+                        (comma or space separated; repeatable)
+  --tools-file PATH     Install only the tools listed in PATH, one per line
+                        ('-' for stdin)
+  --reconcile           With --tools, also uninstall tracked tools outside the
+                        requested set
+  --java-version {17,21,25}
+                        JDK major installed by the java tool (default 21)
+  --list-tools          Print the tool catalog and exit
 .fi
 .SS git-status
 .nf

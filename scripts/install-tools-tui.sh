@@ -672,15 +672,43 @@ install_lazydocker() {
   log_warn "Failed to install lazydocker from repos."
 }
 
-install_java() {
-  local mgr="$1"
+# JDK major installed by the `java` tool: 17, 21 (default) or 25.
+# Set with --java-version or DISTRODECK_JAVA_VERSION.
+JAVA_VERSION="${DISTRODECK_JAVA_VERSION:-21}"
+JAVA_SUPPORTED_VERSIONS="17 21 25"
+JAVA_STATE_FILE="$STATE_DIR/java-version"
+
+is_supported_java_version() {
+  [[ " $JAVA_SUPPORTED_VERSIONS " == *" $1 "* ]]
+}
+
+# Print the JDK package for manager $1 and major $2.
+java_package() {
+  local mgr="$1" version="$2"
   case "$mgr" in
-    apt) install_pkg "$mgr" default-jdk;;
-    dnf) install_pkg "$mgr" java-17-openjdk-devel;;
-    pacman) install_pkg "$mgr" jdk-openjdk;;
-    zypper) install_pkg "$mgr" java-17-openjdk;;
-    *) log_warn "Java install not supported for this distro.";;
+    apt) echo "openjdk-${version}-jdk";;
+    dnf|zypper) echo "java-${version}-openjdk-devel";;
+    pacman) echo "jdk${version}-openjdk";;
+    *) return 1;;
   esac
+}
+
+install_java() {
+  local mgr="$1" pkg
+  if ! is_supported_java_version "$JAVA_VERSION"; then
+    log_warn "Unsupported Java version '$JAVA_VERSION'; choose one of: $JAVA_SUPPORTED_VERSIONS."
+    return 1
+  fi
+  if ! pkg="$(java_package "$mgr" "$JAVA_VERSION")"; then
+    log_warn "Java install not supported for this distro."
+    return 1
+  fi
+  if ! install_pkg "$mgr" "$pkg"; then
+    log_warn "Failed to install $pkg; this release may not package JDK $JAVA_VERSION. Try --java-version with one of: $JAVA_SUPPORTED_VERSIONS."
+    return 1
+  fi
+  ensure_state_dir
+  echo "$JAVA_VERSION" > "$JAVA_STATE_FILE"
 }
 
 install_rust() {
@@ -1837,14 +1865,15 @@ uninstall_node() {
 }
 
 uninstall_java() {
-  local mgr="$1"
-  case "$mgr" in
-    apt) uninstall_pkg "$mgr" default-jdk;;
-    dnf) uninstall_pkg "$mgr" java-17-openjdk-devel;;
-    pacman) uninstall_pkg "$mgr" jdk-openjdk;;
-    zypper) uninstall_pkg "$mgr" java-17-openjdk;;
-    *) log_warn "Java uninstall not supported for this distro.";;
-  esac
+  local mgr="$1" version pkg
+  # Remove the JDK distrodeck installed, not whatever version is configured now.
+  version="$(cat "$JAVA_STATE_FILE" 2>/dev/null || echo "$JAVA_VERSION")"
+  if ! pkg="$(java_package "$mgr" "$version")"; then
+    log_warn "Java uninstall not supported for this distro."
+    return 1
+  fi
+  uninstall_pkg "$mgr" "$pkg" || return 1
+  rm -f "$JAVA_STATE_FILE"
 }
 
 uninstall_rust() {
@@ -2256,7 +2285,7 @@ tool_desc() {
     ollama) echo "[AI] Ollama local models";;
     # ── Languages & Runtimes ──
     go) echo "[Lang] Go";;
-    java) echo "[Lang] Java (JDK)";;
+    java) echo "[Lang] Java JDK ${JAVA_VERSION} (17/21/25)";;
     node) echo "[Lang] Node.js 24 LTS + nvm (24/22 switchable)";;
     php) echo "[Lang] PHP";;
     ruby) echo "[Lang] Ruby";;
@@ -2489,6 +2518,8 @@ Options:
   --reconcile           In --tools mode, also uninstall previously tracked
                         tools that are not in the requested set. Off by
                         default: unlisted tools are left alone.
+  --java-version N      JDK major for the java tool: 17, 21 (default) or 25.
+                        DISTRODECK_JAVA_VERSION sets the same default.
   --list-tools          Print the tool catalog, one per line, and exit.
   -h, --help            Show this help and exit.
 
@@ -2550,6 +2581,12 @@ main() {
         ;;
       --tools-file=*) collect_tools_file "${1#*=}" requested || exit 2;;
       --reconcile) reconcile=true;;
+      --java-version)
+        [[ $# -ge 2 ]] || { log_error "--java-version requires a value."; usage; exit 2; }
+        JAVA_VERSION="$2"
+        shift
+        ;;
+      --java-version=*) JAVA_VERSION="${1#*=}";;
       --list-tools)
         printf '%s\n' "${TOOL_CATALOG[@]}"
         exit 0
@@ -2559,6 +2596,11 @@ main() {
     esac
     shift
   done
+
+  if ! is_supported_java_version "$JAVA_VERSION"; then
+    log_error "Unsupported Java version '$JAVA_VERSION'; choose one of: $JAVA_SUPPORTED_VERSIONS."
+    exit 2
+  fi
 
   # Validate the requested set before touching the system, so a typo cannot
   # half-install a machine.

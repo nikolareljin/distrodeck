@@ -5652,6 +5652,9 @@ def run_install_tools(args: argparse.Namespace) -> None:
             cmd.extend(["--tools-file", tools_file])
         if getattr(args, "reconcile", False):
             cmd.append("--reconcile")
+    java_version = getattr(args, "java_version", None)
+    if java_version and not getattr(args, "list_tools", False):
+        cmd.extend(["--java-version", java_version])
     # Use check=False to allow partial failures (script reports them)
     result = run(cmd, check=False)
     if result.returncode == 2:
@@ -7424,6 +7427,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--reconcile",
         action="store_true",
         help="With --tools, also uninstall tracked tools outside the requested set",
+    )
+    install_cmd.add_argument(
+        "--java-version",
+        choices=["17", "21", "25"],
+        help="JDK major installed by the java tool (default 21)",
     )
     install_cmd.add_argument(
         "--list-tools",

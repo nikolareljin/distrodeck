@@ -471,7 +471,7 @@ unreadable tools file).
 | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
 | Development | bfg, build-tools, composer, delta, gh, git, git-lfs, lazygit, tokei |
 | AI | aider, antigravity, claude-code, codex, copilot, cursor, gemini, kiro, ollama |
-| Languages | go, java, node (24 LTS + nvm), php, ruby, rust |
+| Languages | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
 | Databases | atlas (opt-in), mongodb |
@@ -487,6 +487,11 @@ unreadable tools file).
 - `gimp` - GNU Image Manipulation Program with web export plugins
 - `wine` - Windows compatibility layer for running Windows applications
 - `tor` - Anonymous communication network with Tor Browser
+- `java` - OpenJDK 21 by default. `--java-version 17|25` or
+  `DISTRODECK_JAVA_VERSION` picks another major; the package is
+  `openjdk-N-jdk` (apt), `java-N-openjdk-devel` (dnf, zypper) or `jdkN-openjdk`
+  (pacman). Any existing `java` on PATH counts as installed. Uninstall removes
+  the JDK distrodeck installed.
 - `mongodb` - MongoDB Community server and mongosh from the official
   repository (apt: Ubuntu jammy/noble, Debian bookworm; dnf: RHEL 8-10, Fedora
   via the RHEL 9 repository). Series 8.2 by default, `DISTRODECK_MONGODB_SERIES`
