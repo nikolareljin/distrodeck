@@ -183,8 +183,8 @@ menu for the next one; Quit ends. Nothing is preselected in bulk.
 | `util` | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
 | `db-sql` | Relational databases | mariadb*, mysql*, oracle-free* (container), pgvector*, postgresql*, sqlite* |
 | `db-nosql` | NoSQL & graph databases | atlas*, cassandra* (Apache repo), couchdb*, mongodb*, neo4j* (Neo4j repo), redis*, valkey* |
-| `db-vector` | Vector databases | chroma* (pipx), milvus* (container), qdrant* (container; brew), weaviate* (container) |
-| `storage` | Object storage | minio* (brew), minio-client, rclone, s3cmd, seaweedfs* (container) |
+| `db-vector` | Vector databases | chroma* (pipx), milvus* (container), qdrant* (container), weaviate* (container) |
+| `storage` | Object storage | minio* (macOS only, archived upstream), minio-client, rclone, s3cmd, seaweedfs* (container) |
 | `db-admin` | Database admin | beekeeper-studio*, dbeaver-ce*, litecli, mongodb-compass*, mycli, pgadmin4*, pgcli, sqlitebrowser*, usql |
 | `sysadmin` | System admin | btop, cockpit* (127.0.0.1:9090), glances, lnav |
 | `web` | Web services | apache2*, caddy*, certbot, haproxy*, mkcert, nginx* |
@@ -203,7 +203,23 @@ with systemd (or `brew services` on macOS) and bound to 127.0.0.1: nginx,
 Apache and Caddy listen directives are rewritten, MySQL/MariaDB get a
 `bind-address = 127.0.0.1` drop-in, Cockpit's socket listens on
 127.0.0.1:9090; PostgreSQL, Redis, Valkey, CouchDB, Neo4j and Cassandra already
-default to localhost. Uninstall stops the service and keeps the data directory.
+default to localhost. On apt every server installs under a temporary
+`/usr/sbin/policy-rc.d` that answers 101, so its postinst cannot start it on
+0.0.0.0 before the bind is rewritten; the file is removed after the install,
+also on failure, and an existing policy-rc.d that distrodeck did not write is
+left alone. Uninstall stops the service and keeps the data directory.
+
+Debian ships no `mysql-server`: there the `mysql` tool installs
+`default-mysql-server`, which is MariaDB, and says so (use the MySQL APT
+repository for Oracle MySQL). Debian bookworm has no `valkey-server` either;
+the tool stops with the `bookworm-backports` command to run instead.
+
+MinIO archived its open-source server: dl.min.io answers 410 Gone for the
+server and client binaries, so distrodeck installs nothing for it on Linux and
+`seaweedfs` is the S3 server to use. On macOS the deprecated `minio` formula
+still installs, but it is not started, because its `brew services` definition
+listens on every interface; the installer prints a loopback `minio server`
+command instead.
 
 **Containers** (oracle-free, qdrant, milvus, weaviate, seaweedfs) need docker
 or podman. Each runs a pinned image tag as `distrodeck-<tool>` with a named
@@ -211,10 +227,18 @@ volume `distrodeck-<tool>`, publishes its ports on 127.0.0.1 only and restarts
 unless stopped. A port another process holds is refused with that process's
 name. Uninstall removes the container and keeps the volume; `--purge` removes
 it too. The Oracle password is generated once into
-`~/.local/state/distrodeck/oracle-free.password` (mode 600).
+`~/.local/state/distrodeck/oracle-free.password` (mode 600); `--purge`
+removes it with the volume. Milvus runs as milvus `scripts/standalone_embed.sh`
+runs it at the pinned tag (embedded etcd, its config under
+`~/.local/state/distrodeck/milvus`, `seccomp:unconfined`), with 19530 and 9091
+on 127.0.0.1 and etcd's 2379 not published. Qdrant has no Homebrew formula, so
+like the other containers it is hidden on macOS.
 
 **Claude Code plugins** need the `claude` CLI and come only from the public
 `anthropics/claude-plugins-official` marketplace, which is added when missing.
+They install at user scope with stdin closed and a 300 s limit
+(`DISTRODECK_PLUGIN_TIMEOUT`), so a `--tools` or `--all` run never waits on a
+prompt. A plugin that needs a confirmed command fails and is installed by hand.
 
 **macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
 if it is missing) and installs with `brew` / `brew install --cask`. Tools with

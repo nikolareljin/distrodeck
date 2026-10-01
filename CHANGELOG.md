@@ -16,7 +16,17 @@ This project follows Keep a Changelog and Semantic Versioning.
   mkcert), Programming tools (16 tools) and Claude Code plugins (10 from
   anthropics/claude-plugins-official). Servers, containers, GUI admin tools and
   plugins are opt-in; servers bind 127.0.0.1; containers use pinned tags and
-  refuse a busy port naming its holder. `--purge` removes a container's volume.
+  refuse a busy port naming its holder. `--purge` removes a container's volume
+  and its generated password or config.
+  On apt a server installs under a temporary `policy-rc.d` (exit 101), so
+  nginx, apache2, caddy and cockpit never start on 0.0.0.0 before the bind is
+  rewritten. Debian's `mysql` is `default-mysql-server` (MariaDB, said so);
+  bookworm's missing `valkey-server` stops with the backports command. MinIO
+  is macOS-only and not auto-started (the open-source server is archived and
+  the formula's service binds every interface); seaweedfs covers Linux. Milvus
+  runs with the env, config mounts and seccomp setting of upstream
+  `standalone_embed.sh`. Claude plugins install at user scope with no stdin and
+  a 300 s limit.
 - **macOS.** The installer re-execs under Homebrew bash 5, installs with brew
   formulae and casks, and hides Linux-only tools. A `macos-latest` CI job runs
   the listing, the argument tests and one real brew install.
@@ -54,7 +64,7 @@ This project follows Keep a Changelog and Semantic Versioning.
   and installed models shown), then pull or remove; without ollama it offers
   the opt-in install. The main-menu install entry now names the categories.
 - **`install-tools`: Databases section with `mongodb` and `atlas`.** Both use
-  the official MongoDB repository (series 8.2, signed-by keyring on apt, a yum
+  the official MongoDB repository (series 8.2; Ubuntu jammy/noble, Debian bookworm/trixie; signed-by keyring on apt, a yum
   repo file on dnf). `mongod` is enabled bound to 127.0.0.1. pacman and zypper
   fail that tool with a clear message. Uninstall removes packages, repository
   and keyring once neither tool needs them, and keeps the data directory.
