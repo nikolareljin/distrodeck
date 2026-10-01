@@ -39,8 +39,8 @@ This project follows Keep a Changelog and Semantic Versioning.
   category opens its own checklist, installs that block and returns to the
   menu. `--category IDS` does the same without the TUI (default-on tools only),
   `--list-categories` prints the ids, and `--list-catalog --format tsv` prints
-  `category_id, category_label, tool, label, opt_in, installed` per tool for
-  scripts. One `TOOL_CATEGORIES` table drives all of it.
+  `category_id, category_label, tool, label, opt_in, installed, needs` per
+  tool for scripts (`needs`: required catalog tool ids, `-` for none). One `TOOL_CATEGORIES` table drives all of it.
 - **New categories:** IDEs (antigravity, cursor, kiro and vscode moved here,
   plus zed, intellij-idea-community, pycharm-community; all opt-in), Media (vlc,
   mpv, ffmpeg, obs-studio, audacity, kdenlive, handbrake) and Graphics (gimp
@@ -429,7 +429,7 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ### Changed
 - The `db` install-tools category is split into `db-sql`, `db-nosql` and
-  `db-vector`. `--list-catalog --format tsv` keeps its six columns.
+  `db-vector`. `--list-catalog --format tsv` keeps columns 1-6 and appends a 7th, `needs`.
 - `scripts/script-helpers` follows the `production` branch (`.gitmodules`) and is
   bumped to its current head.
 - `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now

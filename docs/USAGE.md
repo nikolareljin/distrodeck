@@ -464,7 +464,10 @@ Options:
 - `--list-categories`: print `id<TAB>label` per category and exit
 - `--list-catalog --format tsv`: print one line per tool and exit. Columns, in
   this order and tab separated: `category_id`, `category_label`, `tool`,
-  `label`, `opt_in` (0/1), `installed` (0/1). No colour, no dialog, no root,
+  `label`, `opt_in` (0/1), `installed` (0/1), `needs` (catalog tool ids the
+  tool requires, comma separated, `-` for none: `docker` for containers, where
+  podman satisfies it too, `claude-code` for Claude plugins, `pipx` for pipx
+  tools, `postgresql` for pgvector). No colour, no dialog, no root,
   no package manager needed. The column order is a contract: new columns are
   only ever appended.
   NikOS reads this output at runtime: it lists every catalog tool, including

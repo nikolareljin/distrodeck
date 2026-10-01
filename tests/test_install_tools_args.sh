@@ -372,15 +372,21 @@ rm -rf "$checkout_tmp"
 set +e
 tsv="$("$INSTALLER" --list-catalog --format tsv 2>&1)"; rc=$?
 [[ "$rc" -eq 0 ]] && pass "--list-catalog --format tsv exits 0" || fail "--list-catalog --format tsv exits 0" "rc=$rc"
-bad_lines="$(awk -F'\t' 'NF != 6 || $5 !~ /^[01]$/ || $6 !~ /^[01]$/' <<< "$tsv")"
-[[ -z "$bad_lines" ]] && pass "every TSV line has 6 columns with 0/1 flags" || fail "every TSV line has 6 columns with 0/1 flags" "$bad_lines"
+bad_lines="$(awk -F'\t' 'NF != 7 || $5 !~ /^[01]$/ || $6 !~ /^[01]$/ || $7 !~ /^(-|[a-z0-9-]+(,[a-z0-9-]+)*)$/' <<< "$tsv")"
+[[ -z "$bad_lines" ]] && pass "every TSV line has 7 columns: 0/1 flags and a needs list" || fail "every TSV line has 7 columns: 0/1 flags and a needs list" "$bad_lines"
+needs_of() { awk -F'\t' -v t="$1" '$3 == t {print $7}' <<< "$tsv"; }
+for pair in qdrant:docker oracle-free:docker plugin-hookify:claude-code chroma:pipx pgvector:postgresql atlas:- mongodb:- vlc:-; do
+  [[ "$(needs_of "${pair%%:*}")" == "${pair#*:}" ]] && pass "needs of ${pair%%:*} is ${pair#*:}" || fail "needs of ${pair%%:*} is ${pair#*:}" "got $(needs_of "${pair%%:*}")"
+done
+bad_needs="$(awk -F'\t' '$7 != "-" {print $7}' <<< "$tsv" | tr ',' '\n' | sort -u | while read -r n; do is_catalog_tool "$n" || echo "$n"; done)"
+[[ -z "$bad_needs" ]] && pass "every needs entry is a catalog tool id" || fail "every needs entry is a catalog tool id" "$bad_needs"
 [[ "$tsv" != *$'\e'* ]] && pass "TSV catalog has no ANSI" || fail "TSV catalog has no ANSI"
 mongo_line="$(awk -F'\t' '$3 == "mongodb"' <<< "$tsv")"
 expected_prefix="$(printf 'db-nosql\tNoSQL & graph databases\tmongodb\tMongoDB Community server + mongosh\t1\t')"
-if [[ "$mongo_line" == "$expected_prefix"[01] ]]; then
-  pass "TSV column order is category_id, category_label, tool, label, opt_in, installed"
+if [[ "$mongo_line" == "$expected_prefix"[01]$'\t-' ]]; then
+  pass "TSV column order is category_id, category_label, tool, label, opt_in, installed, needs"
 else
-  fail "TSV column order is category_id, category_label, tool, label, opt_in, installed" "$mongo_line"
+  fail "TSV column order is category_id, category_label, tool, label, opt_in, installed, needs" "$mongo_line"
 fi
 [[ "$(wc -l <<< "$tsv")" -eq "$("$INSTALLER" --list-tools | wc -l)" ]] && pass "TSV has one line per catalog tool" || fail "TSV has one line per catalog tool"
 assert_exit 0 "--list-catalog works without a package manager" bash -c '

@@ -3810,7 +3810,8 @@ Options:
   --list-catalog --format tsv
                         Print one line per tool and exit:
                         category_id, category_label, tool, label,
-                        opt_in (0|1), installed (0|1), tab separated.
+                        opt_in (0|1), installed (0|1), needs (tool ids,
+                        comma separated, or -), tab separated.
   -h, --help            Show this help and exit.
 
 Exit codes:
@@ -4277,11 +4278,33 @@ process_selection() {
 }
 
 # Print the catalog for scripts: one tab-separated line per tool,
-#   category_id  category_label  tool  label  opt_in(0|1)  installed(0|1)
+#   category_id  category_label  tool  label  opt_in(0|1)  installed(0|1)  needs
 # No colour, no dialog, no root. The column order is a contract (NikOS parses
 # it; tests/test_install_tools_args.sh pins it): only ever append columns.
+# Print the catalog tools tool $1 requires, comma separated, or "-". "docker"
+# stands for any container runtime: podman satisfies it too (container_cli).
+tool_needs() {
+  local needs=()
+  case "$1" in
+    pgvector) needs+=(postgresql);;
+  esac
+  if is_package_tool "$1"; then
+    case "$(spec_field "$1" kind)" in
+      container) needs+=(docker);;
+      claude-plugin) needs+=(claude-code);;
+      pipx) needs+=(pipx);;
+    esac
+  fi
+  if [[ ${#needs[@]} -eq 0 ]]; then
+    echo "-"
+  else
+    local IFS=,
+    echo "${needs[*]}"
+  fi
+}
+
 print_catalog_tsv() {
-  local entry id label tools tool desc opt inst
+  local entry id label tools tool desc opt inst needs
   for entry in "${TOOL_CATEGORIES[@]}"; do
     id="${entry%%|*}"
     label="$(cut -d'|' -f2 <<< "$entry")"
@@ -4292,7 +4315,8 @@ print_catalog_tsv() {
       desc="${desc//$'\t'/ }"
       opt=0; is_opt_in_tool "$tool" && opt=1
       inst=0; is_installed_tool "$tool" >/dev/null 2>&1 && inst=1
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$label" "$tool" "$desc" "$opt" "$inst"
+      needs="$(tool_needs "$tool")"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$label" "$tool" "$desc" "$opt" "$inst" "$needs"
     done
   done
 }
