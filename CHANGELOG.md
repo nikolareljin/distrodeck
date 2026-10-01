@@ -373,6 +373,8 @@ This project follows Keep a Changelog and Semantic Versioning.
   code. The venv itself is still offered with `--include-environments`.
 
 ### Changed
+- `scripts/script-helpers` follows the `production` branch (`.gitmodules`) and is
+  bumped to its current head.
 - `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
   looks for `~/Projects/iso-forge` first and still accepts an older
   `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the
