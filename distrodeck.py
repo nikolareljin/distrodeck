@@ -7071,6 +7071,75 @@ def run_tui() -> None:
             dialog_msgbox("Distrodeck", "Done.")
 
 
+# Ollama model groups for `distrodeck ollama models`. One table: the CLI,
+# its help text and the tests all read it. Every tag was checked against
+# https://ollama.com/library; within a group the smallest model comes first.
+OLLAMA_MODEL_GROUPS: Dict[str, Tuple[str, ...]] = {
+    # One general model that fits an 8 GB laptop.
+    "default": ("gemma4:e4b",),
+    "reasoning": ("deepseek-r1:8b", "qwen3:8b", "gpt-oss:20b"),
+    # qwen3-coder publishes nothing below 30b, so qwen2.5-coder covers laptops.
+    "coding": ("qwen2.5-coder:7b", "qwen3-coder:30b"),
+    "text": ("granite4:micro", "qwen3.5:9b", "gemma4:12b"),
+    "vision": ("qwen3-vl:4b", "qwen3-vl:8b"),
+    "embedding": ("embeddinggemma:300m", "qwen3-embedding:0.6b"),
+}
+
+
+def ollama_installed_models() -> Optional[set]:
+    """Return the model names `ollama list` reports, or None if it failed."""
+    result = run(["ollama", "list"], check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    names = set()
+    for line in (result.stdout or "").splitlines()[1:]:
+        fields = line.split()
+        if fields:
+            names.add(fields[0])
+    return names
+
+
+def run_ollama_models(args: argparse.Namespace) -> None:
+    action = args.models_action
+    if action == "list":
+        installed = ollama_installed_models() if cmd_exists("ollama") else None
+        if installed is None:
+            print("(ollama not installed or not running; install state unknown)")
+        for group, models in OLLAMA_MODEL_GROUPS.items():
+            print(f"{group}:")
+            for model in models:
+                mark = ""
+                if installed is not None:
+                    mark = "  [installed]" if model in installed else ""
+                print(f"  {model}{mark}")
+        return
+    if not cmd_exists("ollama"):
+        fail(
+            "ollama is not installed. Install it with "
+            "'distrodeck install-tools --tools ollama' and try again."
+        )
+    models = OLLAMA_MODEL_GROUPS[args.group]
+    failed = []
+    if action == "pull":
+        for model in models:
+            log(f"Pulling {model}")
+            if run(["ollama", "pull", model], check=False).returncode != 0:
+                failed.append(model)
+    else:
+        installed = ollama_installed_models()
+        if installed is None:
+            fail("'ollama list' failed; is the ollama service running?")
+        for model in models:
+            if model not in installed:
+                log(f"Not installed, skipping: {model}")
+                continue
+            log(f"Removing {model}")
+            if run(["ollama", "rm", model], check=False).returncode != 0:
+                failed.append(model)
+    if failed:
+        fail(f"ollama {action} failed for: {', '.join(failed)}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="distrodeck",
@@ -7412,6 +7481,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     net_cmd = sub.add_parser("net-tools", help="Run installed network tools (TUI)")
     net_cmd.set_defaults(func=lambda _: run_network_tools_tui())
+
+    ollama_cmd = sub.add_parser("ollama", help="Manage curated Ollama model groups")
+    ollama_sub = ollama_cmd.add_subparsers(dest="ollama_action", required=True)
+    models_cmd = ollama_sub.add_parser("models", help="List, pull or remove model groups")
+    models_sub = models_cmd.add_subparsers(dest="models_action", required=True)
+    models_list_cmd = models_sub.add_parser("list", help="Show every group and its models")
+    models_list_cmd.set_defaults(func=run_ollama_models)
+    for verb, verb_help in (("pull", "Pull every model in a group"), ("remove", "Remove a group's installed models")):
+        verb_cmd = models_sub.add_parser(verb, help=verb_help)
+        verb_cmd.add_argument("group", choices=list(OLLAMA_MODEL_GROUPS))
+        verb_cmd.set_defaults(func=run_ollama_models)
 
     return parser
 

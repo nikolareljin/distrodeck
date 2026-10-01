@@ -406,6 +406,20 @@ Run installed network tools from a TUI menu (nmap, mtr, iperf3, traceroute, tcpd
 distrodeck net-tools
 ```
 
+### ollama models
+
+Pull or remove a curated group of Ollama models. Groups: `default`,
+`reasoning`, `coding`, `text`, `vision`, `embedding`. `list` shows every group
+and marks models already pulled; `pull` and `remove` need the `ollama` binary
+and exit 1 if any model fails, after trying the rest. `remove` skips models
+that are not installed. No group shares a model with another.
+
+```
+distrodeck ollama models list
+distrodeck ollama models pull reasoning
+distrodeck ollama models remove vision
+```
+
 ### install-tools
 
 Install optional developer tools via a TUI checklist. Tools are organized by category.

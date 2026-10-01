@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-09-12" "distrodeck 0.10.3" "User Commands"
+.TH DISTRODECK 1 "2026-10-01" "distrodeck 0.10.3" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -73,6 +73,9 @@ Edit common system config files (TUI)
 .TP
 .B net-tools
 Run installed network tools (TUI)
+.TP
+.B ollama
+Manage curated Ollama model groups
 .SH GIT ALIAS HELP
 After running \fBdistrodeck git-aliases set\fR, run \fBgit dhelp\fR for a detailed reference of every distrodeck Git alias.
 .PP
@@ -325,6 +328,17 @@ options:
 .SS net-tools
 .nf
 usage: distrodeck net-tools [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS ollama
+.nf
+usage: distrodeck ollama [-h] {models} ...
+
+positional arguments:
+  {models}
+    models    List, pull or remove model groups
 
 options:
   -h, --help  show this help message and exit

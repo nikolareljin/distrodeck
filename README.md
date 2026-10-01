@@ -145,6 +145,10 @@ Includes distrodeck config files if present (user and system).
 
 distrodeck net-tools
 
+distrodeck ollama models list
+distrodeck ollama models pull coding
+distrodeck ollama models remove vision
+
 distrodeck  # use the TUI "Automate" action
 
 distrodeck install-tools --all
