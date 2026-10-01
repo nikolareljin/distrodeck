@@ -171,6 +171,7 @@ The `install-tools` command offers tools organized by category:
 | `[Lang]` | go, java, node (24 LTS + nvm), php, ruby, rust |
 | `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
 | `[Util]` | flatpak, ntfs-3g, wine |
+| `[DB]` | mongodb (server + mongosh), atlas (Atlas CLI, opt-in) |
 | `[App]` | gimp, nemo, rustdesk, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.

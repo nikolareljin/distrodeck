@@ -1598,6 +1598,170 @@ install_aider() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MongoDB (official repository, shared by mongodb and atlas)
+# ─────────────────────────────────────────────────────────────────────────────
+# 8.2 is the current on-premises series. Override with DISTRODECK_MONGODB_SERIES.
+MONGODB_SERIES="${DISTRODECK_MONGODB_SERIES:-8.2}"
+# MongoDB signs 8.x series with the 8.0 server key.
+MONGODB_KEY_URL="https://pgp.mongodb.com/server-8.0.asc"
+MONGODB_KEYRING="/usr/share/keyrings/mongodb-server.gpg"
+MONGODB_APT_LIST="/etc/apt/sources.list.d/mongodb-org.list"
+MONGODB_YUM_REPO="/etc/yum.repos.d/mongodb-org.repo"
+
+# Print "<distro-path> <codename> <component>" for the apt repository, or
+# nothing when this release has no MongoDB packages.
+mongodb_apt_target() {
+  local id="" codename=""
+  local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
+  if [[ -r "$os_release" ]]; then
+    id="$(. "$os_release" && echo "${ID:-}")"
+    codename="$(. "$os_release" && echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")"
+  fi
+  case "$codename" in
+    jammy|noble) echo "ubuntu $codename multiverse";;
+    bookworm) echo "debian $codename main";;
+    *)
+      log_warn "MongoDB publishes apt packages for Ubuntu jammy/noble and Debian bookworm; this system is ${id:-unknown} ${codename:-unknown}."
+      return 1
+      ;;
+  esac
+}
+
+# Print the RHEL major used in the yum repository path.
+mongodb_rpm_release() {
+  local id="" version=""
+  local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
+  if [[ -r "$os_release" ]]; then
+    id="$(. "$os_release" && echo "${ID:-}")"
+    version="$(. "$os_release" && echo "${VERSION_ID:-}")"
+  fi
+  version="${version%%.*}"
+  case "$id" in
+    fedora)
+      log_warn "MongoDB does not publish Fedora packages; using the RHEL 9 repository."
+      echo 9
+      ;;
+    rhel|centos|rocky|almalinux|ol)
+      case "$version" in
+        8|9|10) echo "$version";;
+        *) log_warn "MongoDB has no packages for $id $version."; return 1;;
+      esac
+      ;;
+    *) log_warn "MongoDB has no dnf repository for ${id:-this distro}."; return 1;;
+  esac
+}
+
+mongodb_repo_setup() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      local target distro codename component tmp_key
+      target="$(mongodb_apt_target)" || return 1
+      read -r distro codename component <<< "$target"
+      command -v gpg >/dev/null 2>&1 || install_pkg "$mgr" gnupg || return 1
+      command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || install_curl "$mgr" || return 1
+      tmp_key="$(mktemp)"
+      if ! download_file "$MONGODB_KEY_URL" "$tmp_key"; then
+        log_warn "Failed to download the MongoDB signing key."
+        rm -f "$tmp_key"
+        return 1
+      fi
+      if ! sudo gpg --batch --yes -o "$MONGODB_KEYRING" --dearmor "$tmp_key"; then
+        rm -f "$tmp_key"
+        return 1
+      fi
+      rm -f "$tmp_key"
+      sudo chmod 644 "$MONGODB_KEYRING"
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=${MONGODB_KEYRING}] https://repo.mongodb.org/apt/${distro} ${codename}/mongodb-org/${MONGODB_SERIES} ${component}" | \
+        sudo tee "$MONGODB_APT_LIST" >/dev/null
+      ;;
+    dnf)
+      local release
+      release="$(mongodb_rpm_release)" || return 1
+      sudo tee "$MONGODB_YUM_REPO" >/dev/null <<REPO
+[mongodb-org-${MONGODB_SERIES}]
+name=MongoDB Repository
+baseurl=https://repo.mongodb.org/yum/redhat/${release}/mongodb-org/${MONGODB_SERIES}/\$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=${MONGODB_KEY_URL}
+REPO
+      ;;
+    *)
+      log_warn "MongoDB publishes no official repository for ${mgr}; install it from https://www.mongodb.com/try/download/community instead."
+      return 1
+      ;;
+  esac
+}
+
+# Remove the repository and keyring only when no MongoDB package still needs them.
+mongodb_repo_remove_if_unused() {
+  local mgr="$1"
+  case "$mgr" in
+    apt)
+      if dpkg-query -W -f='${db:Status-Status}\n' mongodb-org mongodb-atlas-cli 2>/dev/null | grep -qx installed; then
+        log_info "Keeping the MongoDB repository: another MongoDB package still uses it."
+        return 0
+      fi
+      sudo rm -f "$MONGODB_APT_LIST" "$MONGODB_KEYRING"
+      ;;
+    dnf)
+      if rpm -q mongodb-org mongodb-atlas-cli 2>/dev/null | grep -qv 'not installed'; then
+        log_info "Keeping the MongoDB repository: another MongoDB package still uses it."
+        return 0
+      fi
+      sudo rm -f "$MONGODB_YUM_REPO"
+      ;;
+  esac
+}
+
+install_mongodb() {
+  local mgr="$1"
+  mongodb_repo_setup "$mgr" || return 1
+  install_pkg "$mgr" mongodb-org mongodb-mongosh || return 1
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl enable --now mongod || { log_warn "mongod did not start; check: journalctl -u mongod"; return 1; }
+  fi
+  # The package default binds 127.0.0.1; distrodeck leaves it that way.
+  log_info "mongod listens on 127.0.0.1:27017 only (bindIp in /etc/mongod.conf). Connect with: mongosh"
+}
+
+uninstall_mongodb() {
+  local mgr="$1"
+  case "$mgr" in
+    apt|dnf) ;;
+    *) log_warn "MongoDB uninstall is not supported for ${mgr}."; return 1;;
+  esac
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl disable --now mongod 2>/dev/null || true
+  fi
+  uninstall_pkg "$mgr" 'mongodb-org*' mongodb-mongosh || return 1
+  mongodb_repo_remove_if_unused "$mgr"
+  log_info "Kept the MongoDB data in /var/lib/mongodb (dnf: /var/lib/mongo); remove it manually to drop the databases."
+}
+
+install_atlas() {
+  local mgr="$1"
+  mongodb_repo_setup "$mgr" || return 1
+  install_pkg "$mgr" mongodb-atlas-cli || return 1
+  if command -v docker >/dev/null 2>&1 || command -v podman >/dev/null 2>&1; then
+    log_info "Run a local Atlas deployment (no cloud login needed): atlas deployments setup --type local"
+  else
+    log_info "atlas deployments setup --type local needs docker or podman; install one of them first."
+  fi
+}
+
+uninstall_atlas() {
+  local mgr="$1"
+  case "$mgr" in
+    apt|dnf) ;;
+    *) log_warn "Atlas CLI uninstall is not supported for ${mgr}."; return 1;;
+  esac
+  uninstall_pkg "$mgr" mongodb-atlas-cli || return 1
+  mongodb_repo_remove_if_unused "$mgr"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Uninstall functions for tools that need special handling
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2112,6 +2276,9 @@ tool_desc() {
     wine) echo "[Util] Wine - Windows compatibility";;
     # ── Networking ── (additional)
     tor) echo "[Net] Tor - anonymous browsing";;
+    # ── Databases ──
+    atlas) echo "[DB] MongoDB Atlas CLI (local deployments)";;
+    mongodb) echo "[DB] MongoDB Community server + mongosh";;
     # ── Apps ──
     gimp) echo "[App] GIMP - image editor";;
     image-view) echo "[App] image-view - terminal image viewer";;
@@ -2196,6 +2363,8 @@ is_installed_tool() {
     gemini) command -v gemini >/dev/null 2>&1;;
     kiro) command -v kiro >/dev/null 2>&1 || command -v kiro-cli >/dev/null 2>&1;;
     ollama) command -v ollama >/dev/null 2>&1;;
+    mongodb) command -v mongod >/dev/null 2>&1;;
+    atlas) command -v atlas >/dev/null 2>&1;;
     tldr) command -v tldr >/dev/null 2>&1;;
     bandwhich) command -v bandwhich >/dev/null 2>&1;;
     k9s) command -v k9s >/dev/null 2>&1;;
@@ -2266,6 +2435,8 @@ TOOL_CATALOG=(
   ansible docker k9s lazydocker podman
   # ── Utilities ──
   adb dialog flatpak nala ntfs wine
+  # ── Databases ──
+  atlas mongodb
   # ── Apps ──
   gimp image-view isoforge nemo rustdesk streamcontroller
 )
@@ -2273,7 +2444,7 @@ TOOL_CATALOG=(
 # Tools whose installers fetch and execute upstream scripts. They are held out
 # of --all unless DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true, but an explicit
 # --tools request counts as consent and installs them.
-OPT_IN_TOOLS=(aider ai-runner antigravity claude-code codex copilot cursor gemini kiro ollama)
+OPT_IN_TOOLS=(aider ai-runner antigravity atlas claude-code codex copilot cursor gemini kiro ollama)
 
 # Return 0 when $1 is a known catalog tool.
 is_catalog_tool() {
@@ -2584,6 +2755,8 @@ main() {
       gemini) install_gemini "$mgr";;
       kiro) install_kiro "$mgr";;
       ollama) install_ollama "$mgr";;
+      mongodb) install_mongodb "$mgr";;
+      atlas) install_atlas "$mgr";;
       tldr) install_tldr "$mgr";;
       bandwhich) install_bandwhich "$mgr";;
       k9s) install_k9s "$mgr";;
@@ -2708,6 +2881,8 @@ main() {
         gemini) uninstall_gemini "$mgr";;
         kiro) uninstall_kiro "$mgr";;
         ollama) uninstall_ollama "$mgr";;
+        mongodb) uninstall_mongodb "$mgr";;
+        atlas) uninstall_atlas "$mgr";;
         tldr) uninstall_tldr "$mgr";;
         bandwhich) uninstall_bandwhich "$mgr";;
         k9s) uninstall_k9s "$mgr";;

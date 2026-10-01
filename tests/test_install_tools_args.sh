@@ -213,6 +213,57 @@ fi
 rm -rf "$custom_nvm_dir"
 
 
+# ── MongoDB repository setup ─────────────────────────────────────────────────
+
+# Sourcing the installer turned on errexit; these probes expect failures.
+set +e
+mongo_tmp="$(mktemp -d)"
+OS_RELEASE_FILE="$mongo_tmp/os-release"
+printf 'ID=ubuntu\nVERSION_CODENAME=noble\nUBUNTU_CODENAME=noble\n' > "$OS_RELEASE_FILE"
+assert_contains "$(mongodb_apt_target)" "ubuntu noble multiverse" "MongoDB apt target for Ubuntu noble"
+printf 'ID=debian\nVERSION_CODENAME=bookworm\n' > "$OS_RELEASE_FILE"
+assert_contains "$(mongodb_apt_target)" "debian bookworm main" "MongoDB apt target for Debian bookworm"
+printf 'ID=ubuntu\nVERSION_CODENAME=oracular\n' > "$OS_RELEASE_FILE"
+if mongodb_apt_target >/dev/null 2>&1; then
+  fail "MongoDB apt target refuses a release without packages"
+else
+  pass "MongoDB apt target refuses a release without packages"
+fi
+printf 'ID=rocky\nVERSION_ID="9.4"\n' > "$OS_RELEASE_FILE"
+assert_contains "$(mongodb_rpm_release 2>/dev/null)" "9" "MongoDB rpm release uses the RHEL major"
+
+# Stub every privileged command so the apt path writes into the temp dir.
+printf 'ID=ubuntu\nVERSION_CODENAME=jammy\nUBUNTU_CODENAME=jammy\n' > "$OS_RELEASE_FILE"
+mongo_out="$(
+  MONGODB_APT_LIST="$mongo_tmp/mongodb-org.list"
+  MONGODB_KEYRING="$mongo_tmp/mongodb.gpg"
+  sudo() { "$@"; }
+  gpg() { :; }
+  chmod() { :; }
+  dpkg() { echo amd64; }
+  download_file() { : > "$2"; }
+  mongodb_repo_setup apt && cat "$MONGODB_APT_LIST"
+)"
+assert_contains "$mongo_out" "deb [arch=amd64 signed-by=$mongo_tmp/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/${MONGODB_SERIES} multiverse" "MongoDB apt source is signed-by its keyring"
+
+for mgr in pacman zypper; do
+  out="$(install_mongodb "$mgr" 2>&1)"; rc=$?
+  if [[ "$rc" -ne 0 && "$out" == *"no official repository for ${mgr}"* ]]; then
+    pass "mongodb fails clearly on ${mgr}"
+  else
+    fail "mongodb fails clearly on ${mgr}" "rc=${rc} out=${out}"
+  fi
+  out="$(uninstall_atlas "$mgr" 2>&1)"; rc=$?
+  [[ "$rc" -ne 0 ]] && pass "atlas uninstall refuses ${mgr}" || fail "atlas uninstall refuses ${mgr}" "$out"
+done
+unset OS_RELEASE_FILE
+rm -rf "$mongo_tmp"
+if is_opt_in_tool atlas && ! is_opt_in_tool mongodb; then
+  pass "atlas is opt-in, mongodb is in --all"
+else
+  fail "atlas is opt-in, mongodb is in --all"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo

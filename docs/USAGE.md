@@ -460,6 +460,7 @@ unreadable tools file).
 | Languages | go, java, node (24 LTS + nvm), php, ruby, rust |
 | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
 | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
+| Databases | atlas (opt-in), mongodb |
 | Apps | gimp, image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 **Notable tools:**
@@ -472,6 +473,14 @@ unreadable tools file).
 - `gimp` - GNU Image Manipulation Program with web export plugins
 - `wine` - Windows compatibility layer for running Windows applications
 - `tor` - Anonymous communication network with Tor Browser
+- `mongodb` - MongoDB Community server and mongosh from the official
+  repository (apt: Ubuntu jammy/noble, Debian bookworm; dnf: RHEL 8-10, Fedora
+  via the RHEL 9 repository). Series 8.2 by default, `DISTRODECK_MONGODB_SERIES`
+  overrides it. `mongod` is enabled and listens on 127.0.0.1 only. pacman and
+  zypper are not supported. Uninstall keeps the data directory.
+- `atlas` - MongoDB Atlas CLI from the same repository. With docker or podman
+  present, `atlas deployments setup --type local` runs a local deployment
+  without a cloud login.
 - `rustdesk` - Open-source remote desktop and remote support (deb/rpm from
   upstream releases, Flatpak fallback)
 - `node` - Installs Node 24 from the system/NodeSource repository *and* nvm

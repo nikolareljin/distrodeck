@@ -6,6 +6,11 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- **`install-tools`: Databases section with `mongodb` and `atlas`.** Both use
+  the official MongoDB repository (series 8.2, signed-by keyring on apt, a yum
+  repo file on dnf). `mongod` is enabled bound to 127.0.0.1. pacman and zypper
+  fail that tool with a clear message. Uninstall removes packages, repository
+  and keyring once neither tool needs them, and keeps the data directory.
 - **`distrodeck reclaim`: disk that a build can make again.** A workspace of
   development checkouts is mostly not source. Measured on one machine, 90 GB
   across roughly a hundred repositories: **34.1 GB of `build/`, 15.6 GB of Rust
