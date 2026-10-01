@@ -61,3 +61,14 @@ def test_category_is_forwarded(captured):
 def test_purge_is_forwarded(captured):
     invoke("--tools", "qdrant", "--purge")
     assert "--purge" in captured.calls[0]
+
+
+def test_category_with_tools_reaches_the_script_to_be_refused(captured):
+    # Dropping --tools here would turn a usage error into an install.
+    invoke("--category", "media", "--tools", "vlc")
+    assert captured.calls[0][1:] == ["--category", "media", "--tools", "vlc"]
+
+
+def test_category_with_all_reaches_the_script_to_be_refused(captured):
+    invoke("--category", "media", "--all")
+    assert captured.calls[0][1:] == ["--category", "media", "--all"]

@@ -5767,12 +5767,14 @@ def run_install_tools(args: argparse.Namespace) -> None:
         cmd.append("--list-categories")
     elif getattr(args, "list_catalog", False):
         cmd.extend(["--list-catalog", "--format", args.format])
-    elif getattr(args, "category", None):
-        for value in args.category:
-            cmd.extend(["--category", value])
-    elif args.all:
-        cmd.append("--all")
     else:
+        # Forward every selector as given: the script refuses a conflicting
+        # mix (--category with --tools, --all with --tools) with exit 2, and
+        # dropping one here would install something the caller did not ask for.
+        for value in getattr(args, "category", None) or []:
+            cmd.extend(["--category", value])
+        if args.all:
+            cmd.append("--all")
         for value in getattr(args, "tools", None) or []:
             cmd.extend(["--tools", value])
         tools_file = getattr(args, "tools_file", None)
