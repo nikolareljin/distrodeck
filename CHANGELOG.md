@@ -16,6 +16,7 @@ This project follows Keep a Changelog and Semantic Versioning.
   it used to exit 0.
 - **`install-tools --java-version 17|21|25`** (or `DISTRODECK_JAVA_VERSION`).
   The `java` tool now installs OpenJDK 21 by default on every package manager;
+  an invalid variable fails only the java tool, an invalid flag exits 2;
   it was `default-jdk` on apt and 17 on dnf and zypper.
 - **`distrodeck ollama models list|pull|remove <group>`.** Six groups
   (default, reasoning, coding, text, vision, embedding) of current Ollama models
@@ -360,6 +361,9 @@ This project follows Keep a Changelog and Semantic Versioning.
   tests); previously only `py_compile` ran, so tests never gated a PR.
 
 ### Fixed
+- `install-tools --tools`/`--tools-file` crashed at the summary with
+  `DIALOG_HEIGHT: unbound variable` whenever `dialog` was installed, and exited 1
+  after a successful install. Only the checklist run uses dialog now.
 - `install-tools` cloned `git-lantern` and `ai-runner` into
   `~/.local/state/distrodeck/tools/` itself rather than `tools/<name>/`: one
   `local` statement read `$name` before assigning it. Both now land in their

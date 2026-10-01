@@ -495,7 +495,8 @@ unreadable tools file).
 - `wine` - Windows compatibility layer for running Windows applications
 - `tor` - Anonymous communication network with Tor Browser
 - `java` - OpenJDK 21 by default. `--java-version 17|25` or
-  `DISTRODECK_JAVA_VERSION` picks another major; the package is
+  `DISTRODECK_JAVA_VERSION` picks another major (an invalid flag exits 2;
+  an invalid variable fails only the java tool); the package is
   `openjdk-N-jdk` (apt), `java-N-openjdk-devel` (dnf, zypper) or `jdkN-openjdk`
   (pacman). Any existing `java` on PATH counts as installed. Uninstall removes
   the JDK distrodeck installed.

@@ -113,7 +113,22 @@ assert_not_contains "$file_output" "a comment" "comments are stripped from tools
 rm -f "$tools_file"
 
 assert_exit 2 "--java-version rejects 11" "$INSTALLER" --java-version 11 --tools java
-assert_exit 2 "DISTRODECK_JAVA_VERSION rejects 8" env DISTRODECK_JAVA_VERSION=8 "$INSTALLER" --tools java
+assert_exit 0 "invalid DISTRODECK_JAVA_VERSION does not block a non-java tool" env DISTRODECK_JAVA_VERSION=8 bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  is_installed_tool() { [[ "$1" == bat && -e "$STATE_DIR/bat-done" ]]; }
+  install_bat() { touch "$STATE_DIR/bat-done"; }
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  main --tools bat </dev/null
+' _ "$INSTALLER"
+assert_exit 1 "invalid DISTRODECK_JAVA_VERSION fails the java tool" env DISTRODECK_JAVA_VERSION=8 bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  is_installed_tool() { return 1; }
+  install_pkg() { echo "must not install $*"; return 0; }
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  main --tools java </dev/null
+' _ "$INSTALLER"
 
 # ── Helper functions (sourced, installer not run) ────────────────────────────
 

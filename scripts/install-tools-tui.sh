@@ -2575,7 +2575,9 @@ Options:
                         tools that are not in the requested set. Off by
                         default: unlisted tools are left alone.
   --java-version N      JDK major for the java tool: 17, 21 (default) or 25.
-                        DISTRODECK_JAVA_VERSION sets the same default.
+                        DISTRODECK_JAVA_VERSION sets the same default; an
+                        invalid flag exits 2, an invalid variable fails
+                        only the java tool.
   --list-tools          Print the tool catalog, one per line, and exit.
   -h, --help            Show this help and exit.
 
@@ -2619,6 +2621,7 @@ main() {
   local selected=""
   local all=false
   local reconcile=false
+  local java_flag=false
   local requested=()
 
   while [[ $# -gt 0 ]]; do
@@ -2640,9 +2643,10 @@ main() {
       --java-version)
         [[ $# -ge 2 ]] || { log_error "--java-version requires a value."; usage; exit 2; }
         JAVA_VERSION="$2"
+        java_flag=true
         shift
         ;;
-      --java-version=*) JAVA_VERSION="${1#*=}";;
+      --java-version=*) JAVA_VERSION="${1#*=}"; java_flag=true;;
       --list-tools)
         printf '%s\n' "${TOOL_CATALOG[@]}"
         exit 0
@@ -2653,7 +2657,10 @@ main() {
     shift
   done
 
-  if ! is_supported_java_version "$JAVA_VERSION"; then
+  # A bad --java-version flag is a usage error and exits 2 whatever is selected.
+  # A bad DISTRODECK_JAVA_VERSION only fails the java tool, in install_java,
+  # so a stale environment does not block installing anything else.
+  if $java_flag && ! is_supported_java_version "$JAVA_VERSION"; then
     log_error "Unsupported Java version '$JAVA_VERSION'; choose one of: $JAVA_SUPPORTED_VERSIONS."
     exit 2
   fi
@@ -3122,7 +3129,9 @@ main() {
   fi
 
   # Show results in dialog (TUI mode) or log (non-TUI mode)
-  if ! $all && command -v dialog >/dev/null 2>&1; then
+  # Only the checklist run opened dialog (and set DIALOG_HEIGHT); --tools and
+  # --all print the summary, which also keeps them usable without a terminal.
+  if ! $all && [[ ${#requested[@]} -eq 0 ]] && command -v dialog >/dev/null 2>&1; then
     dialog --stdout --title "$title" --msgbox "$summary" "$DIALOG_HEIGHT" "$DIALOG_WIDTH" || true
     clear
   else
