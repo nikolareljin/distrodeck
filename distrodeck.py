@@ -3594,6 +3594,28 @@ def _still_eligible(
     return Recheck("", measured)
 
 
+def _inside_virtualenv(path: pathlib.Path, cache: dict) -> bool:
+    """True when *path* lives inside a Python virtualenv.
+
+    A package's `build/` inside `site-packages` is installed code, not build
+    output: deleting `.venv/lib/python3.12/site-packages/foo/build` breaks the
+    environment without freeing anything a build makes again. The venv itself
+    is still a candidate under `--include-environments`; only what is *inside*
+    one is refused. `pyvenv.cfg` in an ancestor catches layouts without a
+    `site-packages` component (Windows-style `Lib/`, custom prefixes).
+    """
+    if "site-packages" in path.parts:
+        return True
+    for parent in path.parents:
+        hit = cache.get(parent)
+        if hit is None:
+            hit = (parent / "pyvenv.cfg").is_file()
+            cache[parent] = hit
+        if hit:
+            return True
+    return False
+
+
 def find_reclaimable(
     workspace: pathlib.Path,
     names: dict,
@@ -3663,6 +3685,7 @@ def find_reclaimable(
     points = _mount_points()
 
     candidates = []
+    venv_cache: dict = {}
     for root, dirs, files in os.walk(workspace, onerror=lambda _: None):
         dirs[:] = [d for d in dirs if d != ".git"]
         if _is_bare_repository(list(dirs) + list(files)):
@@ -3695,6 +3718,8 @@ def find_reclaimable(
                 print(f"  skipping {path}: {mounted}", file=sys.stderr)
                 continue
             if path.is_symlink():
+                continue
+            if _inside_virtualenv(path, venv_cache):
                 continue
             candidates.append(path)
 
@@ -3948,6 +3973,97 @@ def run_cleanup_kernels_cmd(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def tools_state_dir() -> Path:
+    """Where install-tools keeps managed checkouts (matches STATE_DIR there)."""
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "distrodeck" / "tools"
+
+
+def _npm_global_installed(package: str) -> bool:
+    if not cmd_exists("npm"):
+        return False
+    probe = run(["npm", "ls", "-g", "--depth=0", package], check=False, capture_output=True)
+    return probe.returncode == 0
+
+
+def _checkout_adapter(name: str):
+    def detect() -> bool:
+        return (tools_state_dir() / name / ".git").is_dir()
+
+    def command() -> List[str]:
+        return ["git", "-C", str(tools_state_dir() / name), "pull", "--ff-only"]
+
+    return detect, command
+
+
+def _npm_global_command(package: str) -> List[str]:
+    """`npm install -g pkg@latest`, with sudo only when the prefix needs it.
+
+    install-tools uses sudo for a system npm; an nvm or user prefix is writable,
+    and sudo there would install a second copy with root's npm instead.
+    """
+    command = ["npm", "install", "-g", f"{package}@latest"]
+    prefix = run(["npm", "prefix", "-g"], check=False, capture_output=True)
+    path = (prefix.stdout or "").strip() if prefix.returncode == 0 else ""
+    if path and os.access(path, os.W_OK):
+        return command
+    return ["sudo"] + command
+
+
+def _npm_adapter(package: str):
+    return (
+        lambda: _npm_global_installed(package),
+        lambda: _npm_global_command(package),
+    )
+
+
+# One updater per install-tools catalog entry that the system package manager
+# does not already upgrade. Every other catalog tool comes from apt/dnf/pacman/
+# zypper, snap or Flatpak, and the steps above refresh it. Keys must be catalog
+# names (tests/test_update_tools.py checks them against --list-tools).
+TOOL_UPDATERS = {
+    "git-lantern": _checkout_adapter("git-lantern"),
+    "ai-runner": _checkout_adapter("ai-runner"),
+    "codex": _npm_adapter("@openai/codex"),
+    "copilot": _npm_adapter("@github/copilot"),
+    "gemini": _npm_adapter("@google/gemini-cli"),
+    "claude-code": (lambda: cmd_exists("claude"), lambda: ["claude", "update"]),
+}
+
+
+def refresh_catalog_tools() -> bool:
+    """Refresh every detected catalog tool with its own updater.
+
+    Detection looks at the system, not the install-tools state file, so a tool
+    installed before distrodeck tracked it is refreshed too. One failure does
+    not stop the rest; the result is reported once at the end.
+    """
+    refreshed: List[str] = []
+    failed: List[str] = []
+    for name, (detect, command) in TOOL_UPDATERS.items():
+        try:
+            present = detect()
+        except OSError:
+            present = False
+        if not present:
+            continue
+        log(f"Refreshing {name}")
+        try:
+            ok = run(command(), check=False).returncode == 0
+        except OSError as exc:
+            warn(f"{name}: {exc}")
+            ok = False
+        (refreshed if ok else failed).append(name)
+    if not refreshed and not failed:
+        log("No installed catalog tools need a separate refresh.")
+        return True
+    if refreshed:
+        log(f"Refreshed tools: {', '.join(refreshed)}")
+    if failed:
+        warn(f"Tool refresh failed: {', '.join(failed)}")
+    return not failed
+
+
 def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     log_action_start("update")
     had_errors = False
@@ -3996,8 +4112,13 @@ def run_update(cleanup_kernels: bool = False, keep_kernels: int = 1) -> bool:
     if cmd_exists("flatpak"):
         if run(["flatpak", "update", "-y"], check=False).returncode != 0:
             had_errors = True
+    # After the package managers, so a tool that also has a native package is
+    # already current; independent of their result, since a broken PPA says
+    # nothing about a git checkout.
+    tools_ok = refresh_catalog_tools()
     if cleanup_kernels and not had_errors:
         maybe_cleanup_kernels(keep_kernels)
+    had_errors = had_errors or not tools_ok
     log_action_end("update", "errors" if had_errors else "ok")
     return not had_errors
 
@@ -5642,9 +5763,18 @@ def run_install_tools(args: argparse.Namespace) -> None:
     cmd = [str(script)]
     if getattr(args, "list_tools", False):
         cmd.append("--list-tools")
-    elif args.all:
-        cmd.append("--all")
+    elif getattr(args, "list_categories", False):
+        cmd.append("--list-categories")
+    elif getattr(args, "list_catalog", False):
+        cmd.extend(["--list-catalog", "--format", args.format])
     else:
+        # Forward every selector as given: the script refuses a conflicting
+        # mix (--category with --tools, --all with --tools) with exit 2, and
+        # dropping one here would install something the caller did not ask for.
+        for value in getattr(args, "category", None) or []:
+            cmd.extend(["--category", value])
+        if args.all:
+            cmd.append("--all")
         for value in getattr(args, "tools", None) or []:
             cmd.extend(["--tools", value])
         tools_file = getattr(args, "tools_file", None)
@@ -5652,8 +5782,25 @@ def run_install_tools(args: argparse.Namespace) -> None:
             cmd.extend(["--tools-file", tools_file])
         if getattr(args, "reconcile", False):
             cmd.append("--reconcile")
+    java_version = getattr(args, "java_version", None)
+    listing = any(getattr(args, name, False) for name in ("list_tools", "list_categories", "list_catalog"))
+    if getattr(args, "purge", False) and not listing:
+        cmd.append("--purge")
+    if java_version and not listing:
+        cmd.extend(["--java-version", java_version])
     # Use check=False to allow partial failures (script reports them)
     result = run(cmd, check=False)
+    if listing:
+        # Machine-readable output: add nothing to stdout, pass the exit code
+        # through, and stay quiet when the reader closes the pipe early.
+        try:
+            sys.stdout.flush()
+        except BrokenPipeError:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        log_action_end("install-tools")
+        # The script dies of SIGPIPE when the reader stops early (| head):
+        # that is a normal end for a listing, not a failure.
+        sys.exit(0 if result.returncode == -signal.SIGPIPE else result.returncode)
     if result.returncode == 2:
         # Usage error (unknown tool/option): propagate so callers can tell a
         # bad request apart from a partially failed install.
@@ -6633,35 +6780,40 @@ def run_automate_tui() -> None:
         log_action_end("automate")
 
 
+# Main menu of the TUI, in display order.
+TUI_ACTIONS: List[Tuple[str, str]] = [
+    ("self-update", "System: Update distrodeck"),
+    ("preflight", "Diagnostics: Preflight checks"),
+    ("export", "Packages: Export installed packages"),
+    ("import", "Packages: Import from export file"),
+    ("diff", "Packages: Diff export vs current system"),
+    ("update", "System: Update packages"),
+    ("upgrade", "System: Upgrade distro"),
+    ("cleanup-kernels", "System: Cleanup old kernels"),
+    ("security", "Security: Apply security updates"),
+    ("repo-repair", "Packages: Repo repair (apt issues)"),
+    ("install-tools", "Tools: Install by category (IDEs, AI, Media, Graphics, Databases, ...)"),
+    ("ollama-models", "AI: Ollama model groups (pull or remove)"),
+    ("git-status", "Tools: Enable git status in shell prompt"),
+    ("git-aliases", "Tools: Configure git aliases"),
+    ("automate", "Automation: Run Ansible pull"),
+    ("net-tools", "Network: Run installed tools"),
+    ("settings", "Settings: Configure distrodeck"),
+    ("config-edit", "System: Edit config files"),
+    ("doctor", "Diagnostics: Check system prerequisites"),
+    ("sysinfo", "Diagnostics: Full system info"),
+    ("logs", "Diagnostics: View logs"),
+    ("clear-logs", "Diagnostics: Clear all logs"),
+    ("about", "About"),
+    ("quit", "Exit"),
+]
+
+
 def run_tui() -> None:
     require_dialog()
     os.environ["DISTRODECK_DIALOG"] = "1"
     self_cmd = str(Path(__file__).resolve())
-    actions = [
-        ("self-update", "System: Update distrodeck"),
-        ("preflight", "Diagnostics: Preflight checks"),
-        ("export", "Packages: Export installed packages"),
-        ("import", "Packages: Import from export file"),
-        ("diff", "Packages: Diff export vs current system"),
-        ("update", "System: Update packages"),
-        ("upgrade", "System: Upgrade distro"),
-        ("cleanup-kernels", "System: Cleanup old kernels"),
-        ("security", "Security: Apply security updates"),
-        ("repo-repair", "Packages: Repo repair (apt issues)"),
-        ("install-tools", "Tools: Install optional tools"),
-        ("git-status", "Tools: Enable git status in shell prompt"),
-        ("git-aliases", "Tools: Configure git aliases"),
-        ("automate", "Automation: Run Ansible pull"),
-        ("net-tools", "Network: Run installed tools"),
-        ("settings", "Settings: Configure distrodeck"),
-        ("config-edit", "System: Edit config files"),
-        ("doctor", "Diagnostics: Check system prerequisites"),
-        ("sysinfo", "Diagnostics: Full system info"),
-        ("logs", "Diagnostics: View logs"),
-        ("clear-logs", "Diagnostics: Clear all logs"),
-        ("about", "About"),
-        ("quit", "Exit"),
-    ]
+    actions = TUI_ACTIONS
     while True:
         clear_dialog_before_run = False
         choice = dialog_menu(f"Distrodeck ({VERSION})", "Select an action:", actions)
@@ -6868,6 +7020,9 @@ def run_tui() -> None:
             run(["dialog", "--clear"], check=False)
             run([self_cmd, "install-tools"], check=False)
             continue
+        elif choice == "ollama-models":
+            run_ollama_models_tui(self_cmd)
+            continue
         elif choice == "automate":
             run_automate_tui()
             continue
@@ -7069,6 +7224,141 @@ def run_tui() -> None:
             dialog_msgbox("Distrodeck Error", message)
         else:
             dialog_msgbox("Distrodeck", "Done.")
+
+
+# Ollama model groups for `distrodeck ollama models` and the TUI entry. One
+# table: the CLI, the menu and the tests all read it. Every tag and download
+# size was checked against https://ollama.com/library; within a group the
+# smallest model comes first.
+OLLAMA_MODEL_GROUPS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    # One general model that fits an 8 GB laptop. gemma4:e4b is 9.5 GB.
+    "default": (("qwen3.5:4b", "3.4 GB"),),
+    "reasoning": (("deepseek-r1:8b", "5.2 GB"), ("qwen3:8b", "5.2 GB"), ("gpt-oss:20b", "14 GB")),
+    # qwen3-coder publishes nothing below 30b, so qwen2.5-coder covers laptops.
+    "coding": (("qwen2.5-coder:7b", "4.7 GB"), ("qwen3-coder:30b", "19 GB")),
+    "text": (("granite4:micro", "2.1 GB"), ("qwen3.5:9b", "6.6 GB"), ("gemma4:12b", "7.7 GB")),
+    "vision": (("qwen3-vl:4b", "3.3 GB"), ("qwen3-vl:8b", "6.1 GB")),
+    "embedding": (("embeddinggemma:300m", "622 MB"), ("qwen3-embedding:0.6b", "639 MB")),
+}
+
+OLLAMA_INSTALL_HINT = "distrodeck install-tools --tools ollama"
+
+
+def ollama_group_models(group: str) -> List[str]:
+    return [tag for tag, _ in OLLAMA_MODEL_GROUPS[group]]
+
+
+def ollama_group_size(group: str) -> str:
+    """Total download size of a group, e.g. "24.4 GB"."""
+    total = 0.0
+    for _, size in OLLAMA_MODEL_GROUPS[group]:
+        value, unit = size.split()
+        total += float(value) / (1000 if unit == "MB" else 1)
+    return f"{total:.1f} GB"
+
+
+def ollama_installed_models() -> Optional[set]:
+    """Return the model names `ollama list` reports, or None if it failed."""
+    result = run(["ollama", "list"], check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+    names = set()
+    for line in (result.stdout or "").splitlines()[1:]:
+        fields = line.split()
+        if fields:
+            names.add(fields[0])
+    return names
+
+
+def ollama_apply(action: str, groups: List[str], installed: Optional[set]) -> List[str]:
+    """Pull or remove every model of *groups*; return the models that failed.
+
+    The single code path behind the CLI and the TUI. `remove` skips models
+    that are not installed and needs *installed*; one failure never stops the
+    rest.
+    """
+    failed: List[str] = []
+    for group in groups:
+        for model in ollama_group_models(group):
+            if action == "pull":
+                log(f"Pulling {model}")
+                command = ["ollama", "pull", model]
+            else:
+                if installed is None or model not in installed:
+                    log(f"Not installed, skipping: {model}")
+                    continue
+                log(f"Removing {model}")
+                command = ["ollama", "rm", model]
+            if run(command, check=False).returncode != 0:
+                failed.append(model)
+    return failed
+
+
+def run_ollama_models(args: argparse.Namespace) -> None:
+    action = args.models_action
+    if action == "list":
+        installed = ollama_installed_models() if cmd_exists("ollama") else None
+        if installed is None:
+            print("(ollama not installed or not running; install state unknown)")
+        for group, models in OLLAMA_MODEL_GROUPS.items():
+            print(f"{group}: ({ollama_group_size(group)})")
+            for model, size in models:
+                mark = ""
+                if installed is not None:
+                    mark = "  [installed]" if model in installed else ""
+                print(f"  {model}  {size}{mark}")
+        return
+    if not cmd_exists("ollama"):
+        fail(f"ollama is not installed. Install it with '{OLLAMA_INSTALL_HINT}' and try again.")
+    installed = None
+    if action == "remove":
+        installed = ollama_installed_models()
+        if installed is None:
+            fail("'ollama list' failed; is the ollama service running?")
+    failed = ollama_apply(action, [args.group], installed)
+    if failed:
+        fail(f"ollama {action} failed for: {', '.join(failed)}")
+
+
+def run_ollama_models_tui(self_cmd: str) -> None:
+    """Menu entry: pick groups, then pull or remove them, then back to the menu."""
+    title = "Ollama model groups"
+    if not cmd_exists("ollama"):
+        if dialog_yesno(
+            title,
+            "Ollama is not installed. It is an opt-in tool in the AI tools "
+            "category.\n\nInstall ollama now?",
+        ):
+            if not ensure_sudo():
+                return
+            run(["dialog", "--clear"], check=False)
+            run([self_cmd, "install-tools", "--tools", "ollama"], check=False)
+        return
+    installed = ollama_installed_models()
+    if installed is None:
+        dialog_msgbox(title, "'ollama list' failed. Start the service (systemctl start ollama) and try again.")
+        return
+    items = []
+    for group, models in OLLAMA_MODEL_GROUPS.items():
+        names = ", ".join(f"{tag}{' [installed]' if tag in installed else ''}" for tag, _ in models)
+        items.append((group, f"{ollama_group_size(group)} - {names}", "off"))
+    groups = dialog_checklist(title, "Select model groups:", items)
+    if not groups:
+        return
+    action = dialog_menu(
+        title,
+        f"Groups: {', '.join(groups)}",
+        [("pull", "Pull (download) every model in these groups"),
+         ("remove", "Remove the installed models of these groups")],
+    )
+    if action not in {"pull", "remove"}:
+        return
+    run(["dialog", "--clear"], check=False)
+    failed = ollama_apply(action, groups, installed)
+    if failed:
+        dialog_msgbox(title, f"ollama {action} failed for: {', '.join(failed)}")
+    else:
+        dialog_msgbox(title, f"ollama {action} finished for: {', '.join(groups)}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -7357,6 +7647,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="With --tools, also uninstall tracked tools outside the requested set",
     )
     install_cmd.add_argument(
+        "--java-version",
+        choices=["17", "21", "25"],
+        help="JDK major installed by the java tool (default 21)",
+    )
+    install_cmd.add_argument(
+        "--purge",
+        action="store_true",
+        help="When uninstalling a container tool, also remove its data volume",
+    )
+    install_cmd.add_argument(
+        "--category",
+        action="append",
+        metavar="IDS",
+        help="Install the default-on tools of these categories, one block each (repeatable)",
+    )
+    install_cmd.add_argument(
+        "--list-categories",
+        action="store_true",
+        help="Print category ids and labels and exit",
+    )
+    install_cmd.add_argument(
+        "--list-catalog",
+        action="store_true",
+        help="Print the catalog for scripts (needs --format tsv) and exit",
+    )
+    install_cmd.add_argument(
+        "--format",
+        choices=["tsv"],
+        default="tsv",
+        help="Output format for --list-catalog",
+    )
+    install_cmd.add_argument(
         "--list-tools",
         action="store_true",
         help="Print the tool catalog and exit",
@@ -7413,6 +7735,17 @@ def build_parser() -> argparse.ArgumentParser:
     net_cmd = sub.add_parser("net-tools", help="Run installed network tools (TUI)")
     net_cmd.set_defaults(func=lambda _: run_network_tools_tui())
 
+    ollama_cmd = sub.add_parser("ollama", help="Manage curated Ollama model groups")
+    ollama_sub = ollama_cmd.add_subparsers(dest="ollama_action", required=True)
+    models_cmd = ollama_sub.add_parser("models", help="List, pull or remove model groups")
+    models_sub = models_cmd.add_subparsers(dest="models_action", required=True)
+    models_list_cmd = models_sub.add_parser("list", help="Show every group and its models")
+    models_list_cmd.set_defaults(func=run_ollama_models)
+    for verb, verb_help in (("pull", "Pull every model in a group"), ("remove", "Remove a group's installed models")):
+        verb_cmd = models_sub.add_parser(verb, help=verb_help)
+        verb_cmd.add_argument("group", choices=list(OLLAMA_MODEL_GROUPS))
+        verb_cmd.set_defaults(func=run_ollama_models)
+
     return parser
 
 
@@ -7438,7 +7771,7 @@ def main() -> None:
     global VERBOSE
     VERBOSE = args.verbose
     result = args.func(args)
-    if getattr(args, "command", None) in {"self-update", "self-upgrade"} and result is False:
+    if getattr(args, "command", None) in {"self-update", "self-upgrade", "update"} and result is False:
         raise SystemExit(1)
 
 

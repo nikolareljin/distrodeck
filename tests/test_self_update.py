@@ -117,3 +117,68 @@ def test_homebrew_ownership_resolves_formula_prefix(monkeypatch, tmp_path):
     monkeypatch.setattr(distrodeck, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=str(opt)))
 
     assert distrodeck.self_update_owns_running_script("brew") is True
+
+
+def test_self_update_and_self_upgrade_run_the_same_function():
+    parser = distrodeck.build_parser()
+    update = parser.parse_args(["self-update"])
+    upgrade = parser.parse_args(["self-upgrade"])
+    assert update.func is upgrade.func is distrodeck.run_self_update
+
+
+def _native_fake(monkeypatch, method, versions, fail=None):
+    monkeypatch.setattr(distrodeck, "self_update_method", lambda: method)
+    monkeypatch.setattr(distrodeck, "cmd_exists", lambda name: True)
+    monkeypatch.setattr(distrodeck, "write_log", lambda *a, **k: None)
+    calls = []
+    remaining = list(versions)
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command == fail:
+            return SimpleNamespace(returncode=1, stdout="")
+        if command[0] in {"dpkg-query", "rpm", "pacman", "brew"}:
+            return SimpleNamespace(returncode=0, stdout=remaining.pop(0))
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(distrodeck, "run", fake_run)
+    return calls
+
+
+def test_native_apt_update_refreshes_then_upgrades_and_reports_versions(monkeypatch, capsys):
+    calls = _native_fake(monkeypatch, "apt-get", ["0.10.2", "0.10.3"])
+    assert distrodeck.run_self_update(SimpleNamespace()) is True
+    refresh = calls.index(["sudo", "apt-get", "update"])
+    upgrade = calls.index(["sudo", "apt-get", "install", "--only-upgrade", "-y", "distrodeck"])
+    assert refresh < upgrade
+    assert "was 0.10.2; now 0.10.3" in capsys.readouterr().out
+
+
+def test_native_dnf_failure_is_not_reported_as_success(monkeypatch, capsys):
+    upgrade = ["sudo", "dnf", "upgrade", "-y", "distrodeck"]
+    calls = _native_fake(monkeypatch, "dnf", ["0.10.2"], fail=upgrade)
+    assert distrodeck.run_self_update(SimpleNamespace()) is False
+    assert upgrade in calls
+    assert "completed" not in capsys.readouterr().out
+
+
+def test_clean_fast_forwardable_source_checkout_runs_every_step(monkeypatch, tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / ".git").mkdir()
+    (root / "VERSION").write_text("0.11.0\n")
+    prefix = tmp_path / "prefix"
+    monkeypatch.setattr(distrodeck, "SCRIPT_FILE", root / "distrodeck.py")
+    monkeypatch.setattr(distrodeck, "self_update_method", lambda: "source")
+    monkeypatch.setattr(distrodeck, "source_install_prefix", lambda _root: prefix)
+    monkeypatch.setattr(distrodeck, "cmd_exists", lambda name: True)
+    monkeypatch.setattr(distrodeck, "write_log", lambda *a, **k: None)
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(distrodeck, "run", fake_run)
+    assert distrodeck.run_self_update(SimpleNamespace()) is True
+    assert calls[2:] == distrodeck.source_self_update_commands(root, prefix)

@@ -145,6 +145,10 @@ Includes distrodeck config files if present (user and system).
 
 distrodeck net-tools
 
+distrodeck ollama models list
+distrodeck ollama models pull coding
+distrodeck ollama models remove vision
+
 distrodeck  # use the TUI "Automate" action
 
 distrodeck install-tools --all
@@ -158,24 +162,101 @@ distrodeck install-tools --list-tools
 
 ### Install-tools categories
 
-The `install-tools` command offers tools organized by category:
+`distrodeck install-tools` opens a category menu. Pick a category, check the
+tools you want in its own checklist, install that block, and come back to the
+menu for the next one; Quit ends. Nothing is preselected in bulk.
 
-| Category | Examples |
-|----------|----------|
-| `[Shell]` | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide |
-| `[Editor]` | mc, meld, micro, neovim, vscode |
-| `[System]` | bandwhich, duf, htop, ncdu |
-| `[Net]` | curl, nmap, mtr, tcpdump, tor, wget |
-| `[Dev]` | bfg, delta, gh, git, lazygit, tokei |
-| `[AI]` | aider, antigravity, codex, copilot, claude-code, gemini, ollama, cursor, kiro |
-| `[Lang]` | go, java, node (24 LTS + nvm), php, ruby, rust |
-| `[DevOps]` | ansible, docker, k9s, lazydocker, podman |
-| `[Util]` | flatpak, ntfs-3g, wine |
-| `[App]` | gimp, nemo, rustdesk, streamcontroller |
+| Id | Category | Tools (opt-in marked *) |
+|----|----------|-------|
+| `shell` | Shell & CLI | bat, eza, fd, fzf, glow, jq, ripgrep, tldr, tree, yq, zoxide, zsh |
+| `editors` | Editors & Terminal | mc, meld, micro, neovim, screen, tmux |
+| `system` | System & Monitoring | bandwhich, cron, duf, htop, lm-sensors, ncdu, pciutils, usbutils |
+| `network` | Networking | bind-tools, curl, iperf3, mtr, net-tools, nmap, tcpdump, tor, traceroute, ufw, wget |
+| `backup` | Backup & Storage | borgbackup, duplicity, fdupes, lz4, tar, unzip |
+| `dev` | Development | bfg, build-tools, composer, delta, gh, git, git-lantern, git-lfs, lazygit, tokei |
+| `ai` | AI tools | aider*, ai-runner, claude-code*, codex*, copilot*, gemini*, ollama* |
+| `ides` | IDEs | antigravity*, cursor*, intellij-idea-community*, kiro*, pycharm-community*, vscode*, zed* |
+| `lang` | Languages & Runtimes | go, java (JDK 17/21/25, default 21), node (24 LTS + nvm), php, ruby, rust |
+| `devops` | DevOps & Containers | ansible, docker, k9s, lazydocker, podman |
+| `media` | Media | audacity, ffmpeg, handbrake, kdenlive, mpv, obs-studio, vlc |
+| `graphics` | Graphics | blender, darktable, gimp, inkscape, krita |
+| `util` | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
+| `db-sql` | Relational databases | mariadb*, mysql*, oracle-free* (container), pgvector*, postgresql*, sqlite* |
+| `db-nosql` | NoSQL & graph databases | atlas*, cassandra* (Apache repo), couchdb*, mongodb*, neo4j* (Neo4j repo), redis*, valkey* |
+| `db-vector` | Vector databases | chroma* (pipx), milvus* (container), qdrant* (container), weaviate* (container) |
+| `storage` | Object storage | minio* (macOS only, archived upstream), minio-client, rclone, s3cmd, seaweedfs* (container) |
+| `db-admin` | Database admin | beekeeper-studio*, dbeaver-ce*, litecli, mongodb-compass*, mycli, pgadmin4*, pgcli, sqlitebrowser*, usql |
+| `sysadmin` | System admin | btop, cockpit* (127.0.0.1:9090), glances, lnav |
+| `web` | Web services | apache2*, caddy*, certbot, haproxy*, mkcert, nginx* |
+| `prog` | Programming tools | bruno*, clang, cmake, dotnet-sdk*, gdb, httpie, kotlin, ninja, nvm, pipx, pre-commit, pyenv, sdkman*, shellcheck, uv, valgrind |
+| `claude-plugins` | Claude Code plugins | plugin-claude-md-management*, plugin-code-review*, plugin-code-simplifier*, plugin-commit-commands*, plugin-feature-dev*, plugin-frontend-design*, plugin-hookify*, plugin-pr-review-toolkit*, plugin-security-guidance*, plugin-skill-creator* |
+| `apps` | Apps | image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
 
-For scripts and external integrators, `--tools LIST` and `--tools-file PATH` install a named set without opening the checklist. Unknown tool names exit 2 before anything is installed, and tools outside the requested set are left alone unless `--reconcile` is passed. `--list-tools` prints the catalog.
+For scripts and external integrators, `--tools LIST` and `--tools-file PATH` install a named set without opening the checklist. Unknown tool names exit 2 before anything is installed, and tools outside the requested set are left alone unless `--reconcile` is passed. `--list-tools` prints the catalog. `--category media,graphics` installs the default-on tools of those categories, one block each; opt-in tools (*) install only when named with `--tools`. `--list-categories` prints the ids, and `--list-catalog --format tsv` prints one line per tool: `category_id`, `category_label`, `tool`, `label`, `opt_in` (0/1), `installed` (0/1), `needs` (required catalog tool ids, comma separated, `-` for none; `docker` means any container runtime, podman included), tab separated, with no colour, no dialog and no root.
+
+Media, Graphics and the JetBrains/Zed IDEs install from the distro package where one exists and fall back to the Flathub Flatpak where it does not (for example HandBrake on Fedora and openSUSE, Zed on Ubuntu). A tool with neither fails on its own with a message.
+
+**Servers** (databases, web servers, Cockpit) are opt-in. They are enabled
+with systemd (or `brew services` on macOS) and bound to 127.0.0.1: nginx,
+Apache and Caddy listen directives are rewritten, MySQL/MariaDB get a
+`bind-address = 127.0.0.1` drop-in, Cockpit's socket listens on
+127.0.0.1:9090; PostgreSQL, Redis, Valkey, CouchDB, Neo4j and Cassandra already
+default to localhost. On apt every server installs under a temporary
+`/usr/sbin/policy-rc.d` that answers 101, so its postinst cannot start it on
+0.0.0.0 before the bind is rewritten; the file is removed after the install,
+also on failure, and an existing policy-rc.d that distrodeck did not write is
+left alone. Uninstall stops the service, removes the concrete server
+packages behind a metapackage (resolved from dpkg at that moment, e.g.
+`postgresql-17` and `postgresql-17-pgvector`, `mysql-server-8.0`,
+`mariadb-server` for Debian's `default-mysql-server`, `apache2-bin`,
+`redis-tools`), never runs autoremove, and keeps the data directory.
+
+The MongoDB and Neo4j repository keys are pinned to their full fingerprints
+(MongoDB 8.0 `4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05`, Neo4j
+`1EEFB8767D4924B86EAD08A459D700E4D37F5F19`); a download holding any other key
+is refused. On dnf the verified MongoDB key is installed locally instead of
+letting dnf fetch it. Cassandra's KEYS file is not pinned (it is the changing
+set of release managers' keys); it must hold at least one key and every
+fingerprint is logged.
+
+Debian ships no `mysql-server`: there the `mysql` tool installs
+`default-mysql-server`, which is MariaDB, and says so (use the MySQL APT
+repository for Oracle MySQL). Debian bookworm has no `valkey-server` either;
+the tool stops with the `bookworm-backports` command to run instead.
+
+MinIO archived its open-source server: dl.min.io answers 410 Gone for the
+server and client binaries, so distrodeck installs nothing for it on Linux and
+`seaweedfs` is the S3 server to use. On macOS the deprecated `minio` formula
+still installs, but it is not started, because its `brew services` definition
+listens on every interface; the installer prints a loopback `minio server`
+command instead.
+
+**Containers** (oracle-free, qdrant, milvus, weaviate, seaweedfs) need docker
+or podman. Each runs a pinned image tag as `distrodeck-<tool>` with a named
+volume `distrodeck-<tool>`, publishes its ports on 127.0.0.1 only and restarts
+unless stopped. A port another process holds is refused with that process's
+name. Uninstall removes the container and keeps the volume; `--purge` removes
+it too. The Oracle password is generated once into
+`~/.local/state/distrodeck/oracle-free.password` (mode 600); `--purge`
+removes it with the volume. Milvus runs as milvus `scripts/standalone_embed.sh`
+runs it at the pinned tag (embedded etcd, its config under
+`~/.local/state/distrodeck/milvus`, `seccomp:unconfined`), with 19530 and 9091
+on 127.0.0.1 and etcd's 2379 not published. Qdrant has no Homebrew formula, so
+like the other containers it is hidden on macOS.
+
+**Claude Code plugins** need the `claude` CLI and come only from the public
+`anthropics/claude-plugins-official` marketplace, which is added when missing.
+They install at user scope with stdin closed and a 300 s limit
+(`DISTRODECK_PLUGIN_TIMEOUT`), so a `--tools` or `--all` run never waits on a
+prompt. A plugin that needs a confirmed command fails and is installed by hand.
+
+**macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
+if it is missing) and installs with `brew` / `brew install --cask`. Tools with
+no Homebrew formula or cask (ufw, cockpit, flatpak, nala, ntfs-3g, ...) are
+hidden from the menu, `--category` and `--all`.
+
 
 Selecting `node` installs Node 24 from the system repository and nvm (Node 24 and 22, default 24), so versions can be switched per shell with `nvm use 22`.
 

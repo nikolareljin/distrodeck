@@ -1,4 +1,4 @@
-.TH DISTRODECK 1 "2026-09-12" "distrodeck 0.10.3" "User Commands"
+.TH DISTRODECK 1 "2026-10-01" "distrodeck 0.10.3" "User Commands"
 .SH NAME
 distrodeck \- Export and restore packages before distro upgrades.
 .SH SYNOPSIS
@@ -73,6 +73,9 @@ Edit common system config files (TUI)
 .TP
 .B net-tools
 Run installed network tools (TUI)
+.TP
+.B ollama
+Manage curated Ollama model groups
 .SH GIT ALIAS HELP
 After running \fBdistrodeck git-aliases set\fR, run \fBgit dhelp\fR for a detailed reference of every distrodeck Git alias.
 .PP
@@ -247,18 +250,31 @@ options:
 .nf
 usage: distrodeck install-tools [-h] [--all] [--tools LIST]
                                 [--tools-file PATH] [--reconcile]
+                                [--java-version {17,21,25}] [--purge]
+                                [--category IDS] [--list-categories]
+                                [--list-catalog] [--format {tsv}]
                                 [--list-tools]
 
 options:
-  -h, --help         show this help message and exit
-  --all              Install all tools without showing the TUI
-  --tools LIST       Install only these tools without showing the TUI (comma
-                     or space separated; repeatable)
-  --tools-file PATH  Install only the tools listed in PATH, one per line ('-'
-                     for stdin)
-  --reconcile        With --tools, also uninstall tracked tools outside the
-                     requested set
-  --list-tools       Print the tool catalog and exit
+  -h, --help            show this help message and exit
+  --all                 Install all tools without showing the TUI
+  --tools LIST          Install only these tools without showing the TUI
+                        (comma or space separated; repeatable)
+  --tools-file PATH     Install only the tools listed in PATH, one per line
+                        ('-' for stdin)
+  --reconcile           With --tools, also uninstall tracked tools outside the
+                        requested set
+  --java-version {17,21,25}
+                        JDK major installed by the java tool (default 21)
+  --purge               When uninstalling a container tool, also remove its
+                        data volume
+  --category IDS        Install the default-on tools of these categories, one
+                        block each (repeatable)
+  --list-categories     Print category ids and labels and exit
+  --list-catalog        Print the catalog for scripts (needs --format tsv) and
+                        exit
+  --format {tsv}        Output format for --list-catalog
+  --list-tools          Print the tool catalog and exit
 .fi
 .SS git-status
 .nf
@@ -325,6 +341,17 @@ options:
 .SS net-tools
 .nf
 usage: distrodeck net-tools [-h]
+
+options:
+  -h, --help  show this help message and exit
+.fi
+.SS ollama
+.nf
+usage: distrodeck ollama [-h] {models} ...
+
+positional arguments:
+  {models}
+    models    List, pull or remove model groups
 
 options:
   -h, --help  show this help message and exit

@@ -6,6 +6,73 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- **Catalog expansion.** New categories: Relational (postgresql, pgvector,
+  mysql, mariadb, sqlite, oracle-free), NoSQL & graph (redis, valkey, cassandra,
+  couchdb, neo4j, plus mongodb and atlas), Vector (qdrant, chroma, milvus,
+  weaviate), Object storage (minio, minio-client, seaweedfs, rclone, s3cmd),
+  Database admin (dbeaver-ce, pgadmin4, mongodb-compass, sqlitebrowser,
+  beekeeper-studio, pgcli, mycli, litecli, usql), System admin (cockpit, btop,
+  glances, lnav), Web services (nginx, apache2, caddy, haproxy, certbot,
+  mkcert), Programming tools (16 tools) and Claude Code plugins (10 from
+  anthropics/claude-plugins-official). Servers, containers, GUI admin tools and
+  plugins are opt-in; servers bind 127.0.0.1; containers use pinned tags and
+  refuse a busy port naming its holder. `--purge` removes a container's volume
+  and its generated password or config.
+  On apt a server installs under a temporary `policy-rc.d` (exit 101), so
+  nginx, apache2, caddy and cockpit never start on 0.0.0.0 before the bind is
+  rewritten. Debian's `mysql` is `default-mysql-server` (MariaDB, said so);
+  bookworm's missing `valkey-server` stops with the backports command. MinIO
+  is macOS-only and not auto-started (the open-source server is archived and
+  the formula's service binds every interface); seaweedfs covers Linux. Milvus
+  runs with the env, config mounts and seccomp setting of upstream
+  `standalone_embed.sh`. Claude plugins install at user scope with no stdin and
+  a 300 s limit. Uninstall removes the concrete server packages behind apt
+  metapackages (postgresql-N and its pgvector, mysql-server-N, mariadb-server,
+  apache2-bin, redis-tools, the JDK behind default-jdk and openjdk-N-jdk's
+  -headless), with no autoremove; data directories are kept. MongoDB and Neo4j
+  repository keys are pinned by full fingerprint; Cassandra's KEYS file must
+  hold a key and its fingerprints are logged.
+- **macOS.** The installer re-execs under Homebrew bash 5, installs with brew
+  formulae and casks, and hides Linux-only tools. A `macos-latest` CI job runs
+  the listing, the argument tests and one real brew install.
+- **install-tools works by category.** The TUI opens a category menu; each
+  category opens its own checklist, installs that block and returns to the
+  menu. `--category IDS` does the same without the TUI (default-on tools only),
+  `--list-categories` prints the ids, and `--list-catalog --format tsv` prints
+  `category_id, category_label, tool, label, opt_in, installed, needs` per
+  tool for scripts (`needs`: required catalog tool ids, `-` for none). One `TOOL_CATEGORIES` table drives all of it.
+- **New categories:** IDEs (antigravity, cursor, kiro and vscode moved here,
+  plus zed, intellij-idea-community, pycharm-community; all opt-in), Media (vlc,
+  mpv, ffmpeg, obs-studio, audacity, kdenlive, handbrake) and Graphics (gimp
+  moved here, plus inkscape, krita, blender, darktable). Distro package where
+  one exists, Flathub Flatpak otherwise.
+  A tool counts as installed when a binary from its package file list is on
+  PATH, its distro package is installed, or `flatpak info <id>` succeeds
+  (openSUSE's Blender ships only `/usr/bin/blender-<version>`).
+- `git dhelp` tests now render the alias under dash, bash in POSIX mode (macOS
+  `/bin/sh`) and zsh sh-emulation when present, on a pty and piped, with and
+  without `NO_COLOR`.
+- **`update` refreshes install-tools catalog entries no package manager owns**
+  (git-lantern and ai-runner checkouts, codex/copilot/gemini via npm,
+  claude-code). Detected on the system, not from the state file; one failure
+  does not stop the rest. `distrodeck update` now exits 1 when anything failed;
+  it used to exit 0.
+- **`install-tools --java-version 17|21|25`** (or `DISTRODECK_JAVA_VERSION`).
+  The `java` tool now installs OpenJDK 21 by default on every package manager;
+  an invalid variable fails only the java tool, an invalid flag exits 2;
+  it was `default-jdk` on apt and 17 on dnf and zypper.
+- **`distrodeck ollama models list|pull|remove <group>`.** Six groups
+  (default, reasoning, coding, text, vision, embedding) of current Ollama models
+  in one table; every tag checked against ollama.com/library. Without the
+  `ollama` binary, `pull` and `remove` fail with an install hint. The TUI has
+  an "AI: Ollama model groups" entry on the same code path: pick groups (sizes
+  and installed models shown), then pull or remove; without ollama it offers
+  the opt-in install. The main-menu install entry now names the categories.
+- **`install-tools`: Databases section with `mongodb` and `atlas`.** Both use
+  the official MongoDB repository (series 8.2; Ubuntu jammy/noble, Debian bookworm/trixie; signed-by keyring on apt, a yum
+  repo file on dnf). `mongod` is enabled bound to 127.0.0.1. pacman and zypper
+  fail that tool with a clear message. Uninstall removes packages, repository
+  and keyring once neither tool needs them, and keeps the data directory.
 - **`distrodeck reclaim`: disk that a build can make again.** A workspace of
   development checkouts is mostly not source. Measured on one machine, 90 GB
   across roughly a hundred repositories: **34.1 GB of `build/`, 15.6 GB of Rust
@@ -338,7 +405,33 @@ This project follows Keep a Changelog and Semantic Versioning.
   switched per shell.
 - The PR CI gate now runs the test suite (pytest plus the installer argument
   tests); previously only `py_compile` ran, so tests never gated a PR.
+
+### Fixed
+- `install-tools --tools`/`--tools-file` crashed at the summary with
+  `DIALOG_HEIGHT: unbound variable` whenever `dialog` was installed, and exited 1
+  after a successful install. Only the checklist run uses dialog now.
+- `install-tools` cloned `git-lantern` and `ai-runner` into
+  `~/.local/state/distrodeck/tools/` itself rather than `tools/<name>/`: one
+  `local` statement read `$name` before assigning it. Both now land in their
+  own directory, are detected, and uninstall removes the checkout (a directory
+  without `.git` is left alone). Before, unchecking either reported a
+  successful uninstall without doing anything; an unwired tool now fails.
+- `mongodb` is opt-in like `atlas`: never preselected, not in `--all`.
+- `vscode` is opt-in with the other IDEs and no longer part of `--all`.
+- Tools in a block install in catalog order, not hash order.
+- `install-tools` with no arguments and no terminal exits 2 with a message;
+  it used to fail inside dialog and exit 0.
+- `git-lantern` and `ai-runner` are preselected on a first run and part of
+  `--all`; `ai-runner` is no longer opt-in (it is a git clone, no script runs).
+- `reclaim` no longer offers a `build/` (or any artifact name) inside a Python
+  virtualenv: a path under `site-packages` or below a `pyvenv.cfg` is installed
+  code. The venv itself is still offered with `--include-environments`.
+
 ### Changed
+- The `db` install-tools category is split into `db-sql`, `db-nosql` and
+  `db-vector`. `--list-catalog --format tsv` keeps columns 1-6 and appends a 7th, `needs`.
+- `scripts/script-helpers` follows the `production` branch (`.gitmodules`) and is
+  bumped to its current head.
 - `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
   looks for `~/Projects/iso-forge` first and still accepts an older
   `~/Projects/burn-iso` checkout, and the tool-suite Pages links point at the

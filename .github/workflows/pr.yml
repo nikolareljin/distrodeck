@@ -17,3 +17,37 @@ jobs:
         bash tests/test_install_tools_args.sh &&
         bash tests/test_packaging_metadata.sh
       build_command: "python3 -m py_compile distrodeck.py"
+
+  # macOS smoke: the installer re-execs under Homebrew bash 5 and must list,
+  # validate and install with brew. Kept small: macOS minutes are billed 10x.
+  macos-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    concurrency:
+      group: macos-smoke-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Homebrew bash 5 first on PATH
+        run: |
+          brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - name: Re-exec from the system bash 3.2
+        run: /bin/bash scripts/install-tools-tui.sh --list-categories
+      - name: Catalog listing
+        run: |
+          scripts/install-tools-tui.sh --list-catalog --format tsv > catalog.tsv
+          awk -F'\t' 'NF != 7 { bad = 1 } END { exit bad }' catalog.tsv
+          wc -l catalog.tsv
+      - name: Installer argument tests
+        timeout-minutes: 5
+        run: bash tests/test_install_tools_args.sh
+      # macOS ships /usr/bin/jq, so jq would only report "Already installed".
+      # tree is not part of macOS: this is a real brew install.
+      - name: Real install through brew
+        run: |
+          ! command -v tree
+          scripts/install-tools-tui.sh --tools tree
+          brew list --versions tree
