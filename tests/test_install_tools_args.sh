@@ -688,6 +688,9 @@ ora_out="$(
 assert_contains "$ora_out" "--env-file $ora_dir/oracle-free.env" "the Oracle password goes in through an env file"
 assert_not_contains "$ora_out" "ORACLE_PASSWORD=" "the Oracle password is never on the command line"
 [[ "$(stat -c %a "$ora_dir/oracle-free.env" 2>/dev/null || stat -f %Lp "$ora_dir/oracle-free.env")" == "600" ]] && pass "the Oracle env file is mode 600" || fail "the Oracle env file is mode 600"
+# shellcheck disable=SC2034
+pw_len="$(STATE_DIR="$(mktemp -d)"; container_secret probe | wc -c | tr -d ' ')"
+[[ "$pw_len" -eq 24 ]] && pass "generated container secrets are 24 characters" || fail "generated container secrets are 24 characters" "$pw_len"
 rm -rf "$ora_dir"
 nodock_out="$( (container_cli() { return 1; }; install_container_tool milvus) 2>&1; echo "rc=$?")"
 assert_contains "$nodock_out" "needs docker or podman" "a container tool without docker says so"

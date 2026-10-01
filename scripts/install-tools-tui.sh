@@ -2272,7 +2272,8 @@ container_secret() {
   local file="$STATE_DIR/$1.password"
   ensure_state_dir
   if [[ ! -s "$file" ]]; then
-    (umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > "$file")
+    # Bounded input: `tr < /dev/urandom | head` never ended on a macOS runner.
+    (umask 077; head -c 1024 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24 > "$file")
   fi
   cat "$file"
 }
