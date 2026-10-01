@@ -1629,6 +1629,10 @@ install_aider() {
 # Table-driven package tools (IDEs, Media, Graphics)
 # ─────────────────────────────────────────────────────────────────────────────
 # Fields: apt dnf pacman zypper flatpak-id binaries(comma). "-" = none.
+# Binaries were checked against each package's file list (packages.ubuntu.com
+# filelist, archlinux.org files, Fedora mdapi, Tumbleweed repodata). Detection
+# also asks the package database and `flatpak info`, because a binary name is
+# not always there: openSUSE ships /usr/bin/blender-<version> only.
 # Package names were checked against packages.ubuntu.com (noble), Fedora
 # rawhide (mdapi), archlinux.org and the openSUSE Tumbleweed oss repodata;
 # Flatpak ids against flathub.org. Where a manager has no package the Flatpak
@@ -1647,8 +1651,8 @@ package_tool_spec() {
     blender) echo "blender blender blender blender org.blender.Blender blender";;
     darktable) echo "darktable darktable darktable darktable org.darktable.Darktable darktable";;
     zed) echo "- - zed - dev.zed.Zed zeditor,zed";;
-    intellij-idea-community) echo "- - intellij-idea-community-edition - com.jetbrains.IntelliJ-IDEA-Community idea,idea.sh";;
-    pycharm-community) echo "- - pycharm-community-edition - com.jetbrains.PyCharm-Community pycharm,pycharm.sh";;
+    intellij-idea-community) echo "- - intellij-idea-community-edition - com.jetbrains.IntelliJ-IDEA-Community idea";;
+    pycharm-community) echo "- - pycharm-community-edition - com.jetbrains.PyCharm-Community pycharm";;
     *) return 1;;
   esac
 }
@@ -1675,12 +1679,28 @@ is_package_tool() {
   package_tool_spec "$1" >/dev/null 2>&1
 }
 
+# Return 0 when distro package $2 is installed under manager $1.
+native_pkg_installed() {
+  local mgr="$1" pkg="$2"
+  [[ -n "$pkg" ]] || return 1
+  case "$mgr" in
+    apt) [[ "$(dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null)" == "installed" ]];;
+    dnf|zypper) rpm -q "$pkg" >/dev/null 2>&1;;
+    pacman) pacman -Q "$pkg" >/dev/null 2>&1;;
+    *) return 1;;
+  esac
+}
+
+# Installed when a known binary is on PATH, the distro package is installed,
+# or the Flatpak is installed. A Flatpak is only ever found by `flatpak info`:
+# it puts no binary on PATH.
 package_tool_installed() {
   local tool="$1" apt dnf pacman zypper flatpak_id bins bin
   read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$tool")"
   for bin in ${bins//,/ }; do
     command -v "$bin" >/dev/null 2>&1 && return 0
   done
+  native_pkg_installed "$(detect_pkg_mgr)" "$(package_tool_pkg "$tool" "$(detect_pkg_mgr)")" && return 0
   [[ "$flatpak_id" != "-" ]] && command -v flatpak >/dev/null 2>&1 && \
     flatpak info "$flatpak_id" >/dev/null 2>&1
 }

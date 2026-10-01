@@ -17,6 +17,9 @@ This project follows Keep a Changelog and Semantic Versioning.
   mpv, ffmpeg, obs-studio, audacity, kdenlive, handbrake) and Graphics (gimp
   moved here, plus inkscape, krita, blender, darktable). Distro package where
   one exists, Flathub Flatpak otherwise.
+  A tool counts as installed when a binary from its package file list is on
+  PATH, its distro package is installed, or `flatpak info <id>` succeeds
+  (openSUSE's Blender ships only `/usr/bin/blender-<version>`).
 - `git dhelp` tests now render the alias under dash, bash in POSIX mode (macOS
   `/bin/sh`) and zsh sh-emulation when present, on a pty and piped, with and
   without `NO_COLOR`.

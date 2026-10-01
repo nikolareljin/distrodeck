@@ -512,6 +512,29 @@ checklist_line="$(grep '^CHECKLIST' <<< "$tui_out")"
 assert_not_contains "$checklist_line" " krita " "a category checklist shows only its own tools"
 assert_contains "$checklist_line" "vlc" "a category checklist shows its tools"
 
+# Detection: binary, then the package database, then `flatpak info`.
+det_log="$(mktemp)"
+det_out="$(
+  command() { [[ "$1" == "-v" && "$2" == "flatpak" ]] && return 0; [[ "$1" == "-v" ]] && return 1; builtin command "$@"; }
+  detect_pkg_mgr() { echo zypper; }
+  rpm() { [[ "$2" == "blender" ]]; }
+  flatpak() { echo "FLATPAK $*" >> "$det_log"; [[ "$1" == info && "$2" == "dev.zed.Zed" ]]; }
+  package_tool_installed blender && echo "blender:yes" || echo "blender:no"
+  package_tool_installed zed && echo "zed:yes" || echo "zed:no"
+  package_tool_installed krita && echo "krita:yes" || echo "krita:no"
+)"
+det_out+=$'\n'"$(cat "$det_log")"
+rm -f "$det_log"
+assert_contains "$det_out" "blender:yes" "a package with no plain binary is found through rpm -q"
+assert_contains "$det_out" "FLATPAK info dev.zed.Zed" "Flatpak detection uses flatpak info <id>"
+assert_contains "$det_out" "zed:yes" "a Flatpak-only install counts as installed"
+assert_contains "$det_out" "krita:no" "a tool with no binary, package or Flatpak is missing"
+for t in handbrake:ghb obs-studio:obs zed:zeditor intellij-idea-community:idea pycharm-community:pycharm; do
+  spec="$(package_tool_spec "${t%%:*}")"
+  [[ ",${spec##* }," == *",${t##*:},"* ]] || fail "${t%%:*} detects ${t##*:}" "$spec"
+done
+pass "detection binaries match the package file lists"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo
