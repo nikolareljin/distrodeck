@@ -44,8 +44,10 @@ jobs:
       - name: Installer argument tests
         timeout-minutes: 5
         run: bash tests/test_install_tools_args.sh
+      # macOS ships /usr/bin/jq, so jq would only report "Already installed".
+      # tree is not part of macOS: this is a real brew install.
       - name: Real install through brew
         run: |
-          brew uninstall --ignore-dependencies jq || true
-          scripts/install-tools-tui.sh --tools jq
-          command -v jq
+          ! command -v tree
+          scripts/install-tools-tui.sh --tools tree
+          brew list --versions tree
