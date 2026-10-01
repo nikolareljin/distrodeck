@@ -374,8 +374,8 @@ tsv="$("$INSTALLER" --list-catalog --format tsv 2>&1)"; rc=$?
 bad_lines="$(awk -F'\t' 'NF != 6 || $5 !~ /^[01]$/ || $6 !~ /^[01]$/' <<< "$tsv")"
 [[ -z "$bad_lines" ]] && pass "every TSV line has 6 columns with 0/1 flags" || fail "every TSV line has 6 columns with 0/1 flags" "$bad_lines"
 [[ "$tsv" != *$'\e'* ]] && pass "TSV catalog has no ANSI" || fail "TSV catalog has no ANSI"
-mongo_line="$(grep -P '\tmongodb\t' <<< "$tsv")"
-expected_prefix="$(printf 'db\tDatabases\tmongodb\tMongoDB Community server + mongosh\t1\t')"
+mongo_line="$(awk -F'\t' '$3 == "mongodb"' <<< "$tsv")"
+expected_prefix="$(printf 'db-nosql\tNoSQL & graph databases\tmongodb\tMongoDB Community server + mongosh\t1\t')"
 if [[ "$mongo_line" == "$expected_prefix"[01] ]]; then
   pass "TSV column order is category_id, category_label, tool, label, opt_in, installed"
 else
@@ -392,7 +392,7 @@ assert_exit 2 "--format without --list-catalog is refused" "$INSTALLER" --format
 assert_exit 2 "unknown --category exits 2" "$INSTALLER" --category media,nope
 assert_exit 2 "--category with --tools exits 2" "$INSTALLER" --category media --tools vlc
 cats="$("$INSTALLER" --list-categories)"
-for id in shell editors system network backup dev ai ides lang devops media graphics util db apps; do
+for id in shell editors system network backup dev ai ides lang devops media graphics util db-sql db-nosql db-vector storage db-admin sysadmin web prog claude-plugins apps; do
   [[ "$cats" == *"$id"$'\t'* ]] || fail "--list-categories includes $id"
 done
 pass "--list-categories lists every category"
@@ -418,14 +418,14 @@ cat_out="$(bash -c '
   install_mongodb() { echo "INSTALL mongodb"; }
   install_gimp() { echo "INSTALL gimp"; touch "$STATE_DIR/gimp"; }
   install_pkg() { echo "UNEXPECTED install_pkg $*"; return 1; }
-  main --category graphics,db </dev/null
+  main --category graphics,db-nosql </dev/null
 ' _ "$INSTALLER" 2>&1)"; rc=$?
-[[ "$rc" -eq 0 ]] && pass "--category graphics,db exits 0" || fail "--category graphics,db exits 0" "$cat_out"
+[[ "$rc" -eq 0 ]] && pass "--category graphics,db-nosql exits 0" || fail "--category graphics,db-nosql exits 0" "$cat_out"
 assert_contains "$cat_out" "INSTALL krita" "--category installs the category's tools"
 order="$(grep -o '^INSTALL [a-z]*' <<< "$cat_out" | tr '\n' ' ')"
 [[ "$order" == "INSTALL blender INSTALL darktable INSTALL gimp INSTALL inkscape INSTALL krita " ]] && pass "--category installs in catalog order" || fail "--category installs in catalog order" "$order"
 assert_not_contains "$cat_out" "INSTALL mongodb" "--category never installs an opt-in tool"
-assert_contains "$cat_out" "Category db has only opt-in tools" "--category explains an all-opt-in category"
+assert_contains "$cat_out" "Category db-nosql has only opt-in tools" "--category explains an all-opt-in category"
 all_inst_out="$(bash -c '
   source "$1"
   detect_pkg_mgr() { echo apt; }
@@ -452,7 +452,7 @@ assert_contains "$fp_out" "FLATPAK install -y flathub fr.handbrake.ghb" "handbra
 assert_contains "$fp_out" "FLATPAK install -y flathub dev.zed.Zed" "zed on zypper falls back to Flathub"
 assert_contains "$fp_out" "PKG pacman vlc" "vlc on pacman uses the distro package"
 nopkg_out="$(
-  package_tool_spec() { echo "- - - - - nothing"; }
+  package_tool_spec() { echo "pkg - - - - - - - nothing"; }
   install_package_tool fake apt 2>&1; echo "rc=$?"
 )"
 assert_contains "$nopkg_out" "has no apt package and no Flatpak" "a tool with no package and no Flatpak says so"
@@ -477,7 +477,9 @@ assert_not_contains "$notty_out" "DIALOG CALLED" "no-argument run without a term
 assert_exit 2 "no-argument run without a terminal exits 2" bash -c 'source "$1"; detect_pkg_mgr() { echo apt; }; main </dev/null >/dev/null' _ "$INSTALLER"
 
 # The interactive menu: open one category, install its block, quit.
-tui_out="$(timeout 30 bash -c '
+# macOS has no timeout(1); the loop guard is the menu-call counter anyway.
+with_timeout() { if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi; }
+tui_out="$(with_timeout 30 bash -c '
   source "$1"
   STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
   echo bat > "$INSTALLED_TOOLS_FILE"
@@ -534,6 +536,156 @@ for t in handbrake:ghb obs-studio:obs zed:zeditor intellij-idea-community:idea p
   [[ ",${spec##* }," == *",${t##*:},"* ]] || fail "${t%%:*} detects ${t##*:}" "$spec"
 done
 pass "detection binaries match the package file lists"
+
+# ── Spec v2: kinds, brew, servers, containers, plugins, macOS ────────────────
+
+set +e
+# Every catalog tool has a label, exactly one category and a manager.
+nomgr=""
+for t in "${TOOL_CATALOG[@]}"; do
+  ok=false
+  for m in apt dnf pacman zypper brew; do
+    tool_supported_on "$t" "$m" && { ok=true; break; }
+  done
+  $ok || nomgr+=" $t"
+done
+[[ -z "$nomgr" ]] && pass "every catalog tool has at least one supported manager" || fail "every catalog tool has at least one supported manager" "$nomgr"
+nospec=""
+for t in "${TOOL_CATALOG[@]}"; do
+  is_package_tool "$t" && { [[ "$(package_tool_spec "$t" | wc -w)" -eq 9 ]] || nospec+=" $t"; }
+done
+[[ -z "$nospec" ]] && pass "every spec row has 9 fields" || fail "every spec row has 9 fields" "$nospec"
+for t in postgresql mysql mariadb redis valkey oracle-free qdrant milvus weaviate seaweedfs nginx apache2 caddy cockpit plugin-code-review dbeaver-ce; do
+  is_opt_in_tool "$t" || fail "$t is opt-in"
+done
+pass "servers, containers, GUI admin tools and plugins are opt-in"
+
+assert_contains "$(spec_field obs-studio brew)" "cask:obs" "brew column holds a cask"
+assert_contains "$(spec_field btop brew)" "btop" "brew column holds a formula"
+brew_out="$(
+  brew() { echo "BREW $*"; }
+  sudo() { echo "SUDO $*"; }
+  install_pkg brew cask:obs btop
+  uninstall_pkg brew cask:obs
+)"
+assert_contains "$brew_out" "BREW install --cask obs" "install_pkg brew installs a cask with --cask"
+assert_contains "$brew_out" "BREW install btop" "install_pkg brew installs a formula"
+assert_contains "$brew_out" "BREW uninstall --cask obs" "uninstall_pkg brew removes a cask"
+assert_not_contains "$brew_out" "SUDO" "brew never runs with sudo"
+mac_mgr="$(uname() { echo Darwin; }; brew() { :; }; detect_pkg_mgr)"
+assert_contains "$mac_mgr" "brew" "detect_pkg_mgr returns brew on Darwin"
+
+# Linux-only tools are hidden on brew, present on apt.
+util_brew=" $(category_tools_for util brew) "
+assert_not_contains "$util_brew" " ntfs " "ntfs is hidden on macOS"
+assert_not_contains "$util_brew" " nala " "nala is hidden on macOS"
+assert_contains " $(category_tools_for util apt) " " ntfs " "ntfs is offered on apt"
+assert_not_contains " $(category_tools_for sysadmin brew) " " cockpit " "cockpit is hidden on macOS"
+assert_not_contains " $(default_all_selection brew) " " ufw " "--all on macOS skips Linux-only tools"
+assert_contains " $(default_all_selection apt) " " ufw " "--all on apt keeps ufw"
+
+# macOS re-exec under bash 3.2.
+fake_prefix="$(mktemp -d)"; mkdir -p "$fake_prefix/bin"; printf '#!/bin/sh\n' > "$fake_prefix/bin/bash"; chmod +x "$fake_prefix/bin/bash"
+reexec_out="$(
+  uname() { echo Darwin; }
+  brew() { [[ "$1" == --prefix ]] && echo "$fake_prefix"; }
+  exec() { echo "EXEC $*"; exit 0; }
+  ensure_modern_bash 3 2 --tools jq
+)"
+rm -rf "$fake_prefix"
+assert_contains "$reexec_out" "/bin/bash" "bash 3.2 on macOS re-execs under Homebrew bash"
+assert_contains "$reexec_out" "--tools jq" "the re-exec keeps the arguments"
+noreexec_rc="$( ( uname() { echo Darwin; }; command() { [[ "$2" == brew ]] && return 1; builtin command "$@"; }; ensure_modern_bash 3 2 ) >/dev/null 2>&1; echo $? )"
+[[ "$noreexec_rc" == "2" ]] && pass "bash 3.2 without Homebrew bash exits 2" || fail "bash 3.2 without Homebrew bash exits 2" "rc=$noreexec_rc"
+( ensure_modern_bash 5 2 ) && pass "bash 5 needs no re-exec" || fail "bash 5 needs no re-exec"
+
+# pgvector follows the installed PostgreSQL major.
+pg_out="$(psql() { echo "psql (PostgreSQL) 16.4"; }; package_tool_pkg pgvector apt; package_tool_pkg pgvector zypper)"
+assert_contains "$pg_out" "postgresql-16-pgvector" "pgvector on apt matches the PostgreSQL major"
+assert_contains "$pg_out" "postgresql16-pgvector" "pgvector on zypper matches the PostgreSQL major"
+pg_none="$( (psql() { return 1; }; install_package_tool pgvector apt) 2>&1; echo "rc=$?")"
+assert_contains "$pg_none" "needs PostgreSQL installed first" "pgvector without PostgreSQL says so"
+assert_contains "$pg_none" "rc=1" "pgvector without PostgreSQL fails"
+
+# Server bind: config rewritten to 127.0.0.1.
+etc="$(mktemp -d)"
+mkdir -p "$etc/etc/nginx/sites-available" "$etc/etc/apache2" "$etc/etc/mysql/conf.d" "$etc/etc/caddy"
+printf 'server {\n    listen 80 default_server;\n    listen [::]:80 default_server;\n}\n' > "$etc/etc/nginx/sites-available/default"
+printf 'Listen 80\n<IfModule ssl_module>\n\tListen 443\n</IfModule>\n' > "$etc/etc/apache2/ports.conf"
+printf ':80 {\n\troot * /usr/share/caddy\n}\n' > "$etc/etc/caddy/Caddyfile"
+(
+  # shellcheck disable=SC2034  # read by the sourced installer
+  ETC_ROOT="$etc"
+  brew_prefix_safe() { echo /nonexistent; }
+  sudo() { "$@"; }
+  for t in nginx apache2 caddy mariadb; do server_bind_localhost "$t" apt; done
+)
+assert_contains "$(cat "$etc/etc/nginx/sites-available/default")" "listen 127.0.0.1:80 default_server;" "nginx binds 127.0.0.1"
+assert_contains "$(cat "$etc/etc/nginx/sites-available/default")" "listen [::1]:80" "nginx binds ::1"
+assert_contains "$(cat "$etc/etc/apache2/ports.conf")" "Listen 127.0.0.1:80" "apache binds 127.0.0.1"
+assert_contains "$(cat "$etc/etc/apache2/ports.conf")" "Listen 127.0.0.1:443" "apache binds 127.0.0.1 for TLS"
+assert_contains "$(cat "$etc/etc/caddy/Caddyfile")" "bind 127.0.0.1" "caddy binds 127.0.0.1"
+assert_contains "$(cat "$etc/etc/mysql/conf.d/99-distrodeck-bind.cnf")" "bind-address = 127.0.0.1" "mariadb binds 127.0.0.1"
+rm -rf "$etc"
+srv_out="$(
+  sudo() { echo "SUDO $*"; }
+  command() { [[ "$2" == systemctl ]] && return 0; builtin command "$@"; }
+  server_bind_localhost() { :; }
+  server_setup redis apt 2>&1
+  server_teardown valkey pacman 2>&1
+)"
+assert_contains "$srv_out" "SUDO systemctl enable redis-server" "redis-server is enabled on apt"
+assert_contains "$srv_out" "SUDO systemctl disable --now valkey" "valkey is stopped on uninstall"
+assert_contains "$srv_out" "Kept the valkey data" "server uninstall keeps data"
+
+# Containers: pinned tags, 127.0.0.1 ports, busy ports refused.
+for t in oracle-free qdrant milvus weaviate seaweedfs; do
+  img="$(container_spec "$t" | cut -d' ' -f1)"
+  [[ "$img" == *:* && "$img" != *:latest ]] || fail "$t image tag is pinned" "$img"
+done
+pass "container images use pinned tags"
+cont_out="$(
+  # shellcheck disable=SC2034
+  STATE_DIR="$(mktemp -d)"
+  container_cli() { echo docker; }
+  docker() { echo "DOCKER $*"; [[ "$1" == container ]] && return 1; return 0; }
+  port_holder() { return 1; }
+  install_container_tool qdrant 2>&1
+)"
+assert_contains "$cont_out" "DOCKER run -d --name distrodeck-qdrant --restart unless-stopped -v distrodeck-qdrant:/qdrant/storage -p 127.0.0.1:6333:6333 -p 127.0.0.1:6334:6334 docker.io/qdrant/qdrant:v1.19.1" "qdrant runs pinned, with a named volume, on 127.0.0.1"
+busy_out="$(
+  container_cli() { echo docker; }
+  docker() { echo "DOCKER $*"; [[ "$1" == container ]] && return 1; return 0; }
+  port_holder() { [[ "$1" == 6333 ]] && echo "postgres"; }
+  install_container_tool qdrant 2>&1; echo "rc=$?"
+)"
+assert_contains "$busy_out" "Port 6333 is already in use by postgres" "a busy port is refused with the holder's name"
+assert_not_contains "$busy_out" "DOCKER run" "a busy port starts nothing"
+assert_contains "$busy_out" "rc=1" "a busy port fails the tool"
+nodock_out="$( (container_cli() { return 1; }; install_container_tool milvus) 2>&1; echo "rc=$?")"
+assert_contains "$nodock_out" "needs docker or podman" "a container tool without docker says so"
+purge_out="$(
+  container_cli() { echo docker; }
+  docker() { echo "DOCKER $*"; }
+  uninstall_container_tool weaviate 2>&1
+  DISTRODECK_PURGE=1 uninstall_container_tool weaviate 2>&1
+)"
+assert_contains "$purge_out" "Kept volume distrodeck-weaviate" "container uninstall keeps the volume"
+assert_contains "$purge_out" "Removed volume distrodeck-weaviate" "--purge removes the volume"
+holder="$(ss() { printf 'LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:* users:(("postgres",pid=1,fd=5))\n'; }; port_holder 5432)"
+assert_contains "$holder" "postgres" "port_holder names the process from ss"
+
+# Claude plugins.
+nocl="$( (command() { [[ "$2" == claude ]] && return 1; builtin command "$@"; }; install_claude_plugin plugin-code-review) 2>&1; echo "rc=$?")"
+assert_contains "$nocl" "needs the claude CLI" "a plugin without claude says so"
+assert_contains "$nocl" "rc=1" "a plugin without claude fails"
+cl_out="$(
+  claude() { echo "CLAUDE $*"; }
+  install_claude_plugin plugin-code-review 2>&1
+)"
+assert_contains "$cl_out" "CLAUDE plugin marketplace add anthropics/claude-plugins-official" "the official marketplace is added when missing"
+assert_contains "$cl_out" "CLAUDE plugin install code-review@claude-plugins-official" "plugins install from the official marketplace"
+grep -q 'nikolareljin/claude-plugins' "$INSTALLER" && fail "no other marketplace is referenced" || pass "no other marketplace is referenced"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

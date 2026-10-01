@@ -5782,6 +5782,8 @@ def run_install_tools(args: argparse.Namespace) -> None:
             cmd.append("--reconcile")
     java_version = getattr(args, "java_version", None)
     listing = any(getattr(args, name, False) for name in ("list_tools", "list_categories", "list_catalog"))
+    if getattr(args, "purge", False) and not listing:
+        cmd.append("--purge")
     if java_version and not listing:
         cmd.extend(["--java-version", java_version])
     # Use check=False to allow partial failures (script reports them)
@@ -7646,6 +7648,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--java-version",
         choices=["17", "21", "25"],
         help="JDK major installed by the java tool (default 21)",
+    )
+    install_cmd.add_argument(
+        "--purge",
+        action="store_true",
+        help="When uninstalling a container tool, also remove its data volume",
     )
     install_cmd.add_argument(
         "--category",

@@ -56,3 +56,8 @@ def test_a_reader_closing_the_pipe_is_not_a_failure(captured):
 def test_category_is_forwarded(captured):
     invoke("--category", "media,graphics")
     assert captured.calls[0][1:] == ["--category", "media,graphics"]
+
+
+def test_purge_is_forwarded(captured):
+    invoke("--tools", "qdrant", "--purge")
+    assert "--purge" in captured.calls[0]

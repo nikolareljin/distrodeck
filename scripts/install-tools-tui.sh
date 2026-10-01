@@ -5,6 +5,30 @@
 # PARAMETERS: Optional flag --all installs all tools without interactive selection.
 # EXAMPLE: ./install-tools-tui.sh --all
 # ----------------------------------------------------
+
+# macOS ships bash 3.2; this script needs bash 4.3+ (namerefs, associative
+# arrays). Re-exec under Homebrew bash 5 when it is there, otherwise say how.
+ensure_modern_bash() {
+  local major="${1:-${BASH_VERSINFO[0]}}" minor="${2:-${BASH_VERSINFO[1]}}"
+  shift 2
+  if (( major > 4 || (major == 4 && minor >= 3) )); then
+    return 0
+  fi
+  local brew_bash=""
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+    brew_bash="$(brew --prefix)/bin/bash"
+  fi
+  if [[ -n "$brew_bash" && -x "$brew_bash" && "${DISTRODECK_REEXEC:-}" != "1" ]]; then
+    DISTRODECK_REEXEC=1 exec "$brew_bash" "$0" "$@"
+  fi
+  echo "install-tools needs bash 4.3 or newer (this is ${BASH_VERSION})." >&2
+  echo "On macOS: brew install bash, then run it again." >&2
+  exit 2
+}
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  ensure_modern_bash "" "" "$@"
+fi
+
 set -euo pipefail
 # Tool installations are wrapped in subshells (see main loop) to isolate failures
 # while preserving -e for the rest of the script to catch unexpected errors.
@@ -148,7 +172,9 @@ remove_tracked_tool() {
 }
 
 detect_pkg_mgr() {
-  if command -v apt-get >/dev/null 2>&1; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    if command -v brew >/dev/null 2>&1; then echo "brew"; else echo "unknown"; fi
+  elif command -v apt-get >/dev/null 2>&1; then
     echo "apt"
   elif command -v dnf >/dev/null 2>&1; then
     echo "dnf"
@@ -172,6 +198,17 @@ install_pkg() {
     dnf) sudo dnf install -y "$@";;
     pacman) sudo pacman -S --needed --noconfirm "$@";;
     zypper) sudo zypper install -y "$@";;
+    brew)
+      # Never with sudo. cask:<name> is a cask, anything else a formula.
+      local name
+      for name in "$@"; do
+        if [[ "$name" == cask:* ]]; then
+          brew install --cask "${name#cask:}" || return 1
+        else
+          brew install "$name" || return 1
+        fi
+      done
+      ;;
     *) return 1;;
   esac
 }
@@ -183,6 +220,16 @@ uninstall_pkg() {
     dnf) sudo dnf remove -y "$@";;
     pacman) sudo pacman -Rs --noconfirm "$@";;
     zypper) sudo zypper remove -y "$@";;
+    brew)
+      local name
+      for name in "$@"; do
+        if [[ "$name" == cask:* ]]; then
+          brew uninstall --cask "${name#cask:}" || return 1
+        else
+          brew uninstall "$name" || return 1
+        fi
+      done
+      ;;
     *) return 1;;
   esac
 }
@@ -1626,60 +1673,154 @@ install_aider() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Table-driven package tools (IDEs, Media, Graphics)
+# Spec table: one row per table-driven tool
 # ─────────────────────────────────────────────────────────────────────────────
-# Fields: apt dnf pacman zypper flatpak-id binaries(comma). "-" = none.
-# Binaries were checked against each package's file list (packages.ubuntu.com
-# filelist, archlinux.org files, Fedora mdapi, Tumbleweed repodata). Detection
-# also asks the package database and `flatpak info`, because a binary name is
-# not always there: openSUSE ships /usr/bin/blender-<version> only.
-# Package names were checked against packages.ubuntu.com (noble), Fedora
-# rawhide (mdapi), archlinux.org and the openSUSE Tumbleweed oss repodata;
-# Flatpak ids against flathub.org. Where a manager has no package the Flatpak
-# from Flathub is used; with neither the tool fails with a clear message.
+# Fields (space separated, "-" = none):
+#   kind apt dnf pacman zypper brew flatpak extra bins
+# kind:  pkg (distro package, then Flatpak, then pipx), repo (a vendor repo or
+#        installer function install_<tool>), container (docker/podman),
+#        pipx, claude-plugin.
+# brew:  a formula, or cask:<name>.
+# extra: pkg/pipx -> pipx package; container -> see container_spec;
+#        claude-plugin -> plugin name in the official marketplace.
+# bins:  comma separated binaries from the package file lists.
+# apt names: packages.ubuntu.com (noble); dnf: Fedora rawhide (mdapi); pacman:
+# archlinux.org (official repos only, AUR is unsupported); zypper: Tumbleweed
+# oss repodata; brew: formulae.brew.sh; Flatpak: flathub.org. "@PG@" is the
+# installed PostgreSQL major. Detection also asks the package database and
+# `flatpak info`: openSUSE ships /usr/bin/blender-<version> only.
 package_tool_spec() {
   case "$1" in
-    vlc) echo "vlc vlc vlc vlc org.videolan.VLC vlc";;
-    mpv) echo "mpv mpv mpv mpv io.mpv.Mpv mpv";;
-    ffmpeg) echo "ffmpeg ffmpeg-free ffmpeg ffmpeg - ffmpeg";;
-    obs-studio) echo "obs-studio obs-studio obs-studio obs-studio com.obsproject.Studio obs";;
-    audacity) echo "audacity audacity audacity audacity org.audacityteam.Audacity audacity";;
-    kdenlive) echo "kdenlive kdenlive kdenlive kdenlive org.kde.kdenlive kdenlive";;
-    handbrake) echo "handbrake - handbrake - fr.handbrake.ghb ghb";;
-    inkscape) echo "inkscape inkscape inkscape inkscape org.inkscape.Inkscape inkscape";;
-    krita) echo "krita krita krita krita org.kde.krita krita";;
-    blender) echo "blender blender blender blender org.blender.Blender blender";;
-    darktable) echo "darktable darktable darktable darktable org.darktable.Darktable darktable";;
-    zed) echo "- - zed - dev.zed.Zed zeditor,zed";;
-    intellij-idea-community) echo "- - intellij-idea-community-edition - com.jetbrains.IntelliJ-IDEA-Community idea";;
-    pycharm-community) echo "- - pycharm-community-edition - com.jetbrains.PyCharm-Community pycharm";;
+    # ── IDEs, Media, Graphics ──
+    vlc) echo "pkg vlc vlc vlc vlc cask:vlc org.videolan.VLC - vlc";;
+    mpv) echo "pkg mpv mpv mpv mpv mpv io.mpv.Mpv - mpv";;
+    ffmpeg) echo "pkg ffmpeg ffmpeg-free ffmpeg ffmpeg ffmpeg - - ffmpeg";;
+    obs-studio) echo "pkg obs-studio obs-studio obs-studio obs-studio cask:obs com.obsproject.Studio - obs";;
+    audacity) echo "pkg audacity audacity audacity audacity cask:audacity org.audacityteam.Audacity - audacity";;
+    kdenlive) echo "pkg kdenlive kdenlive kdenlive kdenlive cask:kdenlive org.kde.kdenlive - kdenlive";;
+    handbrake) echo "pkg handbrake - handbrake - cask:handbrake-app fr.handbrake.ghb - ghb";;
+    inkscape) echo "pkg inkscape inkscape inkscape inkscape cask:inkscape org.inkscape.Inkscape - inkscape";;
+    krita) echo "pkg krita krita krita krita cask:krita org.kde.krita - krita";;
+    blender) echo "pkg blender blender blender blender cask:blender org.blender.Blender - blender";;
+    darktable) echo "pkg darktable darktable darktable darktable cask:darktable org.darktable.Darktable - darktable";;
+    zed) echo "pkg - - zed - cask:zed dev.zed.Zed - zeditor,zed";;
+    intellij-idea-community) echo "pkg - - intellij-idea-community-edition - cask:intellij-idea-ce com.jetbrains.IntelliJ-IDEA-Community - idea";;
+    pycharm-community) echo "pkg - - pycharm-community-edition - cask:pycharm-ce com.jetbrains.PyCharm-Community - pycharm";;
+    # ── Relational ──
+    postgresql) echo "pkg postgresql postgresql-server postgresql postgresql-server postgresql@18 - - -";;
+    pgvector) echo "pkg postgresql-@PG@-pgvector pgvector pgvector postgresql@PG@-pgvector pgvector - - -";;
+    mysql) echo "pkg mysql-server mysql8.4-server - - mysql - - mysqld";;
+    mariadb) echo "pkg mariadb-server mariadb-server mariadb mariadb mariadb - - mariadbd";;
+    sqlite) echo "pkg sqlite3 sqlite sqlite sqlite3 sqlite - - sqlite3";;
+    oracle-free) echo "container - - - - - - - -";;
+    # ── NoSQL & graph ──
+    redis) echo "pkg redis-server - - redis redis - - redis-server";;
+    valkey) echo "pkg valkey-server valkey valkey valkey valkey - - valkey-server";;
+    cassandra) echo "repo cassandra - - - cassandra - - cassandra";;
+    couchdb) echo "pkg - - couchdb - couchdb - - -";;
+    neo4j) echo "repo neo4j - - - neo4j - - neo4j";;
+    # ── Vector ──
+    qdrant) echo "container - - - - qdrant - - -";;
+    chroma) echo "pipx - - - - chroma - chromadb chroma";;
+    milvus) echo "container - - - - - - - -";;
+    weaviate) echo "container - - - - - - - -";;
+    # ── Object storage ──
+    minio) echo "pkg - - - - minio - - minio";;
+    minio-client) echo "pkg - - minio-client - minio-mc - - mcli";;
+    seaweedfs) echo "container - - - - seaweedfs - - -";;
+    rclone) echo "pkg rclone rclone rclone rclone rclone - - rclone";;
+    s3cmd) echo "pkg s3cmd s3cmd s3cmd s3cmd s3cmd - - s3cmd";;
+    # ── DB admin ──
+    dbeaver-ce) echo "pkg - - dbeaver - cask:dbeaver-community io.dbeaver.DBeaverCommunity - dbeaver";;
+    pgadmin4) echo "pkg - - - - cask:pgadmin4 org.pgadmin.pgadmin4 - pgadmin4";;
+    mongodb-compass) echo "pkg - - - - cask:mongodb-compass com.mongodb.Compass - mongodb-compass";;
+    sqlitebrowser) echo "pkg sqlitebrowser sqlitebrowser sqlitebrowser sqlitebrowser cask:db-browser-for-sqlite org.sqlitebrowser.sqlitebrowser - sqlitebrowser";;
+    beekeeper-studio) echo "pkg - - - - cask:beekeeper-studio io.beekeeperstudio.Studio - beekeeper-studio";;
+    pgcli) echo "pkg pgcli pgcli pgcli - pgcli - pgcli pgcli";;
+    mycli) echo "pkg mycli mycli - - mycli - mycli mycli";;
+    litecli) echo "pkg litecli litecli - - litecli - litecli litecli";;
+    usql) echo "pkg - - - - usql - - usql";;
+    # ── System admin ──
+    cockpit) echo "pkg cockpit cockpit cockpit cockpit - - - -";;
+    btop) echo "pkg btop btop btop btop btop - - btop";;
+    glances) echo "pkg glances glances glances - glances - glances glances";;
+    lnav) echo "pkg lnav lnav lnav lnav lnav - - lnav";;
+    # ── Web services ──
+    nginx) echo "pkg nginx nginx nginx nginx nginx - - nginx";;
+    apache2) echo "pkg apache2 httpd apache apache2 httpd - - apache2,httpd";;
+    caddy) echo "pkg caddy caddy caddy caddy caddy - - caddy";;
+    haproxy) echo "pkg haproxy haproxy haproxy haproxy haproxy - - haproxy";;
+    certbot) echo "pkg certbot certbot certbot - certbot - - certbot";;
+    mkcert) echo "pkg mkcert mkcert mkcert mkcert mkcert - - mkcert";;
+    # ── Programming tools ──
+    dotnet-sdk) echo "pkg dotnet-sdk-10.0 dotnet-sdk-10.0 dotnet-sdk - cask:dotnet-sdk - - dotnet";;
+    uv) echo "pkg - uv uv - uv - uv uv";;
+    pipx) echo "pkg pipx pipx python-pipx python313-pipx pipx - - pipx";;
+    pyenv) echo "pkg - - pyenv pyenv pyenv - - pyenv";;
+    nvm) echo "repo - - - - - - - -";;
+    sdkman) echo "repo - - - - - - - -";;
+    kotlin) echo "pkg kotlin - kotlin - kotlin - - kotlinc";;
+    cmake) echo "pkg cmake cmake cmake cmake cmake - - cmake";;
+    ninja) echo "pkg ninja-build ninja-build ninja ninja ninja - - ninja";;
+    clang) echo "pkg clang clang clang clang llvm - - clang";;
+    gdb) echo "pkg gdb gdb gdb gdb gdb - - gdb";;
+    valgrind) echo "pkg valgrind valgrind valgrind valgrind valgrind - - valgrind";;
+    shellcheck) echo "pkg shellcheck ShellCheck shellcheck ShellCheck shellcheck - - shellcheck";;
+    pre-commit) echo "pkg pre-commit pre-commit pre-commit - pre-commit - pre-commit pre-commit";;
+    httpie) echo "pkg httpie httpie httpie httpie httpie - - http";;
+    bruno) echo "pkg - - - - cask:bruno com.usebruno.Bruno - bruno";;
+    # ── Claude Code plugins (anthropics/claude-plugins-official only) ──
+    plugin-*) echo "claude-plugin - - - - - - ${1#plugin-} -";;
     *) return 1;;
   esac
 }
 
-# Print the distro package for tool $1 on manager $2, or nothing.
-package_tool_pkg() {
-  local apt dnf pacman zypper flatpak_id bins pkg=""
-  read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$1")"
+# Print field $2 of tool $1's spec: kind apt dnf pacman zypper brew flatpak extra bins.
+spec_field() {
+  local spec idx
+  spec="$(package_tool_spec "$1")" || return 1
   case "$2" in
-    apt) pkg="$apt";; dnf) pkg="$dnf";; pacman) pkg="$pacman";; zypper) pkg="$zypper";;
+    kind) idx=1;; apt) idx=2;; dnf) idx=3;; pacman) idx=4;; zypper) idx=5;;
+    brew) idx=6;; flatpak) idx=7;; extra) idx=8;; bins) idx=9;; *) return 1;;
   esac
-  [[ "$pkg" == "-" ]] && pkg=""
+  local fields value
+  read -r -a fields <<< "$spec"
+  value="${fields[idx - 1]:-}"
+  [[ "$value" == "-" ]] && value=""
+  printf '%s\n' "$value"
+}
+
+# Installed PostgreSQL major, for the pgvector package name.
+pg_major() {
+  local version
+  version="$(psql --version 2>/dev/null | awk '{print $3}')"
+  version="${version%%.*}"
+  [[ "$version" =~ ^[0-9]+$ ]] && printf '%s\n' "$version"
+}
+
+# Print the package for tool $1 on manager $2 (brew: formula or cask:name), or nothing.
+package_tool_pkg() {
+  local pkg major
+  pkg="$(spec_field "$1" "$2")" || return 0
+  if [[ "$pkg" == *@PG@* ]]; then
+    if ! major="$(pg_major)" || [[ -z "$major" ]]; then
+      log_warn "$1 needs PostgreSQL installed first (install the postgresql tool)."
+      return 0
+    fi
+    pkg="${pkg//@PG@/$major}"
+  fi
   printf '%s\n' "$pkg"
 }
 
 package_tool_flatpak() {
-  local apt dnf pacman zypper flatpak_id bins
-  read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$1")"
-  [[ "$flatpak_id" == "-" ]] && flatpak_id=""
-  printf '%s\n' "$flatpak_id"
+  spec_field "$1" flatpak
 }
 
 is_package_tool() {
   package_tool_spec "$1" >/dev/null 2>&1
 }
 
-# Return 0 when distro package $2 is installed under manager $1.
+# Return 0 when package $2 is installed under manager $1.
 native_pkg_installed() {
   local mgr="$1" pkg="$2"
   [[ -n "$pkg" ]] || return 1
@@ -1687,49 +1828,185 @@ native_pkg_installed() {
     apt) [[ "$(dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null)" == "installed" ]];;
     dnf|zypper) rpm -q "$pkg" >/dev/null 2>&1;;
     pacman) pacman -Q "$pkg" >/dev/null 2>&1;;
+    brew)
+      if [[ "$pkg" == cask:* ]]; then
+        brew list --cask --versions "${pkg#cask:}" >/dev/null 2>&1
+      else
+        brew list --versions "$pkg" >/dev/null 2>&1
+      fi
+      ;;
     *) return 1;;
   esac
 }
 
-# Installed when a known binary is on PATH, the distro package is installed,
-# or the Flatpak is installed. A Flatpak is only ever found by `flatpak info`:
-# it puts no binary on PATH.
+# Is tool $1 installable with manager $2 at all? Used to hide Linux-only
+# tools on macOS instead of listing them as failures.
+tool_supported_on() {
+  local tool="$1" mgr="$2" kind
+  if ! is_package_tool "$tool"; then
+    [[ "$mgr" != "brew" ]] && return 0
+    [[ -n "$(legacy_brew_name "$tool")" ]]
+    return
+  fi
+  kind="$(spec_field "$tool" kind)"
+  case "$kind" in
+    claude-plugin) return 0;;
+    container) [[ "$mgr" != "brew" || -n "$(spec_field "$tool" brew)" ]];;
+    repo) [[ "$mgr" == "apt" || -n "$(spec_field "$tool" "$mgr")" ]] || [[ "$tool" == nvm || "$tool" == sdkman ]];;
+    pipx) return 0;;
+    *)
+      [[ -n "$(spec_field "$tool" "$mgr")" ]] && return 0
+      [[ "$mgr" != "brew" && -n "$(spec_field "$tool" flatpak)" ]] && return 0
+      [[ -n "$(spec_field "$tool" extra)" ]]
+      ;;
+  esac
+}
+
+# Installed when a known binary is on PATH, the package is installed, the
+# Flatpak is installed (`flatpak info`, never a binary name), the container
+# exists, the pipx venv exists or the Claude plugin is listed.
 package_tool_installed() {
-  local tool="$1" apt dnf pacman zypper flatpak_id bins bin
-  read -r apt dnf pacman zypper flatpak_id bins <<< "$(package_tool_spec "$tool")"
+  local tool="$1" kind bins bin flatpak_id mgr extra
+  kind="$(spec_field "$tool" kind)"
+  case "$kind" in
+    container) container_installed "$tool" && return 0;;
+    claude-plugin) claude_plugin_installed "$tool"; return;;
+    repo)
+      case "$tool" in
+        nvm) [[ -s "${NVM_INSTALL_DIR}/nvm.sh" ]] && return 0;;
+        sdkman) [[ -s "${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh" ]] && return 0;;
+      esac
+      ;;
+  esac
+  bins="$(spec_field "$tool" bins)"
   for bin in ${bins//,/ }; do
     command -v "$bin" >/dev/null 2>&1 && return 0
   done
-  native_pkg_installed "$(detect_pkg_mgr)" "$(package_tool_pkg "$tool" "$(detect_pkg_mgr)")" && return 0
-  [[ "$flatpak_id" != "-" ]] && command -v flatpak >/dev/null 2>&1 && \
+  mgr="$(detect_pkg_mgr)"
+  native_pkg_installed "$mgr" "$(spec_field "$tool" "$mgr")" && return 0
+  extra="$(spec_field "$tool" extra)"
+  if [[ -n "$extra" && "$kind" != "container" ]] && pipx_has "$extra"; then
+    return 0
+  fi
+  flatpak_id="$(spec_field "$tool" flatpak)"
+  [[ -n "$flatpak_id" ]] && command -v flatpak >/dev/null 2>&1 && \
     flatpak info "$flatpak_id" >/dev/null 2>&1
 }
 
+# `pipx list` takes about half a second; ask once per run.
+PIPX_LIST_CACHE=""
+pipx_has() {
+  command -v pipx >/dev/null 2>&1 || return 1
+  if [[ -z "$PIPX_LIST_CACHE" ]]; then
+    PIPX_LIST_CACHE="$(pipx list --short 2>/dev/null | awk '{print $1}' || true)"
+    [[ -n "$PIPX_LIST_CACHE" ]] || PIPX_LIST_CACHE=" "
+  fi
+  grep -qx "$1" <<< "$PIPX_LIST_CACHE"
+}
+
+ensure_pipx() {
+  local mgr="$1"
+  command -v pipx >/dev/null 2>&1 && return 0
+  log_info "pipx is required; installing it."
+  install_package_tool pipx "$mgr" || return 1
+  command -v pipx >/dev/null 2>&1 || { log_warn "pipx is still unavailable."; return 1; }
+}
+
+install_pipx_package() {
+  local package="$1" mgr="$2"
+  ensure_pipx "$mgr" || return 1
+  pipx install "$package"
+}
+
 install_package_tool() {
-  local tool="$1" mgr="$2" pkg flatpak_id
+  local tool="$1" mgr="$2" kind pkg flatpak_id extra
+  kind="$(spec_field "$tool" kind)"
+  case "$kind" in
+    container)
+      if [[ "$mgr" == "brew" && -n "$(spec_field "$tool" brew)" ]]; then
+        install_pkg brew "$(spec_field "$tool" brew)" || return 1
+        server_setup "$tool" "$mgr"
+        return
+      fi
+      install_container_tool "$tool"
+      return
+      ;;
+    claude-plugin) install_claude_plugin "$tool"; return;;
+    repo)
+      if [[ "$mgr" == "brew" && -n "$(spec_field "$tool" brew)" ]]; then
+        install_pkg brew "$(spec_field "$tool" brew)" || return 1
+        server_setup "$tool" "$mgr"
+        return
+      fi
+      "install_${tool//-/_}" "$mgr" || return 1
+      server_setup "$tool" "$mgr"
+      return
+      ;;
+    pipx)
+      if [[ "$mgr" == "brew" && -n "$(spec_field "$tool" brew)" ]]; then
+        install_pkg brew "$(spec_field "$tool" brew)"
+        return
+      fi
+      install_pipx_package "$(spec_field "$tool" extra)" "$mgr"
+      return
+      ;;
+  esac
   pkg="$(package_tool_pkg "$tool" "$mgr")"
   if [[ -n "$pkg" ]]; then
-    install_pkg "$mgr" "$pkg"
+    install_pkg "$mgr" "$pkg" || return 1
+    server_setup "$tool" "$mgr"
     return
   fi
-  flatpak_id="$(package_tool_flatpak "$tool")"
-  if [[ -z "$flatpak_id" ]]; then
-    log_warn "$tool has no ${mgr} package and no Flatpak; skipping it on this system."
+  if [[ "$(spec_field "$tool" "$mgr")" == *@PG@* ]]; then
     return 1
   fi
-  log_info "$tool has no ${mgr} package; installing the Flathub Flatpak ${flatpak_id}."
-  command -v flatpak >/dev/null 2>&1 || install_flatpak "$mgr" || return 1
-  command -v flatpak >/dev/null 2>&1 || { log_warn "Flatpak is unavailable; cannot install $tool."; return 1; }
-  flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || return 1
-  flatpak install -y flathub "$flatpak_id"
+  flatpak_id="$(package_tool_flatpak "$tool")"
+  if [[ -n "$flatpak_id" && "$mgr" != "brew" ]]; then
+    log_info "$tool has no ${mgr} package; installing the Flathub Flatpak ${flatpak_id}."
+    command -v flatpak >/dev/null 2>&1 || install_flatpak "$mgr" || return 1
+    command -v flatpak >/dev/null 2>&1 || { log_warn "Flatpak is unavailable; cannot install $tool."; return 1; }
+    flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || return 1
+    flatpak install -y flathub "$flatpak_id"
+    return
+  fi
+  extra="$(spec_field "$tool" extra)"
+  if [[ -n "$extra" ]]; then
+    log_info "$tool has no ${mgr} package; installing it with pipx."
+    install_pipx_package "$extra" "$mgr"
+    return
+  fi
+  log_warn "$tool has no ${mgr} package and no Flatpak; skipping it on this system."
+  return 1
 }
 
 uninstall_package_tool() {
-  local tool="$1" mgr="$2" pkg flatpak_id
+  local tool="$1" mgr="$2" kind pkg flatpak_id extra
+  kind="$(spec_field "$tool" kind)"
+  case "$kind" in
+    container)
+      if [[ "$mgr" != "brew" || -z "$(spec_field "$tool" brew)" ]]; then
+        uninstall_container_tool "$tool"
+        return
+      fi
+      ;;
+    claude-plugin) uninstall_claude_plugin "$tool"; return;;
+    repo)
+      if [[ "$mgr" != "brew" ]] || [[ -z "$(spec_field "$tool" brew)" ]]; then
+        server_teardown "$tool" "$mgr"
+        "uninstall_${tool//-/_}" "$mgr"
+        return
+      fi
+      ;;
+  esac
   flatpak_id="$(package_tool_flatpak "$tool")"
   if [[ -n "$flatpak_id" ]] && command -v flatpak >/dev/null 2>&1 && \
      flatpak info "$flatpak_id" >/dev/null 2>&1; then
     flatpak uninstall -y "$flatpak_id"
+    return
+  fi
+  extra="$(spec_field "$tool" extra)"
+  if [[ -n "$extra" ]] && pipx_has "$extra"; then
+    pipx uninstall "$extra"
     return
   fi
   pkg="$(package_tool_pkg "$tool" "$mgr")"
@@ -1737,7 +2014,422 @@ uninstall_package_tool() {
     log_warn "$tool has no ${mgr} package to remove."
     return 1
   fi
+  server_teardown "$tool" "$mgr"
   uninstall_pkg "$mgr" "$pkg"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Servers: enable the service, bind 127.0.0.1, keep data on uninstall
+# ─────────────────────────────────────────────────────────────────────────────
+# Print the service name of server tool $1 under manager $2, or nothing.
+server_unit() {
+  local tool="$1" mgr="$2"
+  case "$tool:$mgr" in
+    postgresql:brew) echo "postgresql@18";;
+    postgresql:*) echo "postgresql";;
+    mysql:apt) echo "mysql";;
+    mysql:*) echo "mysqld";;
+    mariadb:*) echo "mariadb";;
+    redis:apt) echo "redis-server";;
+    redis:*) echo "redis";;
+    valkey:apt) echo "valkey-server";;
+    valkey:*) echo "valkey";;
+    couchdb:*) echo "couchdb";;
+    neo4j:*) echo "neo4j";;
+    cassandra:*) echo "cassandra";;
+    minio:brew) echo "minio";;
+    qdrant:brew) echo "qdrant";;
+    nginx:*) echo "nginx";;
+    apache2:apt|apache2:zypper) echo "apache2";;
+    apache2:*) echo "httpd";;
+    caddy:*) echo "caddy";;
+    haproxy:*) echo "haproxy";;
+    cockpit:brew) ;;
+    cockpit:*) echo "cockpit.socket";;
+    *) ;;
+  esac
+}
+
+# Rewrite listen directives so a server never binds 0.0.0.0. Each step is a
+# no-op when the file is missing or already bound to loopback.
+server_bind_localhost() {
+  # ETC_ROOT prefixes the config paths (tests point it at a temp dir).
+  local tool="$1" mgr="$2" file root="${ETC_ROOT:-}"
+  case "$tool" in
+    nginx)
+      for file in "$root"/etc/nginx/sites-available/default "$root"/etc/nginx/nginx.conf "$root"/etc/nginx/conf.d/default.conf \
+                  "$(brew_prefix_safe)/etc/nginx/nginx.conf"; do
+        [[ -f "$file" ]] || continue
+        sudo_if_needed "$file" sed -i.distrodeck -E \
+          -e 's/^([[:space:]]*listen[[:space:]]+)([0-9]+)([[:space:];])/\1127.0.0.1:\2\3/' \
+          -e 's/^([[:space:]]*listen[[:space:]]+)\[::\]:([0-9]+)/\1[::1]:\2/' "$file"
+      done
+      ;;
+    apache2)
+      for file in "$root"/etc/apache2/ports.conf "$root"/etc/httpd/conf/httpd.conf "$root"/etc/apache2/listen.conf \
+                  "$(brew_prefix_safe)/etc/httpd/httpd.conf"; do
+        [[ -f "$file" ]] || continue
+        sudo_if_needed "$file" sed -i.distrodeck -E 's/^([[:space:]]*Listen[[:space:]]+)([0-9]+)[[:space:]]*$/\1127.0.0.1:\2/' "$file"
+      done
+      ;;
+    caddy)
+      for file in "$root"/etc/caddy/Caddyfile "$(brew_prefix_safe)/etc/Caddyfile"; do
+        [[ -f "$file" ]] || continue
+        grep -q 'bind 127.0.0.1' "$file" && continue
+        sudo_if_needed "$file" sed -i.distrodeck -E 's/^(:[0-9]+[[:space:]]*\{)[[:space:]]*$/\1\n\tbind 127.0.0.1/' "$file"
+      done
+      ;;
+    mysql|mariadb)
+      local dir
+      for dir in "$root"/etc/mysql/conf.d "$root"/etc/my.cnf.d "$(brew_prefix_safe)/etc/my.cnf.d"; do
+        [[ -d "$dir" ]] || continue
+        printf '[mysqld]\nbind-address = 127.0.0.1\n' | sudo_if_needed "$dir" tee "$dir/99-distrodeck-bind.cnf" >/dev/null
+        break
+      done
+      ;;
+    cockpit)
+      [[ "$mgr" == "brew" ]] && return 0
+      sudo mkdir -p /etc/systemd/system/cockpit.socket.d
+      printf '[Socket]\nListenStream=\nListenStream=127.0.0.1:9090\n' | \
+        sudo tee /etc/systemd/system/cockpit.socket.d/distrodeck-listen.conf >/dev/null
+      sudo systemctl daemon-reload 2>/dev/null || true
+      ;;
+  esac
+  return 0
+}
+
+brew_prefix_safe() {
+  if command -v brew >/dev/null 2>&1; then brew --prefix; else echo /nonexistent; fi
+}
+
+# Run "$@" with sudo unless path $1 is writable by this user (brew prefixes).
+sudo_if_needed() {
+  local path="$1"; shift
+  if [[ -w "$path" ]]; then "$@"; else sudo "$@"; fi
+}
+
+# Initialise a fresh PostgreSQL cluster where the package does not.
+postgresql_init() {
+  local mgr="$1"
+  case "$mgr" in
+    pacman)
+      if [[ ! -s /var/lib/postgres/data/PG_VERSION ]]; then
+        sudo -u postgres initdb -D /var/lib/postgres/data
+      fi
+      ;;
+    dnf)
+      [[ -s /var/lib/pgsql/data/PG_VERSION ]] || sudo postgresql-setup --initdb
+      ;;
+  esac
+}
+
+server_setup() {
+  local tool="$1" mgr="$2" unit
+  unit="$(server_unit "$tool" "$mgr")"
+  [[ -n "$unit" ]] || return 0
+  [[ "$tool" == postgresql ]] && { postgresql_init "$mgr" || return 1; }
+  server_bind_localhost "$tool" "$mgr"
+  if [[ "$mgr" == "brew" ]]; then
+    brew services restart "$unit" || { log_warn "brew services could not start $unit."; return 1; }
+  elif command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl enable "$unit" || return 1
+    sudo systemctl restart "$unit" || { log_warn "$unit did not start; check: journalctl -u $unit"; return 1; }
+  else
+    log_warn "No systemd; start $unit yourself."
+  fi
+  log_info "$tool is running and bound to 127.0.0.1 (service: $unit)."
+}
+
+server_teardown() {
+  local tool="$1" mgr="$2" unit
+  unit="$(server_unit "$tool" "$mgr")"
+  [[ -n "$unit" ]] || return 0
+  if [[ "$mgr" == "brew" ]]; then
+    brew services stop "$unit" 2>/dev/null || true
+  elif command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl disable --now "$unit" 2>/dev/null || true
+  fi
+  log_info "Kept the $tool data directory; remove it manually to drop the data."
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vendor apt repositories (cassandra, neo4j), same signed-by pattern as MongoDB
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage: apt_vendor_repo <name> <key-url> <repo-url> <suite> <component>
+apt_vendor_repo() {
+  local name="$1" key_url="$2" url="$3" suite="$4" component="$5"
+  local keyring="/usr/share/keyrings/${name}.gpg" tmp_key tmp_home
+  command -v gpg >/dev/null 2>&1 || install_pkg apt gnupg || return 1
+  tmp_key="$(mktemp)"; tmp_home="$(mktemp -d)"
+  if ! download_file "$key_url" "$tmp_key"; then
+    log_warn "Failed to download the $name signing key."
+    rm -rf "$tmp_key" "$tmp_home"
+    return 1
+  fi
+  # Import then export: a KEYS file holds several armored keys and
+  # `gpg --dearmor` would keep only the first.
+  if ! gpg --homedir "$tmp_home" --batch --quiet --import "$tmp_key" || \
+     ! gpg --homedir "$tmp_home" --batch --export > "$tmp_key.gpg"; then
+    rm -rf "$tmp_key" "$tmp_key.gpg" "$tmp_home"
+    return 1
+  fi
+  sudo install -m 644 "$tmp_key.gpg" "$keyring" || { rm -rf "$tmp_key" "$tmp_key.gpg" "$tmp_home"; return 1; }
+  rm -rf "$tmp_key" "$tmp_key.gpg" "$tmp_home"
+  echo "deb [signed-by=${keyring}] ${url} ${suite} ${component}" | \
+    sudo tee "/etc/apt/sources.list.d/${name}.list" >/dev/null
+}
+
+apt_vendor_repo_remove() {
+  sudo rm -f "/etc/apt/sources.list.d/$1.list" "/usr/share/keyrings/$1.gpg"
+}
+
+install_cassandra() {
+  local mgr="$1"
+  if [[ "$mgr" != "apt" ]]; then
+    log_warn "cassandra: only the Apache apt repository (and brew) is supported; ${mgr} has no official package."
+    return 1
+  fi
+  apt_vendor_repo cassandra https://downloads.apache.org/cassandra/KEYS \
+    https://debian.cassandra.apache.org 50x main || return 1
+  install_pkg apt cassandra
+}
+
+uninstall_cassandra() {
+  [[ "$1" == "apt" ]] || return 1
+  uninstall_pkg apt cassandra || return 1
+  apt_vendor_repo_remove cassandra
+}
+
+install_neo4j() {
+  local mgr="$1"
+  if [[ "$mgr" != "apt" ]]; then
+    log_warn "neo4j: only the Neo4j apt repository (and brew) is supported; ${mgr} has no official package."
+    return 1
+  fi
+  apt_vendor_repo neo4j https://debian.neo4j.com/neotechnology.gpg.key \
+    https://debian.neo4j.com stable latest || return 1
+  install_pkg apt neo4j
+}
+
+uninstall_neo4j() {
+  [[ "$1" == "apt" ]] || return 1
+  uninstall_pkg apt neo4j || return 1
+  apt_vendor_repo_remove neo4j
+}
+
+uninstall_nvm() {
+  unwire_nvm_profile "$HOME/.bashrc"
+  unwire_nvm_profile "$HOME/.zshrc"
+  log_info "Left ${NVM_INSTALL_DIR} in place; remove it to drop nvm-managed Node versions."
+}
+
+install_sdkman() {
+  command -v curl >/dev/null 2>&1 || install_curl "$1" || return 1
+  command -v zip >/dev/null 2>&1 || install_pkg "$1" zip || true
+  run_downloaded_script "https://get.sdkman.io?rcupdate=true"
+}
+
+uninstall_sdkman() {
+  log_warn "Remove SDKMAN with: rm -rf ${SDKMAN_DIR:-$HOME/.sdkman} and its lines in ~/.bashrc / ~/.zshrc."
+  return 1
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Containers: pinned tag, named volume, 127.0.0.1 ports, refuse busy ports
+# ─────────────────────────────────────────────────────────────────────────────
+# Fields: image ports(comma) data-path. Tags were checked on the registry API.
+container_spec() {
+  case "$1" in
+    oracle-free) echo "docker.io/gvenzl/oracle-free:23.9-slim 1521 /opt/oracle/oradata";;
+    qdrant) echo "docker.io/qdrant/qdrant:v1.19.1 6333,6334 /qdrant/storage";;
+    milvus) echo "docker.io/milvusdb/milvus:v2.6.25 19530,9091 /var/lib/milvus";;
+    weaviate) echo "docker.io/semitechnologies/weaviate:1.39.8 8080,50051 /var/lib/weaviate";;
+    seaweedfs) echo "docker.io/chrislusf/seaweedfs:4.48 8333 /data";;
+    *) return 1;;
+  esac
+}
+
+# Extra `run` arguments (environment, command) per container, one per line.
+container_args() {
+  case "$1" in
+    oracle-free) printf '%s\n' -e "ORACLE_PASSWORD=$(container_secret oracle-free)";;
+    milvus) printf '%s\n' -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
+      -e COMMON_STORAGETYPE=local --security-opt seccomp:unconfined -- milvus run standalone;;
+    weaviate) printf '%s\n' -e PERSISTENCE_DATA_PATH=/var/lib/weaviate \
+      -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true -e DEFAULT_VECTORIZER_MODULE=none \
+      -e CLUSTER_HOSTNAME=node1;;
+    seaweedfs) printf '%s\n' -- server -s3 -dir=/data;;
+  esac
+}
+
+# A random password kept in the state dir (mode 600), created once.
+container_secret() {
+  local file="$STATE_DIR/$1.password"
+  ensure_state_dir
+  if [[ ! -s "$file" ]]; then
+    (umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > "$file")
+  fi
+  cat "$file"
+}
+
+# Print the container CLI to use ("docker", "sudo docker" or "podman").
+container_cli() {
+  if command -v docker >/dev/null 2>&1; then
+    if docker info >/dev/null 2>&1; then echo docker; return 0; fi
+    if sudo -n docker info >/dev/null 2>&1; then echo "sudo docker"; return 0; fi
+    echo "sudo docker"; return 0
+  fi
+  if command -v podman >/dev/null 2>&1; then echo podman; return 0; fi
+  return 1
+}
+
+# Print the process holding TCP port $1 on any address, or nothing if free.
+port_holder() {
+  local port="$1" line
+  if command -v ss >/dev/null 2>&1; then
+    line="$(ss -ltnpH "sport = :$port" 2>/dev/null | head -n 1)"
+    [[ -n "$line" ]] || return 1
+  elif command -v lsof >/dev/null 2>&1; then
+    line="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n 2p)"
+    [[ -n "$line" ]] || return 1
+    awk '{print $1}' <<< "$line"
+    return 0
+  else
+    return 1
+  fi
+  if [[ "$line" =~ users:\(\(\"([^\"]+)\" ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' "an unknown process (run as root to see it)"
+  fi
+}
+
+# Detection only: never prompts for a password (sudo -n), asks once per run.
+CONTAINER_CLI_CACHE=""
+container_installed() {
+  local cli
+  if [[ -z "$CONTAINER_CLI_CACHE" ]]; then
+    CONTAINER_CLI_CACHE="$(container_cli 2>/dev/null || echo none)"
+  fi
+  cli="$CONTAINER_CLI_CACHE"
+  [[ "$cli" == none ]] && return 1
+  [[ "$cli" == "sudo docker" ]] && cli="sudo -n docker"
+  $cli container inspect "distrodeck-$1" >/dev/null 2>&1
+}
+
+install_container_tool() {
+  local tool="$1" image ports data cli port holder
+  read -r image ports data <<< "$(container_spec "$tool")"
+  if ! cli="$(container_cli)"; then
+    log_warn "$tool runs in a container and needs docker or podman. Install the docker or podman tool (DevOps & Containers) first."
+    return 1
+  fi
+  if $cli container inspect "distrodeck-$tool" >/dev/null 2>&1; then
+    log_info "Container distrodeck-$tool already exists; starting it."
+    $cli start "distrodeck-$tool" >/dev/null
+    return
+  fi
+  local publish=()
+  for port in ${ports//,/ }; do
+    if holder="$(port_holder "$port")"; then
+      log_error "Port $port is already in use by ${holder}; refusing to start $tool."
+      return 1
+    fi
+    publish+=(-p "127.0.0.1:${port}:${port}")
+  done
+  local extra=() run_cmd=() arg seen_cmd=false
+  while IFS= read -r arg; do
+    [[ -z "$arg" ]] && continue
+    if [[ "$arg" == "--" ]]; then seen_cmd=true; continue; fi
+    if $seen_cmd; then run_cmd+=("$arg"); else extra+=("$arg"); fi
+  done < <(container_args "$tool")
+  log_info "Starting $image as distrodeck-$tool (volume distrodeck-$tool, ports ${ports} on 127.0.0.1)."
+  # shellcheck disable=SC2086  # cli may be "sudo docker"
+  $cli run -d --name "distrodeck-$tool" --restart unless-stopped \
+    -v "distrodeck-$tool:$data" "${publish[@]}" "${extra[@]}" "$image" "${run_cmd[@]}" || return 1
+  [[ "$tool" == oracle-free ]] && log_info "Oracle password (SYSTEM, PDB FREEPDB1): see $STATE_DIR/oracle-free.password"
+  return 0
+}
+
+uninstall_container_tool() {
+  local tool="$1" cli
+  cli="$(container_cli)" || { log_warn "docker/podman not found; nothing to remove for $tool."; return 1; }
+  $cli rm -f "distrodeck-$tool" >/dev/null || return 1
+  if [[ "${DISTRODECK_PURGE:-}" == "1" ]]; then
+    $cli volume rm "distrodeck-$tool" >/dev/null && log_info "Removed volume distrodeck-$tool."
+  else
+    log_info "Kept volume distrodeck-$tool with the data; --purge removes it."
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Claude Code plugins (public anthropics/claude-plugins-official only)
+# ─────────────────────────────────────────────────────────────────────────────
+CLAUDE_MARKETPLACE="claude-plugins-official"
+CLAUDE_MARKETPLACE_REPO="anthropics/claude-plugins-official"
+
+claude_plugin_id() {
+  printf '%s@%s\n' "$(spec_field "$1" extra)" "$CLAUDE_MARKETPLACE"
+}
+
+# `claude plugin list` takes about a second; ask once per run.
+CLAUDE_PLUGIN_LIST_CACHE=""
+claude_plugin_installed() {
+  command -v claude >/dev/null 2>&1 || return 1
+  if [[ -z "$CLAUDE_PLUGIN_LIST_CACHE" ]]; then
+    CLAUDE_PLUGIN_LIST_CACHE="$(claude plugin list 2>/dev/null || true)"
+    [[ -n "$CLAUDE_PLUGIN_LIST_CACHE" ]] || CLAUDE_PLUGIN_LIST_CACHE=" "
+  fi
+  grep -qF "$(claude_plugin_id "$1")" <<< "$CLAUDE_PLUGIN_LIST_CACHE"
+}
+
+install_claude_plugin() {
+  local tool="$1"
+  if ! command -v claude >/dev/null 2>&1; then
+    log_warn "$tool is a Claude Code plugin and needs the claude CLI. Install the claude-code tool (AI tools) first."
+    return 1
+  fi
+  if ! claude plugin marketplace list 2>/dev/null | grep -q "$CLAUDE_MARKETPLACE"; then
+    claude plugin marketplace add "$CLAUDE_MARKETPLACE_REPO" || return 1
+  fi
+  claude plugin install "$(claude_plugin_id "$tool")"
+}
+
+uninstall_claude_plugin() {
+  command -v claude >/dev/null 2>&1 || { log_warn "claude CLI not found."; return 1; }
+  claude plugin uninstall "$(claude_plugin_id "$1")"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# macOS: Homebrew names for catalog tools without a spec row
+# ─────────────────────────────────────────────────────────────────────────────
+# A formula, cask:<name>, "=" (the tool's own installer works on macOS) or
+# nothing (Linux-only: hidden on macOS). Names checked on formulae.brew.sh.
+legacy_brew_name() {
+  case "$1" in
+    bat|eza|fd|fzf|glow|jq|ripgrep|tree|yq|zoxide|zsh|micro|neovim|screen|tmux) echo "$1";;
+    bandwhich|duf|htop|ncdu|curl|iperf3|mtr|nmap|tcpdump|tor|wget) echo "$1";;
+    borgbackup|duplicity|fdupes|lz4|bfg|gh|git|git-lfs|lazygit|tokei) echo "$1";;
+    go|php|ruby|rust|composer|ansible|k9s|lazydocker|podman|ollama|dialog) echo "$1";;
+    tldr) echo "tlrc";;
+    mc) echo "midnight-commander";;
+    bind-tools) echo "bind";;
+    delta) echo "git-delta";;
+    node) echo "node@24";;
+    java) echo "openjdk@${JAVA_VERSION}";;
+    atlas) echo "mongodb-atlas-cli";;
+    meld) echo "cask:meld";;
+    docker) echo "cask:docker-desktop";;
+    vscode) echo "cask:visual-studio-code";;
+    cursor) echo "cask:cursor";;
+    kiro) echo "cask:kiro";;
+    antigravity) echo "cask:antigravity";;
+    gimp) echo "cask:gimp";;
+    adb) echo "cask:android-platform-tools";;
+    rustdesk) echo "cask:rustdesk";;
+    aider|claude-code|codex|copilot|gemini|git-lantern|ai-runner|image-view) echo "=";;
+    *) ;;
+  esac
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2470,6 +3162,71 @@ tool_desc() {
     gimp) echo "[Graphics] GIMP - image editor";;
     inkscape) echo "[Graphics] Inkscape - vector graphics";;
     krita) echo "[Graphics] Krita - digital painting";;
+    # ── Relational ──
+    postgresql) echo "[SQL] PostgreSQL server (127.0.0.1)";;
+    pgvector) echo "[SQL] pgvector - vector search for PostgreSQL";;
+    mysql) echo "[SQL] MySQL server (127.0.0.1)";;
+    mariadb) echo "[SQL] MariaDB server (127.0.0.1)";;
+    sqlite) echo "[SQL] SQLite CLI";;
+    oracle-free) echo "[SQL] Oracle Database Free (container)";;
+    # ── NoSQL ──
+    redis) echo "[NoSQL] Redis server (127.0.0.1)";;
+    valkey) echo "[NoSQL] Valkey server (127.0.0.1)";;
+    cassandra) echo "[NoSQL] Apache Cassandra (Apache repo)";;
+    couchdb) echo "[NoSQL] Apache CouchDB";;
+    neo4j) echo "[NoSQL] Neo4j graph database (Neo4j repo)";;
+    # ── Vector ──
+    qdrant) echo "[Vector] Qdrant (container)";;
+    chroma) echo "[Vector] Chroma (pipx)";;
+    milvus) echo "[Vector] Milvus standalone (container)";;
+    weaviate) echo "[Vector] Weaviate (container)";;
+    # ── Object storage ──
+    minio) echo "[Storage] MinIO server (Homebrew)";;
+    minio-client) echo "[Storage] MinIO client mcli (brew: conflicts with mc)";;
+    seaweedfs) echo "[Storage] SeaweedFS S3 server (container)";;
+    rclone) echo "[Storage] rclone - cloud storage sync";;
+    s3cmd) echo "[Storage] s3cmd - S3 command line";;
+    # ── DB admin ──
+    dbeaver-ce) echo "[DBA] DBeaver Community";;
+    pgadmin4) echo "[DBA] pgAdmin 4";;
+    mongodb-compass) echo "[DBA] MongoDB Compass";;
+    sqlitebrowser) echo "[DBA] DB Browser for SQLite";;
+    beekeeper-studio) echo "[DBA] Beekeeper Studio";;
+    pgcli) echo "[DBA] pgcli - PostgreSQL CLI";;
+    mycli) echo "[DBA] mycli - MySQL CLI";;
+    litecli) echo "[DBA] litecli - SQLite CLI";;
+    usql) echo "[DBA] usql - universal SQL CLI";;
+    # ── System admin ──
+    cockpit) echo "[Admin] Cockpit web console (127.0.0.1:9090)";;
+    btop) echo "[Admin] btop - resource monitor";;
+    glances) echo "[Admin] Glances - system monitor";;
+    lnav) echo "[Admin] lnav - log navigator";;
+    # ── Web ──
+    nginx) echo "[Web] nginx (127.0.0.1)";;
+    apache2) echo "[Web] Apache httpd (127.0.0.1)";;
+    caddy) echo "[Web] Caddy (127.0.0.1)";;
+    haproxy) echo "[Web] HAProxy";;
+    certbot) echo "[Web] certbot - Let's Encrypt client";;
+    mkcert) echo "[Web] mkcert - local TLS certificates";;
+    # ── Programming ──
+    dotnet-sdk) echo "[Prog] .NET SDK";;
+    uv) echo "[Prog] uv - Python package manager";;
+    pipx) echo "[Prog] pipx - Python app installer";;
+    pyenv) echo "[Prog] pyenv - Python versions";;
+    nvm) echo "[Prog] nvm - Node versions";;
+    sdkman) echo "[Prog] SDKMAN - JVM SDKs";;
+    kotlin) echo "[Prog] Kotlin compiler";;
+    cmake) echo "[Prog] CMake";;
+    ninja) echo "[Prog] Ninja build";;
+    clang) echo "[Prog] Clang/LLVM";;
+    gdb) echo "[Prog] GDB debugger";;
+    valgrind) echo "[Prog] Valgrind";;
+    shellcheck) echo "[Prog] ShellCheck";;
+    pre-commit) echo "[Prog] pre-commit";;
+    httpie) echo "[Prog] HTTPie - HTTP client";;
+    bruno) echo "[Prog] Bruno - API client";;
+    # ── Claude Code plugins ──
+    plugin-*) echo "[Claude] ${1#plugin-} plugin (claude-plugins-official)";;
     # ── Databases ──
     atlas) echo "[DB] MongoDB Atlas CLI (local deployments)";;
     mongodb) echo "[DB] MongoDB Community server + mongosh";;
@@ -2650,7 +3407,15 @@ TOOL_CATEGORIES=(
   "media|Media|audacity ffmpeg handbrake kdenlive mpv obs-studio vlc"
   "graphics|Graphics|blender darktable gimp inkscape krita"
   "util|Utilities|adb dialog flatpak nala ntfs wine"
-  "db|Databases|atlas mongodb"
+  "db-sql|Relational databases|mariadb mysql oracle-free pgvector postgresql sqlite"
+  "db-nosql|NoSQL & graph databases|atlas cassandra couchdb mongodb neo4j redis valkey"
+  "db-vector|Vector databases|chroma milvus qdrant weaviate"
+  "storage|Object storage|minio minio-client rclone s3cmd seaweedfs"
+  "db-admin|Database admin|beekeeper-studio dbeaver-ce litecli mongodb-compass mycli pgadmin4 pgcli sqlitebrowser usql"
+  "sysadmin|System admin|btop cockpit glances lnav"
+  "web|Web services|apache2 caddy certbot haproxy mkcert nginx"
+  "prog|Programming tools|bruno clang cmake dotnet-sdk gdb httpie kotlin ninja nvm pipx pre-commit pyenv sdkman shellcheck uv valgrind"
+  "claude-plugins|Claude Code plugins|plugin-claude-md-management plugin-code-review plugin-code-simplifier plugin-commit-commands plugin-feature-dev plugin-frontend-design plugin-hookify plugin-pr-review-toolkit plugin-security-guidance plugin-skill-creator"
   "apps|Apps|image-view isoforge nemo rustdesk streamcontroller"
 )
 
@@ -2676,9 +3441,18 @@ unset _category _category_tools
 # Tools whose installers fetch and execute upstream scripts. They are held out
 # of --all unless DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS=true, but an explicit
 # --tools request counts as consent and installs them.
-# Also held out: every IDE and the databases, which only install when chosen.
+# Also held out: every IDE, database, server, container, GUI admin tool and
+# Claude plugin, which only install when chosen.
 OPT_IN_TOOLS=(aider antigravity atlas claude-code codex copilot cursor gemini
-  intellij-idea-community kiro mongodb ollama pycharm-community vscode zed)
+  intellij-idea-community kiro mongodb ollama pycharm-community vscode zed
+  mariadb mysql oracle-free pgvector postgresql sqlite
+  cassandra couchdb neo4j redis valkey
+  chroma milvus qdrant weaviate
+  minio seaweedfs
+  beekeeper-studio dbeaver-ce mongodb-compass pgadmin4 sqlitebrowser
+  cockpit apache2 caddy haproxy nginx
+  bruno dotnet-sdk sdkman
+  plugin-claude-md-management plugin-code-review plugin-code-simplifier plugin-commit-commands plugin-feature-dev plugin-frontend-design plugin-hookify plugin-pr-review-toolkit plugin-security-guidance plugin-skill-creator)
 
 # Return 0 when $1 is a known catalog tool.
 is_catalog_tool() {
@@ -2699,10 +3473,24 @@ is_opt_in_tool() {
 }
 
 # Print the default --all selection: the whole catalog minus opt-in tools.
+# Print the default --all selection: the whole catalog minus opt-in tools,
+# and on manager $1 (when given) minus tools that manager cannot install.
 default_all_selection() {
-  local tool out=()
+  local mgr="${1:-}" tool out=()
   for tool in "${TOOL_CATALOG[@]}"; do
-    is_opt_in_tool "$tool" || out+=("$tool")
+    is_opt_in_tool "$tool" && continue
+    [[ -n "$mgr" ]] && ! tool_supported_on "$tool" "$mgr" && continue
+    out+=("$tool")
+  done
+  printf '%s\n' "${out[*]}"
+}
+
+# Print the tools of category $1 that manager $2 can install, space separated.
+category_tools_for() {
+  local tool out=() all_tools
+  read -r -a all_tools <<< "$(category_field "$1" 3)"
+  for tool in "${all_tools[@]}"; do
+    tool_supported_on "$tool" "$2" && out+=("$tool")
   done
   printf '%s\n' "${out[*]}"
 }
@@ -2731,6 +3519,8 @@ Options:
                         (comma separated), one category block at a time.
                         Opt-in tools are never included; name them with
                         --tools. Repeatable.
+  --purge               When uninstalling a container tool, also remove its
+                        data volume (kept by default).
   --list-tools          Print the tool catalog, one per line, and exit.
   --list-categories     Print "id<TAB>label" per category and exit.
   --list-catalog --format tsv
@@ -2774,84 +3564,22 @@ collect_tools_file() {
   done < <(if [[ "$path" == "-" ]]; then cat; else cat "$path"; fi)
 }
 
-# Install the selected tools in scope and offer to remove unchecked tracked
-# ones. Reads main's locals (bash scoping is dynamic): selected, tools,
-# installed, tracked, requested, reconcile, all, mgr, tui. Returns 1 on any
-# failure.
-process_selection() {
-  # Build set of selected tools, keeping the order they were given in, so a
-  # block installs in catalog order rather than hash order.
-  declare -A selected_set=()
-  local ordered=() choice
-  if [[ -n "$selected" ]]; then
-    local choices_arr=()
-    IFS=' ' read -r -a choices_arr <<< "$selected"
-    for choice in "${choices_arr[@]}"; do
-      choice="${choice//\"/}"
-      [[ -z "$choice" || -n "${selected_set[$choice]:-}" ]] && continue
-      selected_set["$choice"]="true"
-      ordered+=("$choice")
-    done
+# Install one catalog tool. Spec-table tools go through their kind; on macOS
+# every other tool uses its Homebrew name unless its own installer works there.
+install_tool() {
+  local choice="$1" mgr="$2" brew_name
+  if is_package_tool "$choice"; then
+    install_package_tool "$choice" "$mgr"
+    return
   fi
-
-  # Find tools to uninstall: tracked + currently installed + NOT selected.
-  # In --tools mode this is skipped unless --reconcile was passed: removing
-  # software the caller never mentioned is not a safe default for integrators.
-  local to_uninstall=()
-  if [[ ${#requested[@]} -eq 0 ]] || $reconcile; then
-    for tool in "${tools[@]}"; do
-      if [[ "${tracked[$tool]:-}" == "true" ]] && \
-         [[ "${installed[$tool]:-}" == "true" ]] && \
-         [[ "${selected_set[$tool]:-}" != "true" ]]; then
-        to_uninstall+=("$tool")
-      fi
-    done
+  if [[ "$mgr" == "brew" ]]; then
+    brew_name="$(legacy_brew_name "$choice")"
+    case "$brew_name" in
+      "") log_warn "$choice is Linux-only; it is not offered on macOS."; return 1;;
+      "=") ;;
+      *) install_pkg brew "$brew_name"; return;;
+    esac
   fi
-
-  # Prompt user about uninstalling unchecked tools
-  local do_uninstall=false
-  if [[ ${#to_uninstall[@]} -gt 0 ]] && [[ ${#requested[@]} -gt 0 ]] && $reconcile; then
-    log_info "Reconciling: uninstalling ${#to_uninstall[@]} tracked tool(s) not in the requested set."
-    do_uninstall=true
-  elif [[ ${#to_uninstall[@]} -gt 0 ]] && $tui; then
-    local uninstall_list=""
-    for tool in "${to_uninstall[@]}"; do
-      uninstall_list+="  - $(tool_desc "$tool")\n"
-    done
-    if dialog --stdout --title "Uninstall Tools" \
-        --yesno "The following tools were unchecked and are currently installed:\n\n${uninstall_list}\nDo you want to uninstall these tools?" \
-        "$DIALOG_HEIGHT" "$DIALOG_WIDTH"; then
-      do_uninstall=true
-    fi
-    # Clear after uninstall dialog closes
-    clear
-  fi
-
-  # If no selections and no uninstalls, there is nothing to do.
-  if [[ -z "$selected" ]] && [[ "$do_uninstall" != "true" ]]; then
-    log_warn "No selections made."
-    return 0
-  fi
-
-  # Track installation/uninstallation results
-  local failed_installs=()
-  local failed_uninstalls=()
-  local successful_installs=()
-  local successful_uninstalls=()
-  local already_installed=()
-
-  # Install selected tools
-  for choice in "${ordered[@]}"; do
-    if [[ "${installed[$choice]:-}" == "true" ]]; then
-      log_info "Already installed: $choice"
-      # Track it if not already tracked
-      add_tracked_tool "$choice"
-      already_installed+=("$choice")
-      continue
-    fi
-    log_info "Installing: $choice"
-    # Run installation in subshell to catch errors without exiting
-    if (
     case "$choice" in
       ripgrep) install_ripgrep "$mgr";;
       fd) install_fd "$mgr";;
@@ -2957,32 +3685,24 @@ process_selection() {
       gimp) install_gimp "$mgr";;
       nemo) install_pkg_simple "$mgr" nemo;;
       rustdesk) install_rustdesk "$mgr";;
-      audacity|blender|darktable|ffmpeg|handbrake|inkscape|intellij-idea-community|kdenlive|krita|mpv|obs-studio|pycharm-community|vlc|zed)
-        install_package_tool "$choice" "$mgr";;
       *) log_error "No installer is wired for $choice."; false;;
     esac
-    ); then
-      # Installation command succeeded, verify tool is now installed
-      if is_installed_tool "$choice"; then
-        add_tracked_tool "$choice"
-        successful_installs+=("$choice")
-        log_info "Successfully installed: $choice"
-      else
-        log_warn "Installation command completed but $choice not detected as installed."
-        failed_installs+=("$choice")
-      fi
-    else
-      log_error "Failed to install: $choice"
-      failed_installs+=("$choice")
-    fi
-  done
+}
 
-  # Uninstall unchecked tools if user agreed
-  if [[ "$do_uninstall" == "true" ]]; then
-    for tool in "${to_uninstall[@]}"; do
-      log_info "Uninstalling: $tool"
-      # Run uninstallation in subshell to catch errors without exiting
-      if (
+uninstall_tool() {
+  local tool="$1" mgr="$2" brew_name
+  if is_package_tool "$tool"; then
+    uninstall_package_tool "$tool" "$mgr"
+    return
+  fi
+  if [[ "$mgr" == "brew" ]]; then
+    brew_name="$(legacy_brew_name "$tool")"
+    case "$brew_name" in
+      "") log_warn "$tool is Linux-only; nothing to remove on macOS."; return 1;;
+      "=") ;;
+      *) uninstall_pkg brew "$brew_name"; return;;
+    esac
+  fi
       case "$tool" in
         ripgrep) uninstall_pkg_simple "$mgr" ripgrep;;
         fd) uninstall_fd "$mgr";;
@@ -3074,11 +3794,109 @@ process_selection() {
         gimp) uninstall_gimp "$mgr";;
         nemo) uninstall_pkg_simple "$mgr" nemo;;
         rustdesk) uninstall_rustdesk "$mgr";;
-        audacity|blender|darktable|ffmpeg|handbrake|inkscape|intellij-idea-community|kdenlive|krita|mpv|obs-studio|pycharm-community|vlc|zed)
-          uninstall_package_tool "$tool" "$mgr";;
         *) log_error "No uninstaller is wired for $tool."; false;;
       esac
-      ); then
+}
+
+# Install the selected tools in scope and offer to remove unchecked tracked
+# ones. Reads main's locals (bash scoping is dynamic): selected, tools,
+# installed, tracked, requested, reconcile, all, mgr, tui. Returns 1 on any
+# failure.
+process_selection() {
+  # Build set of selected tools, keeping the order they were given in, so a
+  # block installs in catalog order rather than hash order.
+  declare -A selected_set=()
+  local ordered=() choice
+  if [[ -n "$selected" ]]; then
+    local choices_arr=()
+    IFS=' ' read -r -a choices_arr <<< "$selected"
+    for choice in "${choices_arr[@]}"; do
+      choice="${choice//\"/}"
+      [[ -z "$choice" || -n "${selected_set[$choice]:-}" ]] && continue
+      selected_set["$choice"]="true"
+      ordered+=("$choice")
+    done
+  fi
+
+  # Find tools to uninstall: tracked + currently installed + NOT selected.
+  # In --tools mode this is skipped unless --reconcile was passed: removing
+  # software the caller never mentioned is not a safe default for integrators.
+  local to_uninstall=()
+  if [[ ${#requested[@]} -eq 0 ]] || $reconcile; then
+    for tool in "${tools[@]}"; do
+      if [[ "${tracked[$tool]:-}" == "true" ]] && \
+         [[ "${installed[$tool]:-}" == "true" ]] && \
+         [[ "${selected_set[$tool]:-}" != "true" ]]; then
+        to_uninstall+=("$tool")
+      fi
+    done
+  fi
+
+  # Prompt user about uninstalling unchecked tools
+  local do_uninstall=false
+  if [[ ${#to_uninstall[@]} -gt 0 ]] && [[ ${#requested[@]} -gt 0 ]] && $reconcile; then
+    log_info "Reconciling: uninstalling ${#to_uninstall[@]} tracked tool(s) not in the requested set."
+    do_uninstall=true
+  elif [[ ${#to_uninstall[@]} -gt 0 ]] && $tui; then
+    local uninstall_list=""
+    for tool in "${to_uninstall[@]}"; do
+      uninstall_list+="  - $(tool_desc "$tool")\n"
+    done
+    if dialog --stdout --title "Uninstall Tools" \
+        --yesno "The following tools were unchecked and are currently installed:\n\n${uninstall_list}\nDo you want to uninstall these tools?" \
+        "$DIALOG_HEIGHT" "$DIALOG_WIDTH"; then
+      do_uninstall=true
+    fi
+    # Clear after uninstall dialog closes
+    clear
+  fi
+
+  # If no selections and no uninstalls, there is nothing to do.
+  if [[ -z "$selected" ]] && [[ "$do_uninstall" != "true" ]]; then
+    log_warn "No selections made."
+    return 0
+  fi
+
+  # Track installation/uninstallation results
+  local failed_installs=()
+  local failed_uninstalls=()
+  local successful_installs=()
+  local successful_uninstalls=()
+  local already_installed=()
+
+  # Install selected tools
+  for choice in "${ordered[@]}"; do
+    if [[ "${installed[$choice]:-}" == "true" ]]; then
+      log_info "Already installed: $choice"
+      # Track it if not already tracked
+      add_tracked_tool "$choice"
+      already_installed+=("$choice")
+      continue
+    fi
+    log_info "Installing: $choice"
+    # Run installation in subshell to catch errors without exiting
+    if ( install_tool "$choice" "$mgr" ); then
+      # Installation command succeeded, verify tool is now installed
+      if is_installed_tool "$choice"; then
+        add_tracked_tool "$choice"
+        successful_installs+=("$choice")
+        log_info "Successfully installed: $choice"
+      else
+        log_warn "Installation command completed but $choice not detected as installed."
+        failed_installs+=("$choice")
+      fi
+    else
+      log_error "Failed to install: $choice"
+      failed_installs+=("$choice")
+    fi
+  done
+
+  # Uninstall unchecked tools if user agreed
+  if [[ "$do_uninstall" == "true" ]]; then
+    for tool in "${to_uninstall[@]}"; do
+      log_info "Uninstalling: $tool"
+      # Run uninstallation in subshell to catch errors without exiting
+      if ( uninstall_tool "$tool" "$mgr" ); then
         # Uninstallation succeeded
         remove_tracked_tool "$tool"
         successful_uninstalls+=("$tool")
@@ -3197,7 +4015,7 @@ print_catalog_tsv() {
 run_category_block() {
   local category="$1" label tool
   label="$(category_field "$category" 2)"
-  read -r -a tools <<< "$(category_field "$category" 3)"
+  read -r -a tools <<< "$(category_tools_for "$category" "$mgr")"
   for tool in "${tools[@]}"; do
     if is_installed_tool "$tool"; then installed["$tool"]="true"; else installed["$tool"]="false"; fi
   done
@@ -3236,15 +4054,19 @@ run_category_menu() {
     for entry in "${TOOL_CATEGORIES[@]}"; do
       id="${entry%%|*}"
       label="$(cut -d'|' -f2 <<< "$entry")"
-      read -r -a cat_tools <<< "${entry##*|}"
+      read -r -a cat_tools <<< "$(category_tools_for "$id" "$mgr")"
       total=${#cat_tools[@]}; count=0
+      # Linux-only categories (and tools) are hidden on macOS, not listed as failures.
+      [[ "$total" -eq 0 ]] && continue
       for tool in "${cat_tools[@]}"; do
         is_installed_tool "$tool" && count=$((count + 1))
       done
       menu_items+=("$id" "$label ($count/$total installed)")
     done
+    local note="Pick a category. Each one is installed as its own block."
+    [[ "$mgr" == "brew" ]] && note+=" Linux-only tools are hidden on macOS."
     choice=$(dialog --stdout --title "Distrodeck Installer" --cancel-label "Quit" \
-      --menu "Pick a category. Each one is installed as its own block." \
+      --menu "$note" \
       "$DIALOG_HEIGHT" "$DIALOG_WIDTH" "$((DIALOG_HEIGHT - 8))" "${menu_items[@]}") || break
     clear
     run_category_block "$choice" || status=1
@@ -3281,6 +4103,7 @@ main() {
         ;;
       --tools-file=*) collect_tools_file "${1#*=}" requested || exit 2;;
       --reconcile) reconcile=true;;
+      --purge) export DISTRODECK_PURGE=1;;
       --java-version)
         [[ $# -ge 2 ]] || { log_error "--java-version requires a value."; usage; exit 2; }
         JAVA_VERSION="$2"
@@ -3397,7 +4220,11 @@ main() {
     [[ -t 0 ]] || export DISTRODECK_NONINTERACTIVE=true
     local block_status=0 skipped
     for category in "${categories[@]}"; do
-      read -r -a tools <<< "$(category_field "$category" 3)"
+      read -r -a tools <<< "$(category_tools_for "$category" "$mgr")"
+      if [[ ${#tools[@]} -eq 0 ]]; then
+        log_warn "Category $category has no tools for ${mgr}; skipping it."
+        continue
+      fi
       selected=""; skipped=""
       for tool in "${tools[@]}"; do
         if is_opt_in_tool "$tool"; then skipped+=" $tool"; else selected+=" $tool"; fi
@@ -3449,7 +4276,7 @@ main() {
     fi
   else
     # Derived from the catalog so a new tool is never silently missing here.
-    selected="$(default_all_selection)"
+    selected="$(default_all_selection "$mgr")"
     opt_in_tools="${OPT_IN_TOOLS[*]}"
     include_opt_in_tools="${DISTRODECK_ALL_INCLUDE_OPT_IN_TOOLS:-${DISTRODECK_ALL_INCLUDE_REMOTE_SCRIPT_TOOLS:-false}}"
     if [[ "$include_opt_in_tools" == "true" && -t 0 ]]; then
