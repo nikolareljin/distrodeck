@@ -250,9 +250,10 @@ options:
 .nf
 usage: distrodeck install-tools [-h] [--all] [--tools LIST]
                                 [--tools-file PATH] [--reconcile]
-                                [--java-version {17,21,25}] [--category IDS]
-                                [--list-categories] [--list-catalog]
-                                [--format {tsv}] [--list-tools]
+                                [--java-version {17,21,25}] [--purge]
+                                [--category IDS] [--list-categories]
+                                [--list-catalog] [--format {tsv}]
+                                [--list-tools]
 
 options:
   -h, --help            show this help message and exit
@@ -265,6 +266,8 @@ options:
                         requested set
   --java-version {17,21,25}
                         JDK major installed by the java tool (default 21)
+  --purge               When uninstalling a container tool, also remove its
+                        data volume
   --category IDS        Install the default-on tools of these categories, one
                         block each (repeatable)
   --list-categories     Print category ids and labels and exit

@@ -467,6 +467,10 @@ Options:
   `label`, `opt_in` (0/1), `installed` (0/1). No colour, no dialog, no root,
   no package manager needed. The column order is a contract: new columns are
   only ever appended.
+  NikOS reads this output at runtime: it lists every catalog tool, including
+  ones a given manager cannot install, and the columns did not change when the
+  catalog grew.
+- `--purge`: when uninstalling a container tool, also remove its data volume
 - `--list-tools`: print the tool catalog and exit
 
 `--tools` and `--tools-file` are the noninteractive entry points for scripts and
@@ -510,8 +514,39 @@ unreadable tools file).
 | `media` | Media | audacity, ffmpeg, handbrake, kdenlive, mpv, obs-studio, vlc |
 | `graphics` | Graphics | blender, darktable, gimp, inkscape, krita |
 | `util` | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
-| `db` | Databases | atlas*, mongodb* |
+| `db-sql` | Relational databases | mariadb*, mysql*, oracle-free* (container), pgvector*, postgresql*, sqlite* |
+| `db-nosql` | NoSQL & graph databases | atlas*, cassandra* (Apache repo), couchdb*, mongodb*, neo4j* (Neo4j repo), redis*, valkey* |
+| `db-vector` | Vector databases | chroma* (pipx), milvus* (container), qdrant* (container; brew), weaviate* (container) |
+| `storage` | Object storage | minio* (brew), minio-client, rclone, s3cmd, seaweedfs* (container) |
+| `db-admin` | Database admin | beekeeper-studio*, dbeaver-ce*, litecli, mongodb-compass*, mycli, pgadmin4*, pgcli, sqlitebrowser*, usql |
+| `sysadmin` | System admin | btop, cockpit* (127.0.0.1:9090), glances, lnav |
+| `web` | Web services | apache2*, caddy*, certbot, haproxy*, mkcert, nginx* |
+| `prog` | Programming tools | bruno*, clang, cmake, dotnet-sdk*, gdb, httpie, kotlin, ninja, nvm, pipx, pre-commit, pyenv, sdkman*, shellcheck, uv, valgrind |
+| `claude-plugins` | Claude Code plugins | plugin-claude-md-management*, plugin-code-review*, plugin-code-simplifier*, plugin-commit-commands*, plugin-feature-dev*, plugin-frontend-design*, plugin-hookify*, plugin-pr-review-toolkit*, plugin-security-guidance*, plugin-skill-creator* |
 | `apps` | Apps | image-view, isoforge, nemo, rustdesk, streamcontroller |
+
+**Servers** (databases, web servers, Cockpit) are opt-in. They are enabled
+with systemd (or `brew services` on macOS) and bound to 127.0.0.1: nginx,
+Apache and Caddy listen directives are rewritten, MySQL/MariaDB get a
+`bind-address = 127.0.0.1` drop-in, Cockpit's socket listens on
+127.0.0.1:9090; PostgreSQL, Redis, Valkey, CouchDB, Neo4j and Cassandra already
+default to localhost. Uninstall stops the service and keeps the data directory.
+
+**Containers** (oracle-free, qdrant, milvus, weaviate, seaweedfs) need docker
+or podman. Each runs a pinned image tag as `distrodeck-<tool>` with a named
+volume `distrodeck-<tool>`, publishes its ports on 127.0.0.1 only and restarts
+unless stopped. A port another process holds is refused with that process's
+name. Uninstall removes the container and keeps the volume; `--purge` removes
+it too. The Oracle password is generated once into
+`~/.local/state/distrodeck/oracle-free.password` (mode 600).
+
+**Claude Code plugins** need the `claude` CLI and come only from the public
+`anthropics/claude-plugins-official` marketplace, which is added when missing.
+
+**macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
+if it is missing) and installs with `brew` / `brew install --cask`. Tools with
+no Homebrew formula or cask (ufw, cockpit, flatpak, nala, ntfs-3g, ...) are
+hidden from the menu, `--category` and `--all`.
 
 **Notable tools:**
 - `bfg` - BFG Repo-Cleaner for removing large files from git history

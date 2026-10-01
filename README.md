@@ -181,7 +181,15 @@ menu for the next one; Quit ends. Nothing is preselected in bulk.
 | `media` | Media | audacity, ffmpeg, handbrake, kdenlive, mpv, obs-studio, vlc |
 | `graphics` | Graphics | blender, darktable, gimp, inkscape, krita |
 | `util` | Utilities | adb, dialog, flatpak, nala, ntfs-3g, wine |
-| `db` | Databases | atlas*, mongodb* |
+| `db-sql` | Relational databases | mariadb*, mysql*, oracle-free* (container), pgvector*, postgresql*, sqlite* |
+| `db-nosql` | NoSQL & graph databases | atlas*, cassandra* (Apache repo), couchdb*, mongodb*, neo4j* (Neo4j repo), redis*, valkey* |
+| `db-vector` | Vector databases | chroma* (pipx), milvus* (container), qdrant* (container; brew), weaviate* (container) |
+| `storage` | Object storage | minio* (brew), minio-client, rclone, s3cmd, seaweedfs* (container) |
+| `db-admin` | Database admin | beekeeper-studio*, dbeaver-ce*, litecli, mongodb-compass*, mycli, pgadmin4*, pgcli, sqlitebrowser*, usql |
+| `sysadmin` | System admin | btop, cockpit* (127.0.0.1:9090), glances, lnav |
+| `web` | Web services | apache2*, caddy*, certbot, haproxy*, mkcert, nginx* |
+| `prog` | Programming tools | bruno*, clang, cmake, dotnet-sdk*, gdb, httpie, kotlin, ninja, nvm, pipx, pre-commit, pyenv, sdkman*, shellcheck, uv, valgrind |
+| `claude-plugins` | Claude Code plugins | plugin-claude-md-management*, plugin-code-review*, plugin-code-simplifier*, plugin-commit-commands*, plugin-feature-dev*, plugin-frontend-design*, plugin-hookify*, plugin-pr-review-toolkit*, plugin-security-guidance*, plugin-skill-creator* |
 | `apps` | Apps | image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
@@ -189,6 +197,30 @@ Unchecking a previously installed tool prompts to uninstall it. Installed tools 
 For scripts and external integrators, `--tools LIST` and `--tools-file PATH` install a named set without opening the checklist. Unknown tool names exit 2 before anything is installed, and tools outside the requested set are left alone unless `--reconcile` is passed. `--list-tools` prints the catalog. `--category media,graphics` installs the default-on tools of those categories, one block each; opt-in tools (*) install only when named with `--tools`. `--list-categories` prints the ids, and `--list-catalog --format tsv` prints one line per tool: `category_id`, `category_label`, `tool`, `label`, `opt_in` (0/1), `installed` (0/1), tab separated, with no colour, no dialog and no root.
 
 Media, Graphics and the JetBrains/Zed IDEs install from the distro package where one exists and fall back to the Flathub Flatpak where it does not (for example HandBrake on Fedora and openSUSE, Zed on Ubuntu). A tool with neither fails on its own with a message.
+
+**Servers** (databases, web servers, Cockpit) are opt-in. They are enabled
+with systemd (or `brew services` on macOS) and bound to 127.0.0.1: nginx,
+Apache and Caddy listen directives are rewritten, MySQL/MariaDB get a
+`bind-address = 127.0.0.1` drop-in, Cockpit's socket listens on
+127.0.0.1:9090; PostgreSQL, Redis, Valkey, CouchDB, Neo4j and Cassandra already
+default to localhost. Uninstall stops the service and keeps the data directory.
+
+**Containers** (oracle-free, qdrant, milvus, weaviate, seaweedfs) need docker
+or podman. Each runs a pinned image tag as `distrodeck-<tool>` with a named
+volume `distrodeck-<tool>`, publishes its ports on 127.0.0.1 only and restarts
+unless stopped. A port another process holds is refused with that process's
+name. Uninstall removes the container and keeps the volume; `--purge` removes
+it too. The Oracle password is generated once into
+`~/.local/state/distrodeck/oracle-free.password` (mode 600).
+
+**Claude Code plugins** need the `claude` CLI and come only from the public
+`anthropics/claude-plugins-official` marketplace, which is added when missing.
+
+**macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
+if it is missing) and installs with `brew` / `brew install --cask`. Tools with
+no Homebrew formula or cask (ufw, cockpit, flatpak, nala, ntfs-3g, ...) are
+hidden from the menu, `--category` and `--all`.
+
 
 Selecting `node` installs Node 24 from the system repository and nvm (Node 24 and 22, default 24), so versions can be switched per shell with `nvm use 22`.
 

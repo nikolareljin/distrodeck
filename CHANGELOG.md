@@ -6,6 +6,20 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- **Catalog expansion.** New categories: Relational (postgresql, pgvector,
+  mysql, mariadb, sqlite, oracle-free), NoSQL & graph (redis, valkey, cassandra,
+  couchdb, neo4j, plus mongodb and atlas), Vector (qdrant, chroma, milvus,
+  weaviate), Object storage (minio, minio-client, seaweedfs, rclone, s3cmd),
+  Database admin (dbeaver-ce, pgadmin4, mongodb-compass, sqlitebrowser,
+  beekeeper-studio, pgcli, mycli, litecli, usql), System admin (cockpit, btop,
+  glances, lnav), Web services (nginx, apache2, caddy, haproxy, certbot,
+  mkcert), Programming tools (16 tools) and Claude Code plugins (10 from
+  anthropics/claude-plugins-official). Servers, containers, GUI admin tools and
+  plugins are opt-in; servers bind 127.0.0.1; containers use pinned tags and
+  refuse a busy port naming its holder. `--purge` removes a container's volume.
+- **macOS.** The installer re-execs under Homebrew bash 5, installs with brew
+  formulae and casks, and hides Linux-only tools. A `macos-latest` CI job runs
+  the listing, the argument tests and one real brew install.
 - **install-tools works by category.** The TUI opens a category menu; each
   category opens its own checklist, installs that block and returns to the
   menu. `--category IDS` does the same without the TUI (default-on tools only),
@@ -399,6 +413,8 @@ This project follows Keep a Changelog and Semantic Versioning.
   code. The venv itself is still offered with `--include-environments`.
 
 ### Changed
+- The `db` install-tools category is split into `db-sql`, `db-nosql` and
+  `db-vector`. `--list-catalog --format tsv` keeps its six columns.
 - `scripts/script-helpers` follows the `production` branch (`.gitmodules`) and is
   bumped to its current head.
 - `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
