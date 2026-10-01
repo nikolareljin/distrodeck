@@ -3594,6 +3594,28 @@ def _still_eligible(
     return Recheck("", measured)
 
 
+def _inside_virtualenv(path: pathlib.Path, cache: dict) -> bool:
+    """True when *path* lives inside a Python virtualenv.
+
+    A package's `build/` inside `site-packages` is installed code, not build
+    output: deleting `.venv/lib/python3.12/site-packages/foo/build` breaks the
+    environment without freeing anything a build makes again. The venv itself
+    is still a candidate under `--include-environments`; only what is *inside*
+    one is refused. `pyvenv.cfg` in an ancestor catches layouts without a
+    `site-packages` component (Windows-style `Lib/`, custom prefixes).
+    """
+    if "site-packages" in path.parts:
+        return True
+    for parent in path.parents:
+        hit = cache.get(parent)
+        if hit is None:
+            hit = (parent / "pyvenv.cfg").is_file()
+            cache[parent] = hit
+        if hit:
+            return True
+    return False
+
+
 def find_reclaimable(
     workspace: pathlib.Path,
     names: dict,
@@ -3663,6 +3685,7 @@ def find_reclaimable(
     points = _mount_points()
 
     candidates = []
+    venv_cache: dict = {}
     for root, dirs, files in os.walk(workspace, onerror=lambda _: None):
         dirs[:] = [d for d in dirs if d != ".git"]
         if _is_bare_repository(list(dirs) + list(files)):
@@ -3695,6 +3718,8 @@ def find_reclaimable(
                 print(f"  skipping {path}: {mounted}", file=sys.stderr)
                 continue
             if path.is_symlink():
+                continue
+            if _inside_virtualenv(path, venv_cache):
                 continue
             candidates.append(path)
 

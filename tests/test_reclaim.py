@@ -189,6 +189,33 @@ class TestWhatItRefusesToTouch:
         assert [p.name for p, _, _, _ in distrodeck.find_reclaimable(repo.parent, names)] == ["venv"]
 
 
+class TestNothingInsideAVirtualenv:
+    """A package's `build/` inside a venv is installed code, not build output."""
+
+    def test_build_under_site_packages_is_not_offered(self, repo):
+        make_dir(repo, "venv/lib/python3.12/site-packages/pkg/build")
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_build_under_a_pyvenv_cfg_ancestor_is_not_offered(self, repo):
+        make_dir(repo, "venv/src/pkg/build")
+        (repo / "venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        assert distrodeck.find_reclaimable(repo.parent, ARTIFACTS) == []
+
+    def test_the_venv_itself_is_still_offered_when_asked_for(self, repo):
+        make_dir(repo, "venv/lib/python3.12/site-packages/pkg/build")
+        (repo / "venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        names = {**ARTIFACTS, **distrodeck.RECLAIM_ENVIRONMENTS}
+        found = distrodeck.find_reclaimable(repo.parent, names)
+        assert [p.name for p, _, _, _ in found] == ["venv"]
+
+    def test_a_sibling_build_outside_the_venv_is_still_offered(self, repo):
+        make_dir(repo, "venv/lib/python3.12/site-packages/pkg/build")
+        (repo / "venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        make_dir(repo, "build")
+        found = distrodeck.find_reclaimable(repo.parent, ARTIFACTS)
+        assert [p for p, _, _, _ in found] == [repo / "build"]
+
+
 class TestAgeIsTakenFromTheNewestThingInside:
     """A directory's own mtime is not its age.
 

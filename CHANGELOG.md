@@ -350,6 +350,12 @@ This project follows Keep a Changelog and Semantic Versioning.
   switched per shell.
 - The PR CI gate now runs the test suite (pytest plus the installer argument
   tests); previously only `py_compile` ran, so tests never gated a PR.
+
+### Fixed
+- `reclaim` no longer offers a `build/` (or any artifact name) inside a Python
+  virtualenv: a path under `site-packages` or below a `pyvenv.cfg` is installed
+  code. The venv itself is still offered with `--include-environments`.
+
 ### Changed
 - `burn-iso` was renamed to `iso-forge` on GitHub. The IsoForge installer now
   looks for `~/Projects/iso-forge` first and still accepts an older
