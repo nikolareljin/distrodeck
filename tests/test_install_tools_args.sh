@@ -262,6 +262,23 @@ for mgr in pacman zypper; do
   out="$(uninstall_atlas "$mgr" 2>&1)"; rc=$?
   [[ "$rc" -ne 0 ]] && pass "atlas uninstall refuses ${mgr}" || fail "atlas uninstall refuses ${mgr}" "$out"
 done
+uninstall_out="$(
+  sudo() { :; }
+  command() { return 1; }
+  uninstall_pkg() { echo "remove $*"; }
+  mongodb_repo_remove_if_unused() { :; }
+  uninstall_mongodb apt 2>&1
+  uninstall_mongodb dnf 2>&1
+)"
+assert_contains "$uninstall_out" "remove apt mongodb-org mongodb-org-database" "mongodb apt uninstall names packages explicitly"
+assert_not_contains "$uninstall_out" "remove apt mongodb-org*" "mongodb apt uninstall uses no glob"
+assert_contains "$uninstall_out" "remove dnf mongodb-org* mongodb-database-tools mongodb-mongosh" "mongodb dnf uninstall uses the glob"
+assert_contains "$uninstall_out" "Kept the MongoDB data" "mongodb uninstall says the data is kept"
+if (MONGODB_SERIES=9.0; mongodb_repo_setup apt >/dev/null 2>&1); then
+  fail "mongodb refuses a series the pinned key does not sign"
+else
+  pass "mongodb refuses a series the pinned key does not sign"
+fi
 unset OS_RELEASE_FILE
 rm -rf "$mongo_tmp"
 if is_opt_in_tool atlas && ! is_opt_in_tool mongodb; then
@@ -292,6 +309,15 @@ java_out="$(
 )"
 assert_contains "$java_out" "install apt openjdk-25-jdk" "install_java honours JAVA_VERSION"
 assert_contains "$java_out" "remove apt openjdk-25-jdk" "uninstall_java removes the JDK it installed"
+legacy_out="$(
+  # shellcheck disable=SC2034
+  JAVA_STATE_FILE="$java_tmp/absent"
+  uninstall_pkg() { echo "remove $*"; }
+  uninstall_java apt
+  uninstall_java dnf
+)"
+assert_contains "$legacy_out" "remove apt default-jdk" "uninstall_java removes a pre-choice apt install"
+assert_contains "$legacy_out" "remove dnf java-17-openjdk-devel" "uninstall_java removes a pre-choice dnf install"
 rm -rf "$java_tmp"
 if (JAVA_VERSION=11; install_java apt >/dev/null 2>&1); then
   fail "install_java refuses an unsupported version"

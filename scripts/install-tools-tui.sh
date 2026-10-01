@@ -1628,9 +1628,11 @@ install_aider() {
 # ─────────────────────────────────────────────────────────────────────────────
 # MongoDB (official repository, shared by mongodb and atlas)
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.2 is the current on-premises series. Override with DISTRODECK_MONGODB_SERIES.
+# 8.2 is the current on-premises series; DISTRODECK_MONGODB_SERIES=8.0 picks
+# the previous one. Only series signed by the key below are accepted: 9.0 is
+# signed by a different key that MongoDB does not publish at a stable URL yet.
 MONGODB_SERIES="${DISTRODECK_MONGODB_SERIES:-8.2}"
-# MongoDB signs 8.x series with the 8.0 server key.
+MONGODB_SUPPORTED_SERIES="8.0 8.2"
 MONGODB_KEY_URL="https://pgp.mongodb.com/server-8.0.asc"
 MONGODB_KEYRING="/usr/share/keyrings/mongodb-server.gpg"
 MONGODB_APT_LIST="/etc/apt/sources.list.d/mongodb-org.list"
@@ -1687,6 +1689,10 @@ mongodb_rpm_release() {
 
 mongodb_repo_setup() {
   local mgr="$1"
+  if [[ " $MONGODB_SUPPORTED_SERIES " != *" $MONGODB_SERIES "* ]]; then
+    log_warn "Unsupported MongoDB series '$MONGODB_SERIES'; choose one of: $MONGODB_SUPPORTED_SERIES."
+    return 1
+  fi
   case "$mgr" in
     apt)
       local target distro codename component tmp_key
@@ -1769,7 +1775,13 @@ uninstall_mongodb() {
   if command -v systemctl >/dev/null 2>&1; then
     sudo systemctl disable --now mongod 2>/dev/null || true
   fi
-  uninstall_pkg "$mgr" 'mongodb-org*' mongodb-mongosh || return 1
+  # apt 2.x dropped package-name globs, so apt gets the explicit dependency set
+  # of mongodb-org; dnf matches the glob itself.
+  local pkgs=(mongodb-org mongodb-org-database mongodb-org-server mongodb-org-mongos
+    mongodb-org-shell mongodb-org-tools mongodb-org-database-tools-extra
+    mongodb-database-tools mongodb-mongosh)
+  [[ "$mgr" == "dnf" ]] && pkgs=('mongodb-org*' mongodb-database-tools mongodb-mongosh)
+  uninstall_pkg "$mgr" "${pkgs[@]}" || return 1
   mongodb_repo_remove_if_unused "$mgr"
   log_info "Kept the MongoDB data in /var/lib/mongodb (dnf: /var/lib/mongo); remove it manually to drop the databases."
 }
@@ -1873,8 +1885,20 @@ uninstall_node() {
 uninstall_java() {
   local mgr="$1" version pkg
   # Remove the JDK distrodeck installed, not whatever version is configured now.
-  version="$(cat "$JAVA_STATE_FILE" 2>/dev/null || echo "$JAVA_VERSION")"
-  if ! pkg="$(java_package "$mgr" "$version")"; then
+  # No state file means an install from before the version choice existed,
+  # which used these package names.
+  if version="$(cat "$JAVA_STATE_FILE" 2>/dev/null)"; then
+    pkg="$(java_package "$mgr" "$version")" || pkg=""
+  else
+    case "$mgr" in
+      apt) pkg="default-jdk";;
+      dnf) pkg="java-17-openjdk-devel";;
+      pacman) pkg="jdk-openjdk";;
+      zypper) pkg="java-17-openjdk";;
+      *) pkg="";;
+    esac
+  fi
+  if [[ -z "$pkg" ]]; then
     log_warn "Java uninstall not supported for this distro."
     return 1
   fi

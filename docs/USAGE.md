@@ -501,8 +501,8 @@ unreadable tools file).
   the JDK distrodeck installed.
 - `mongodb` - MongoDB Community server and mongosh from the official
   repository (apt: Ubuntu jammy/noble, Debian bookworm; dnf: RHEL 8-10, Fedora
-  via the RHEL 9 repository). Series 8.2 by default, `DISTRODECK_MONGODB_SERIES`
-  overrides it. `mongod` is enabled and listens on 127.0.0.1 only. pacman and
+  via the RHEL 9 repository). Series 8.2 by default; `DISTRODECK_MONGODB_SERIES=8.0`
+  picks the previous one. `mongod` is enabled and listens on 127.0.0.1 only. pacman and
   zypper are not supported. Uninstall keeps the data directory.
 - `atlas` - MongoDB Atlas CLI from the same repository. With docker or podman
   present, `atlas deployments setup --type local` runs a local deployment
