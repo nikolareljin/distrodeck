@@ -35,7 +35,10 @@ This project follows Keep a Changelog and Semantic Versioning.
 - **`distrodeck ollama models list|pull|remove <group>`.** Six groups
   (default, reasoning, coding, text, vision, embedding) of current Ollama models
   in one table; every tag checked against ollama.com/library. Without the
-  `ollama` binary, `pull` and `remove` fail with an install hint.
+  `ollama` binary, `pull` and `remove` fail with an install hint. The TUI has
+  an "AI: Ollama model groups" entry on the same code path: pick groups (sizes
+  and installed models shown), then pull or remove; without ollama it offers
+  the opt-in install. The main-menu install entry now names the categories.
 - **`install-tools`: Databases section with `mongodb` and `atlas`.** Both use
   the official MongoDB repository (series 8.2, signed-by keyring on apt, a yum
   repo file on dnf). `mongod` is enabled bound to 127.0.0.1. pacman and zypper

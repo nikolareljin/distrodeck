@@ -419,7 +419,13 @@ Pull or remove a curated group of Ollama models. Groups: `default`,
 `reasoning`, `coding`, `text`, `vision`, `embedding`. `list` shows every group
 and marks models already pulled; `pull` and `remove` need the `ollama` binary
 and exit 1 if any model fails, after trying the rest. `remove` skips models
-that are not installed. No group shares a model with another.
+that are not installed. No group shares a model with another. `list` shows
+each model's download size and each group's total.
+
+In the TUI, "AI: Ollama model groups" opens the same groups as a checklist
+(size, models, installed ones marked), then asks pull or remove and returns to
+the menu. Without `ollama` it offers to install the opt-in `ollama` tool from
+the AI tools category instead.
 
 ```
 distrodeck ollama models list

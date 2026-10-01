@@ -6776,35 +6776,40 @@ def run_automate_tui() -> None:
         log_action_end("automate")
 
 
+# Main menu of the TUI, in display order.
+TUI_ACTIONS: List[Tuple[str, str]] = [
+    ("self-update", "System: Update distrodeck"),
+    ("preflight", "Diagnostics: Preflight checks"),
+    ("export", "Packages: Export installed packages"),
+    ("import", "Packages: Import from export file"),
+    ("diff", "Packages: Diff export vs current system"),
+    ("update", "System: Update packages"),
+    ("upgrade", "System: Upgrade distro"),
+    ("cleanup-kernels", "System: Cleanup old kernels"),
+    ("security", "Security: Apply security updates"),
+    ("repo-repair", "Packages: Repo repair (apt issues)"),
+    ("install-tools", "Tools: Install by category (IDEs, AI, Media, Graphics, Databases, ...)"),
+    ("ollama-models", "AI: Ollama model groups (pull or remove)"),
+    ("git-status", "Tools: Enable git status in shell prompt"),
+    ("git-aliases", "Tools: Configure git aliases"),
+    ("automate", "Automation: Run Ansible pull"),
+    ("net-tools", "Network: Run installed tools"),
+    ("settings", "Settings: Configure distrodeck"),
+    ("config-edit", "System: Edit config files"),
+    ("doctor", "Diagnostics: Check system prerequisites"),
+    ("sysinfo", "Diagnostics: Full system info"),
+    ("logs", "Diagnostics: View logs"),
+    ("clear-logs", "Diagnostics: Clear all logs"),
+    ("about", "About"),
+    ("quit", "Exit"),
+]
+
+
 def run_tui() -> None:
     require_dialog()
     os.environ["DISTRODECK_DIALOG"] = "1"
     self_cmd = str(Path(__file__).resolve())
-    actions = [
-        ("self-update", "System: Update distrodeck"),
-        ("preflight", "Diagnostics: Preflight checks"),
-        ("export", "Packages: Export installed packages"),
-        ("import", "Packages: Import from export file"),
-        ("diff", "Packages: Diff export vs current system"),
-        ("update", "System: Update packages"),
-        ("upgrade", "System: Upgrade distro"),
-        ("cleanup-kernels", "System: Cleanup old kernels"),
-        ("security", "Security: Apply security updates"),
-        ("repo-repair", "Packages: Repo repair (apt issues)"),
-        ("install-tools", "Tools: Install optional tools"),
-        ("git-status", "Tools: Enable git status in shell prompt"),
-        ("git-aliases", "Tools: Configure git aliases"),
-        ("automate", "Automation: Run Ansible pull"),
-        ("net-tools", "Network: Run installed tools"),
-        ("settings", "Settings: Configure distrodeck"),
-        ("config-edit", "System: Edit config files"),
-        ("doctor", "Diagnostics: Check system prerequisites"),
-        ("sysinfo", "Diagnostics: Full system info"),
-        ("logs", "Diagnostics: View logs"),
-        ("clear-logs", "Diagnostics: Clear all logs"),
-        ("about", "About"),
-        ("quit", "Exit"),
-    ]
+    actions = TUI_ACTIONS
     while True:
         clear_dialog_before_run = False
         choice = dialog_menu(f"Distrodeck ({VERSION})", "Select an action:", actions)
@@ -7011,6 +7016,9 @@ def run_tui() -> None:
             run(["dialog", "--clear"], check=False)
             run([self_cmd, "install-tools"], check=False)
             continue
+        elif choice == "ollama-models":
+            run_ollama_models_tui(self_cmd)
+            continue
         elif choice == "automate":
             run_automate_tui()
             continue
@@ -7214,19 +7222,35 @@ def run_tui() -> None:
             dialog_msgbox("Distrodeck", "Done.")
 
 
-# Ollama model groups for `distrodeck ollama models`. One table: the CLI,
-# its help text and the tests all read it. Every tag was checked against
-# https://ollama.com/library; within a group the smallest model comes first.
-OLLAMA_MODEL_GROUPS: Dict[str, Tuple[str, ...]] = {
-    # One general model that fits an 8 GB laptop.
-    "default": ("gemma4:e4b",),
-    "reasoning": ("deepseek-r1:8b", "qwen3:8b", "gpt-oss:20b"),
+# Ollama model groups for `distrodeck ollama models` and the TUI entry. One
+# table: the CLI, the menu and the tests all read it. Every tag and download
+# size was checked against https://ollama.com/library; within a group the
+# smallest model comes first.
+OLLAMA_MODEL_GROUPS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    # One general model that fits an 8 GB laptop. gemma4:e4b is 9.5 GB.
+    "default": (("qwen3.5:4b", "3.4 GB"),),
+    "reasoning": (("deepseek-r1:8b", "5.2 GB"), ("qwen3:8b", "5.2 GB"), ("gpt-oss:20b", "14 GB")),
     # qwen3-coder publishes nothing below 30b, so qwen2.5-coder covers laptops.
-    "coding": ("qwen2.5-coder:7b", "qwen3-coder:30b"),
-    "text": ("granite4:micro", "qwen3.5:9b", "gemma4:12b"),
-    "vision": ("qwen3-vl:4b", "qwen3-vl:8b"),
-    "embedding": ("embeddinggemma:300m", "qwen3-embedding:0.6b"),
+    "coding": (("qwen2.5-coder:7b", "4.7 GB"), ("qwen3-coder:30b", "19 GB")),
+    "text": (("granite4:micro", "2.1 GB"), ("qwen3.5:9b", "6.6 GB"), ("gemma4:12b", "7.7 GB")),
+    "vision": (("qwen3-vl:4b", "3.3 GB"), ("qwen3-vl:8b", "6.1 GB")),
+    "embedding": (("embeddinggemma:300m", "622 MB"), ("qwen3-embedding:0.6b", "639 MB")),
 }
+
+OLLAMA_INSTALL_HINT = "distrodeck install-tools --tools ollama"
+
+
+def ollama_group_models(group: str) -> List[str]:
+    return [tag for tag, _ in OLLAMA_MODEL_GROUPS[group]]
+
+
+def ollama_group_size(group: str) -> str:
+    """Total download size of a group, e.g. "24.4 GB"."""
+    total = 0.0
+    for _, size in OLLAMA_MODEL_GROUPS[group]:
+        value, unit = size.split()
+        total += float(value) / (1000 if unit == "MB" else 1)
+    return f"{total:.1f} GB"
 
 
 def ollama_installed_models() -> Optional[set]:
@@ -7242,6 +7266,30 @@ def ollama_installed_models() -> Optional[set]:
     return names
 
 
+def ollama_apply(action: str, groups: List[str], installed: Optional[set]) -> List[str]:
+    """Pull or remove every model of *groups*; return the models that failed.
+
+    The single code path behind the CLI and the TUI. `remove` skips models
+    that are not installed and needs *installed*; one failure never stops the
+    rest.
+    """
+    failed: List[str] = []
+    for group in groups:
+        for model in ollama_group_models(group):
+            if action == "pull":
+                log(f"Pulling {model}")
+                command = ["ollama", "pull", model]
+            else:
+                if installed is None or model not in installed:
+                    log(f"Not installed, skipping: {model}")
+                    continue
+                log(f"Removing {model}")
+                command = ["ollama", "rm", model]
+            if run(command, check=False).returncode != 0:
+                failed.append(model)
+    return failed
+
+
 def run_ollama_models(args: argparse.Namespace) -> None:
     action = args.models_action
     if action == "list":
@@ -7249,38 +7297,64 @@ def run_ollama_models(args: argparse.Namespace) -> None:
         if installed is None:
             print("(ollama not installed or not running; install state unknown)")
         for group, models in OLLAMA_MODEL_GROUPS.items():
-            print(f"{group}:")
-            for model in models:
+            print(f"{group}: ({ollama_group_size(group)})")
+            for model, size in models:
                 mark = ""
                 if installed is not None:
                     mark = "  [installed]" if model in installed else ""
-                print(f"  {model}{mark}")
+                print(f"  {model}  {size}{mark}")
         return
     if not cmd_exists("ollama"):
-        fail(
-            "ollama is not installed. Install it with "
-            "'distrodeck install-tools --tools ollama' and try again."
-        )
-    models = OLLAMA_MODEL_GROUPS[args.group]
-    failed = []
-    if action == "pull":
-        for model in models:
-            log(f"Pulling {model}")
-            if run(["ollama", "pull", model], check=False).returncode != 0:
-                failed.append(model)
-    else:
+        fail(f"ollama is not installed. Install it with '{OLLAMA_INSTALL_HINT}' and try again.")
+    installed = None
+    if action == "remove":
         installed = ollama_installed_models()
         if installed is None:
             fail("'ollama list' failed; is the ollama service running?")
-        for model in models:
-            if model not in installed:
-                log(f"Not installed, skipping: {model}")
-                continue
-            log(f"Removing {model}")
-            if run(["ollama", "rm", model], check=False).returncode != 0:
-                failed.append(model)
+    failed = ollama_apply(action, [args.group], installed)
     if failed:
         fail(f"ollama {action} failed for: {', '.join(failed)}")
+
+
+def run_ollama_models_tui(self_cmd: str) -> None:
+    """Menu entry: pick groups, then pull or remove them, then back to the menu."""
+    title = "Ollama model groups"
+    if not cmd_exists("ollama"):
+        if dialog_yesno(
+            title,
+            "Ollama is not installed. It is an opt-in tool in the AI tools "
+            "category.\n\nInstall ollama now?",
+        ):
+            if not ensure_sudo():
+                return
+            run(["dialog", "--clear"], check=False)
+            run([self_cmd, "install-tools", "--tools", "ollama"], check=False)
+        return
+    installed = ollama_installed_models()
+    if installed is None:
+        dialog_msgbox(title, "'ollama list' failed. Start the service (systemctl start ollama) and try again.")
+        return
+    items = []
+    for group, models in OLLAMA_MODEL_GROUPS.items():
+        names = ", ".join(f"{tag}{' [installed]' if tag in installed else ''}" for tag, _ in models)
+        items.append((group, f"{ollama_group_size(group)} - {names}", "off"))
+    groups = dialog_checklist(title, "Select model groups:", items)
+    if not groups:
+        return
+    action = dialog_menu(
+        title,
+        f"Groups: {', '.join(groups)}",
+        [("pull", "Pull (download) every model in these groups"),
+         ("remove", "Remove the installed models of these groups")],
+    )
+    if action not in {"pull", "remove"}:
+        return
+    run(["dialog", "--clear"], check=False)
+    failed = ollama_apply(action, groups, installed)
+    if failed:
+        dialog_msgbox(title, f"ollama {action} failed for: {', '.join(failed)}")
+    else:
+        dialog_msgbox(title, f"ollama {action} finished for: {', '.join(groups)}")
 
 
 def build_parser() -> argparse.ArgumentParser:
