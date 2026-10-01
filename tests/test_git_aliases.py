@@ -1,7 +1,11 @@
 import importlib.util
 import os
+import pty
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "distrodeck.py"
@@ -64,3 +68,66 @@ def test_git_dhelp_show_description_matches_its_detailed_output():
     aliases = {name: description for name, _, description in distrodeck.git_alias_definitions()}
 
     assert aliases["dhelp"] == "show detailed distrodeck alias reference"
+
+
+def _dhelp_body() -> str:
+    command = distrodeck.git_alias_help_command()
+    assert command.startswith("!")
+    return command[1:]
+
+
+# Linux runs git's `!` aliases with /bin/sh (dash on Debian/Ubuntu); macOS
+# /bin/sh is bash 3.2 in POSIX mode. zsh in sh emulation covers a user whose
+# sh is zsh. Each shell that exists here must render the same plain text.
+SHELLS = {
+    "dash": ["dash", "-c"],
+    "bash-posix": ["bash", "--posix", "-c"],
+    "zsh-sh": ["zsh", "--emulate", "sh", "-c"],
+}
+
+
+@pytest.mark.parametrize("shell", sorted(SHELLS))
+def test_git_dhelp_renders_plain_under_linux_and_macos_shells(shell):
+    argv = SHELLS[shell]
+    if shutil.which(argv[0]) is None:
+        pytest.skip(f"{argv[0]} not installed")
+    env = {k: v for k, v in os.environ.items() if k != "NO_COLOR"}
+    result = subprocess.run(argv + [_dhelp_body()], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "Distrodeck Git Help" in result.stdout
+    assert "git dhelp" in result.stdout
+    assert "\x1b" not in result.stdout
+    # Rendered from the table, never from `git config`.
+    assert "alias." not in result.stdout
+
+
+def _run_on_tty(argv, env):
+    output = bytearray()
+
+    def read(fd):
+        data = os.read(fd, 1024)
+        output.extend(data)
+        return data
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvpe(argv[0], argv, env)
+    try:
+        while True:
+            try:
+                if not read(fd):
+                    break
+            except OSError:
+                break
+    finally:
+        os.waitpid(pid, 0)
+    return output.decode(errors="replace")
+
+
+def test_git_dhelp_colors_a_terminal_and_honours_no_color():
+    env = {k: v for k, v in os.environ.items() if k != "NO_COLOR"}
+    colored = _run_on_tty(["sh", "-c", _dhelp_body()], env)
+    assert "\x1b[1;36m" in colored
+    plain = _run_on_tty(["sh", "-c", _dhelp_body()], {**env, "NO_COLOR": "1"})
+    assert "Distrodeck Git Help" in plain
+    assert "\x1b" not in plain

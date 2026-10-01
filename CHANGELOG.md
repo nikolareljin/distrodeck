@@ -6,6 +6,9 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 
 ### Added
+- `git dhelp` tests now render the alias under dash, bash in POSIX mode (macOS
+  `/bin/sh`) and zsh sh-emulation when present, on a pty and piped, with and
+  without `NO_COLOR`.
 - **`update` refreshes install-tools catalog entries no package manager owns**
   (git-lantern and ai-runner checkouts, codex/copilot/gemini via npm,
   claude-code). Detected on the system, not from the state file; one failure
