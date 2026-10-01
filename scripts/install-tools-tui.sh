@@ -6,12 +6,12 @@
 # EXAMPLE: ./install-tools-tui.sh --all
 # ----------------------------------------------------
 
-# macOS ships bash 3.2; this script needs bash 4.3+ (namerefs, associative
-# arrays). Re-exec under Homebrew bash 5 when it is there, otherwise say how.
+# macOS ships bash 3.2; this script needs bash 4.4+ (namerefs, associative
+# arrays, empty "${arr[@]}" under set -u). Re-exec under Homebrew bash 5 when it is there, otherwise say how.
 ensure_modern_bash() {
   local major="${1:-${BASH_VERSINFO[0]}}" minor="${2:-${BASH_VERSINFO[1]}}"
   shift 2
-  if (( major > 4 || (major == 4 && minor >= 3) )); then
+  if (( major > 4 || (major == 4 && minor >= 4) )); then
     return 0
   fi
   local brew_bash=""
@@ -21,7 +21,7 @@ ensure_modern_bash() {
   if [[ -n "$brew_bash" && -x "$brew_bash" && "${DISTRODECK_REEXEC:-}" != "1" ]]; then
     DISTRODECK_REEXEC=1 exec "$brew_bash" "$0" "$@"
   fi
-  echo "install-tools needs bash 4.3 or newer (this is ${BASH_VERSION})." >&2
+  echo "install-tools needs bash 4.4 or newer (this is ${BASH_VERSION})." >&2
   echo "On macOS: brew install bash, then run it again." >&2
   exit 2
 }
@@ -2149,6 +2149,10 @@ server_teardown() {
   elif command -v systemctl >/dev/null 2>&1; then
     sudo systemctl disable --now "$unit" 2>/dev/null || true
   fi
+  if [[ "$tool" == cockpit ]]; then
+    sudo rm -f /etc/systemd/system/cockpit.socket.d/distrodeck-listen.conf
+    sudo systemctl daemon-reload 2>/dev/null || true
+  fi
   log_info "Kept the $tool data directory; remove it manually to drop the data."
 }
 
@@ -2252,9 +2256,10 @@ container_spec() {
 # Extra `run` arguments (environment, command) per container, one per line.
 container_args() {
   case "$1" in
-    oracle-free) printf '%s\n' -e "ORACLE_PASSWORD=$(container_secret oracle-free)";;
+    # The password goes in through a 600 env file, never on the command line.
+    oracle-free) printf '%s\n' --env-file "$(container_env_file oracle-free ORACLE_PASSWORD)";;
     milvus) printf '%s\n' -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd \
-      -e COMMON_STORAGETYPE=local --security-opt seccomp:unconfined -- milvus run standalone;;
+      -e COMMON_STORAGETYPE=local -- milvus run standalone;;
     weaviate) printf '%s\n' -e PERSISTENCE_DATA_PATH=/var/lib/weaviate \
       -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true -e DEFAULT_VECTORIZER_MODULE=none \
       -e CLUSTER_HOSTNAME=node1;;
@@ -2270,6 +2275,13 @@ container_secret() {
     (umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > "$file")
   fi
   cat "$file"
+}
+
+# Write "<VAR>=<secret>" for container $1 to a mode-600 env file; print its path.
+container_env_file() {
+  local file="$STATE_DIR/$1.env"
+  (umask 077; printf '%s=%s\n' "$2" "$(container_secret "$1")" > "$file")
+  printf '%s\n' "$file"
 }
 
 # Print the container CLI to use ("docker", "sudo docker" or "podman").
@@ -3485,12 +3497,15 @@ default_all_selection() {
   printf '%s\n' "${out[*]}"
 }
 
-# Print the tools of category $1 that manager $2 can install, space separated.
+# Print the tools of category $1 to show for manager $2, space separated.
+# On macOS Linux-only tools are hidden; on Linux every tool is shown and one
+# without a package for this manager fails with its own message when picked.
 category_tools_for() {
   local tool out=() all_tools
   read -r -a all_tools <<< "$(category_field "$1" 3)"
   for tool in "${all_tools[@]}"; do
-    tool_supported_on "$tool" "$2" && out+=("$tool")
+    [[ "$2" == "brew" ]] && ! tool_supported_on "$tool" "$2" && continue
+    out+=("$tool")
   done
   printf '%s\n' "${out[*]}"
 }
@@ -4014,6 +4029,8 @@ print_catalog_tsv() {
 # Run the checklist for one category; returns process_selection's status.
 run_category_block() {
   local category="$1" label tool
+  # Detection caches are per run; a block may have just changed what is installed.
+  CLAUDE_PLUGIN_LIST_CACHE=""; PIPX_LIST_CACHE=""; CONTAINER_CLI_CACHE=""
   label="$(category_field "$category" 2)"
   read -r -a tools <<< "$(category_tools_for "$category" "$mgr")"
   for tool in "${tools[@]}"; do
@@ -4226,13 +4243,16 @@ main() {
         continue
       fi
       selected=""; skipped=""
+      local unsupported=""
       for tool in "${tools[@]}"; do
+        if ! tool_supported_on "$tool" "$mgr"; then unsupported+=" $tool"; continue; fi
         if is_opt_in_tool "$tool"; then skipped+=" $tool"; else selected+=" $tool"; fi
         if is_installed_tool "$tool"; then installed["$tool"]="true"; else installed["$tool"]="false"; fi
       done
       selected="${selected# }"
       log_info "== Category: $(category_field "$category" 2) =="
       [[ -n "$skipped" ]] && log_info "Opt-in, install with --tools:${skipped}"
+      [[ -n "$unsupported" ]] && log_info "No ${mgr} package, skipped:${unsupported}"
       if [[ -z "$selected" ]]; then
         log_warn "Category $category has only opt-in tools; name them with --tools."
         continue

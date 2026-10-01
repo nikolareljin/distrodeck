@@ -580,6 +580,18 @@ util_brew=" $(category_tools_for util brew) "
 assert_not_contains "$util_brew" " ntfs " "ntfs is hidden on macOS"
 assert_not_contains "$util_brew" " nala " "nala is hidden on macOS"
 assert_contains " $(category_tools_for util apt) " " ntfs " "ntfs is offered on apt"
+assert_contains " $(category_tools_for db-nosql dnf) " " redis " "Linux shows a tool without a package; picking it explains"
+assert_not_contains " $(default_all_selection apt) " " pyenv " "--all on apt skips tools apt cannot install"
+prog_out="$(bash -c '
+  source "$1"
+  detect_pkg_mgr() { echo apt; }
+  STATE_DIR="$(mktemp -d)"; INSTALLED_TOOLS_FILE="$STATE_DIR/installed-tools.txt"
+  is_installed_tool() { return 1; }
+  install_tool() { echo "INSTALL $1"; }
+  main --category prog </dev/null
+' _ "$INSTALLER" 2>&1)"
+assert_contains "$prog_out" "No apt package, skipped: pyenv" "--category names the tools this manager cannot install"
+assert_not_contains "$prog_out" "INSTALL pyenv" "--category does not try a tool without a package"
 assert_not_contains " $(category_tools_for sysadmin brew) " " cockpit " "cockpit is hidden on macOS"
 assert_not_contains " $(default_all_selection brew) " " ufw " "--all on macOS skips Linux-only tools"
 assert_contains " $(default_all_selection apt) " " ufw " "--all on apt keeps ufw"
@@ -597,6 +609,7 @@ assert_contains "$reexec_out" "/bin/bash" "bash 3.2 on macOS re-execs under Home
 assert_contains "$reexec_out" "--tools jq" "the re-exec keeps the arguments"
 noreexec_rc="$( ( uname() { echo Darwin; }; command() { [[ "$2" == brew ]] && return 1; builtin command "$@"; }; ensure_modern_bash 3 2 ) >/dev/null 2>&1; echo $? )"
 [[ "$noreexec_rc" == "2" ]] && pass "bash 3.2 without Homebrew bash exits 2" || fail "bash 3.2 without Homebrew bash exits 2" "rc=$noreexec_rc"
+( ensure_modern_bash 4 3 ) >/dev/null 2>&1 && fail "bash 4.3 is refused (empty arrays under set -u)" || pass "bash 4.3 is refused (empty arrays under set -u)"
 ( ensure_modern_bash 5 2 ) && pass "bash 5 needs no re-exec" || fail "bash 5 needs no re-exec"
 
 # pgvector follows the installed PostgreSQL major.
@@ -662,6 +675,19 @@ busy_out="$(
 assert_contains "$busy_out" "Port 6333 is already in use by postgres" "a busy port is refused with the holder's name"
 assert_not_contains "$busy_out" "DOCKER run" "a busy port starts nothing"
 assert_contains "$busy_out" "rc=1" "a busy port fails the tool"
+ora_dir="$(mktemp -d)"
+ora_out="$(
+  # shellcheck disable=SC2034
+  STATE_DIR="$ora_dir"
+  container_cli() { echo docker; }
+  docker() { echo "DOCKER $*"; [[ "$1" == container ]] && return 1; return 0; }
+  port_holder() { return 1; }
+  install_container_tool oracle-free 2>&1
+)"
+assert_contains "$ora_out" "--env-file $ora_dir/oracle-free.env" "the Oracle password goes in through an env file"
+assert_not_contains "$ora_out" "ORACLE_PASSWORD=" "the Oracle password is never on the command line"
+[[ "$(stat -c %a "$ora_dir/oracle-free.env" 2>/dev/null || stat -f %Lp "$ora_dir/oracle-free.env")" == "600" ]] && pass "the Oracle env file is mode 600" || fail "the Oracle env file is mode 600"
+rm -rf "$ora_dir"
 nodock_out="$( (container_cli() { return 1; }; install_container_tool milvus) 2>&1; echo "rc=$?")"
 assert_contains "$nodock_out" "needs docker or podman" "a container tool without docker says so"
 purge_out="$(
@@ -685,7 +711,7 @@ cl_out="$(
 )"
 assert_contains "$cl_out" "CLAUDE plugin marketplace add anthropics/claude-plugins-official" "the official marketplace is added when missing"
 assert_contains "$cl_out" "CLAUDE plugin install code-review@claude-plugins-official" "plugins install from the official marketplace"
-grep -q 'nikolareljin/claude-plugins' "$INSTALLER" && fail "no other marketplace is referenced" || pass "no other marketplace is referenced"
+[[ "$CLAUDE_MARKETPLACE_REPO" == "anthropics/claude-plugins-official" && "$(grep -c 'marketplace add' "$INSTALLER")" -eq 1 ]] && pass "only the official marketplace is ever added" || fail "only the official marketplace is ever added"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
