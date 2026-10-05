@@ -365,6 +365,61 @@ mkdir -p "$checkout_tmp/tools/git-lantern/.git"
 # shellcheck disable=SC2034
 (STATE_DIR="$checkout_tmp"; uninstall_source_checkout git-lantern >/dev/null 2>&1)
 [[ ! -e "$checkout_tmp/tools/git-lantern" ]] && pass "uninstall_source_checkout removes a managed checkout" || fail "uninstall_source_checkout removes a managed checkout"
+
+lantern_root="$checkout_tmp/lantern-root"
+lantern_bin="$checkout_tmp/bin/lantern"
+mkdir -p "$checkout_tmp/tools/git-lantern/.git" "$lantern_root/venv/bin" "$(dirname "$lantern_bin")"
+touch "$lantern_root/.distrodeck-managed" "$lantern_root/venv/bin/lantern"
+chmod +x "$lantern_root/venv/bin/lantern"
+ln -s "$lantern_root/venv/bin/lantern" "$lantern_bin"
+(
+  STATE_DIR="$checkout_tmp"
+  git_lantern_install_root() { printf '%s\n' "$lantern_root"; }
+  git_lantern_bin_link() { printf '%s\n' "$lantern_bin"; }
+  uninstall_git_lantern >/dev/null 2>&1
+)
+[[ ! -e "$lantern_root" && ! -e "$lantern_bin" && ! -e "$checkout_tmp/tools/git-lantern" ]] \
+  && pass "uninstall_git_lantern removes only its managed files" \
+  || fail "uninstall_git_lantern removes only its managed files"
+
+mkdir -p "$checkout_tmp/tools/git-lantern/.git" "$lantern_root"
+(
+  STATE_DIR="$checkout_tmp"
+  git_lantern_install_root() { printf '%s\n' "$lantern_root"; }
+  git_lantern_bin_link() { printf '%s\n' "$lantern_bin"; }
+  uninstall_git_lantern >/dev/null 2>&1
+)
+[[ -d "$lantern_root" ]] && pass "uninstall_git_lantern preserves an unmarked prefix" || fail "uninstall_git_lantern preserves an unmarked prefix"
+
+mkdir -p "$checkout_tmp/tools/git-lantern"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  'prefix=""' \
+  'bin_link=""' \
+  'while [[ $# -gt 0 ]]; do' \
+  '  case "$1" in' \
+  '    --prefix) prefix="$2"; shift 2 ;;' \
+  '    --bin-link) bin_link="$2"; shift 2 ;;' \
+  '    *) shift ;;' \
+  '  esac' \
+  'done' \
+  'mkdir -p "$prefix/venv/bin" "$(dirname "$bin_link")"' \
+  'printf "#!/usr/bin/env bash\\nexit 0\\n" > "$prefix/venv/bin/lantern"' \
+  'chmod +x "$prefix/venv/bin/lantern"' \
+  'ln -sf "$prefix/venv/bin/lantern" "$bin_link"' \
+  > "$checkout_tmp/tools/git-lantern/install"
+chmod +x "$checkout_tmp/tools/git-lantern/install"
+(
+  STATE_DIR="$checkout_tmp"
+  git_lantern_install_root() { printf '%s\n' "$lantern_root"; }
+  git_lantern_bin_link() { printf '%s\n' "$lantern_bin"; }
+  managed_source_checkout() { :; }
+  install_git_lantern test >/dev/null
+)
+[[ -x "$lantern_bin" && -f "$lantern_root/.distrodeck-managed" ]] \
+  && pass "install_git_lantern installs a managed launcher" \
+  || fail "install_git_lantern installs a managed launcher"
 rm -rf "$checkout_tmp"
 
 # ── Categories and the TSV catalog ───────────────────────────────────────────
