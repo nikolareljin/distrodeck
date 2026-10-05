@@ -391,6 +391,23 @@ mkdir -p "$checkout_tmp/tools/git-lantern/.git" "$lantern_root"
 )
 [[ -d "$lantern_root" ]] && pass "uninstall_git_lantern preserves an unmarked prefix" || fail "uninstall_git_lantern preserves an unmarked prefix"
 
+foreign_launcher="$checkout_tmp/foreign-lantern"
+touch "$foreign_launcher"
+rm -rf "$lantern_root" "$checkout_tmp/tools/git-lantern"
+mkdir -p "$checkout_tmp/tools/git-lantern/.git" "$lantern_root"
+touch "$lantern_root/.distrodeck-managed"
+rm -f "$lantern_bin"
+ln -s "$foreign_launcher" "$lantern_bin"
+(
+  STATE_DIR="$checkout_tmp"
+  git_lantern_install_root() { printf '%s\n' "$lantern_root"; }
+  git_lantern_bin_link() { printf '%s\n' "$lantern_bin"; }
+  uninstall_git_lantern >/dev/null 2>&1
+)
+[[ -L "$lantern_bin" && ! -e "$lantern_root" ]] \
+  && pass "uninstall_git_lantern preserves a foreign launcher" \
+  || fail "uninstall_git_lantern preserves a foreign launcher"
+
 mkdir -p "$checkout_tmp/tools/git-lantern"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
