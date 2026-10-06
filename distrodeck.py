@@ -4232,7 +4232,8 @@ def source_install_prefix(root: Path) -> Optional[Path]:
             if installed_source_root.resolve() != root.resolve():
                 return None
             return prefix
-    return Path("/usr/local")
+    # Match ./install defaults: /usr/local is root-owned on macOS.
+    return Path.home() / ".local" if sys.platform == "darwin" else Path("/usr/local")
 
 
 def source_self_update_commands(root: Path, prefix: Path) -> List[List[str]]:

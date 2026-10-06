@@ -4,6 +4,13 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **Source install on macOS.** `./install` failed with "Operation not permitted"
+  because `/usr/local/bin` is root-owned on macOS. `./install` and `./uninstall`
+  now default to `~/.local` on macOS (`/usr/local` elsewhere), and re-run the
+  copy step with sudo when the chosen prefix is not writable. The build still
+  runs as the invoking user. Self-update uses the same default prefix.
+
 ## 2026-10-01 — 0.11.0
 
 

@@ -2,7 +2,7 @@
 # SCRIPT: install
 # DESCRIPTION: Install distrodeck binaries and shared files from dist/ into a prefix.
 # USAGE: ./install
-# PARAMETERS: PREFIX (optional, default: /usr/local)
+# PARAMETERS: PREFIX (optional, default: $HOME/.local on macOS, /usr/local elsewhere)
 # EXAMPLE: PREFIX=/usr/local ./install
 set -euo pipefail
 
@@ -10,7 +10,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 VERSION="$(cat VERSION)"
 BUILD_DIR="dist/distrodeck-${VERSION}"
-PREFIX="${PREFIX:-/usr/local}"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  # /usr/local/bin is root-owned on macOS (Homebrew lives in /opt/homebrew on
+  # Apple silicon), so default to a per-user prefix there.
+  DEFAULT_PREFIX="${HOME}/.local"
+else
+  DEFAULT_PREFIX="/usr/local"
+fi
+PREFIX="${PREFIX:-${DEFAULT_PREFIX}}"
 
 if [[ "${PREFIX}" != /* ]]; then
   echo "PREFIX must be an absolute path: ${PREFIX}" >&2
@@ -66,6 +73,31 @@ if [[ ! -d "$BUILD_DIR" ]]; then
   ./build
 fi
 
+# True when the nearest existing ancestor of the given path is writable.
+path_is_writable() {
+  local dir="$1"
+  while [[ ! -e "$dir" ]]; do
+    dir="$(dirname "$dir")"
+  done
+  [[ -w "$dir" ]]
+}
+
+# Re-run only the copy step with sudo when the prefix is not writable. The build
+# above already ran as the invoking user, so dist/ never becomes root-owned.
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  for target in "${PREFIX_REAL}/bin" "${PREFIX_REAL}/share/distrodeck" "${PREFIX_REAL}/share/man/man1"; do
+    if ! path_is_writable "$target"; then
+      if ! command -v sudo >/dev/null 2>&1; then
+        echo "${PREFIX_REAL} is not writable and sudo is not available." >&2
+        echo "Run as root or choose a writable prefix, e.g. PREFIX=\"\$HOME/.local\" ./install" >&2
+        exit 1
+      fi
+      echo "${PREFIX_REAL} is not writable by $(id -un); re-running with sudo ..."
+      exec sudo env PREFIX="${PREFIX_REAL}" "$(pwd -P)/install"
+    fi
+  done
+fi
+
 echo "Installing distrodeck ${VERSION} to ${PREFIX_REAL} ..."
 
 install -d "${PREFIX_REAL}/bin"
@@ -103,3 +135,8 @@ else
 fi
 
 echo "distrodeck ${VERSION} installed to ${PREFIX_REAL}/bin/distrodeck"
+
+case ":${PATH}:" in
+  *":${PREFIX_REAL}/bin:"*) ;;
+  *) echo "Note: ${PREFIX_REAL}/bin is not on PATH. Add it to your shell profile to run distrodeck." ;;
+esac
