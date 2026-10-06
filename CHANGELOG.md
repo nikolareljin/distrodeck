@@ -10,6 +10,15 @@ This project follows Keep a Changelog and Semantic Versioning.
   now default to `~/.local` on macOS (`/usr/local` elsewhere), and re-run the
   copy step with sudo when the chosen prefix is not writable. The build still
   runs as the invoking user. Self-update uses the same default prefix.
+- **git-status prompt on macOS.** The prompt showed no Git status in many
+  shells: the exported `DISTRODECK_GIT_STATUS_ENABLED` flag made every child
+  shell (new tabs, tmux, IDE terminals) skip setup; the zsh insertion never
+  matched the default `%#` prompt; and bash 3.2 replaced the whole `PS1` with
+  the status. The prompt is now its own guard, insertion uses plain string
+  operations that behave the same in zsh, bash 3.2 and bash 4+, color codes are
+  marked zero-width for readline, and the fish script uses `2>/dev/null` and a
+  non-exported guard. Linux bash prompts keep the same layout. Re-running
+  `git-status set` no longer adds blank lines to the shell config.
 
 ## 2026-10-01 — 0.11.0
 
