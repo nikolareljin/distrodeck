@@ -3626,10 +3626,18 @@ is_installed_tool() {
 managed_source_checkout() {
   # Two locals: bash expands every word of one `local` before assigning any,
   # so dest would have been "$STATE_DIR/tools/" with an empty name.
-  local name="$1" url="$2"
+  local name="$1" url="$2" default_ref
   local dest="$STATE_DIR/tools/$name"
   mkdir -p "$STATE_DIR/tools"
   if [[ -d "$dest/.git" ]]; then
+    if ! git -C "$dest" symbolic-ref -q HEAD >/dev/null; then
+      default_ref="$(git -C "$dest" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+      if [[ -z "$default_ref" ]]; then
+        log_warn "$dest is detached and has no recorded default branch; leaving it alone."
+        return 1
+      fi
+      git -C "$dest" switch "${default_ref#origin/}" || return 1
+    fi
     git -C "$dest" pull --ff-only
   elif [[ -e "$dest" ]]; then
     log_warn "$dest exists but is not a managed checkout."
@@ -3637,6 +3645,19 @@ managed_source_checkout() {
   else
     git clone "$url" "$dest"
   fi
+}
+
+# Check out one immutable release tag after managed_source_checkout has cloned
+# or refreshed the source. The environment variable is a test and recovery
+# override; ordinary installs continue to track the default branch.
+checkout_managed_source_tag() {
+  local dest="$1" tag="$2"
+  if ! git check-ref-format --allow-onelevel "refs/tags/$tag"; then
+    log_error "Invalid release tag: $tag"
+    return 2
+  fi
+  git -C "$dest" fetch origin "refs/tags/$tag:refs/tags/$tag" || return 1
+  git -C "$dest" checkout --detach "refs/tags/$tag"
 }
 
 # Install Git Lantern into a per-user prefix so it does not require sudo on
@@ -3650,10 +3671,14 @@ git_lantern_bin_link() {
 }
 
 install_git_lantern() {
-  local checkout install_root bin_link
+  local checkout install_root bin_link tag
   command -v git >/dev/null 2>&1 || install_git "$1" || return 1
   managed_source_checkout git-lantern https://github.com/nikolareljin/git-lantern.git || return 1
   checkout="$STATE_DIR/tools/git-lantern"
+  tag="${DISTRODECK_GIT_LANTERN_TAG:-}"
+  if [[ -n "$tag" ]]; then
+    checkout_managed_source_tag "$checkout" "$tag" || return 1
+  fi
   install_root="$(git_lantern_install_root)"
   bin_link="$(git_lantern_bin_link)"
   "$checkout/install" --prefix "$install_root" --bin-link "$bin_link" || return 1

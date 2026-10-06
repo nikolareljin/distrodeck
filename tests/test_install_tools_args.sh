@@ -355,6 +355,27 @@ checkout_out="$(
   managed_source_checkout ai-runner https://example.invalid/ai-runner.git
 )"
 assert_contains "$checkout_out" "git clone https://example.invalid/ai-runner.git $checkout_tmp/tools/ai-runner" "managed checkout clones into tools/<name>"
+tag_checkout_out="$(
+  git() { echo "git $*"; }
+  checkout_managed_source_tag "$checkout_tmp/tools/git-lantern" "0.8.2"
+)"
+assert_contains "$tag_checkout_out" "git check-ref-format --allow-onelevel refs/tags/0.8.2" "managed tag validates the ref name"
+assert_contains "$tag_checkout_out" "git -C $checkout_tmp/tools/git-lantern fetch origin refs/tags/0.8.2:refs/tags/0.8.2" "managed tag fetches the requested release without rewriting local tags"
+assert_contains "$tag_checkout_out" "git -C $checkout_tmp/tools/git-lantern checkout --detach refs/tags/0.8.2" "managed tag uses a detached release checkout"
+mkdir -p "$checkout_tmp/tools/detached-source/.git"
+detached_checkout_out="$(
+  STATE_DIR="$checkout_tmp"
+  git() {
+    case "$*" in
+      "-C $checkout_tmp/tools/detached-source symbolic-ref -q HEAD") return 1 ;;
+      "-C $checkout_tmp/tools/detached-source symbolic-ref --short refs/remotes/origin/HEAD") printf '%s\\n' origin/main ;;
+      *) echo "git $*" ;;
+    esac
+  }
+  managed_source_checkout detached-source https://example.invalid/detached-source.git
+)"
+assert_contains "$detached_checkout_out" "git -C $checkout_tmp/tools/detached-source switch main" "managed checkout restores the default branch after a detached release checkout"
+assert_contains "$detached_checkout_out" "git -C $checkout_tmp/tools/detached-source pull --ff-only" "managed checkout refreshes the restored default branch"
 mkdir -p "$checkout_tmp/tools/git-lantern"
 if (STATE_DIR="$checkout_tmp"; uninstall_source_checkout git-lantern >/dev/null 2>&1); then
   fail "uninstall_source_checkout refuses a directory without .git"
@@ -432,9 +453,11 @@ chmod +x "$checkout_tmp/tools/git-lantern/install"
   git_lantern_install_root() { printf '%s\n' "$lantern_root"; }
   git_lantern_bin_link() { printf '%s\n' "$lantern_bin"; }
   managed_source_checkout() { :; }
+  checkout_managed_source_tag() { printf '%s\n' "$2" > "$STATE_DIR/git-lantern-tag"; }
+  DISTRODECK_GIT_LANTERN_TAG="0.8.2"
   install_git_lantern test >/dev/null
 )
-[[ -x "$lantern_bin" && -f "$lantern_root/.distrodeck-managed" ]] \
+[[ -x "$lantern_bin" && -f "$lantern_root/.distrodeck-managed" && "$(<"$checkout_tmp/git-lantern-tag")" == "0.8.2" ]] \
   && pass "install_git_lantern installs a managed launcher" \
   || fail "install_git_lantern installs a managed launcher"
 rm -rf "$checkout_tmp"
