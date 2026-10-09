@@ -34,11 +34,15 @@ Clone into your projects folder and run from the repo root:
 ./distrodeck --help
 ```
 
-Optionally add to PATH:
+Optionally install it onto your PATH:
 
 ```bash
-sudo ln -s "$PWD/distrodeck" /usr/local/bin/distrodeck
+./install                    # macOS: ~/.local, Linux: /usr/local (uses sudo when needed)
+PREFIX=/opt/distrodeck ./install
+./uninstall                  # same PREFIX rules
 ```
+
+On macOS make sure `~/.local/bin` is on your `PATH`.
 
 ## Usage
 

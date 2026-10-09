@@ -154,6 +154,16 @@ at `@latest`), and `claude-code` (`claude update`). A tool is refreshed when it
 is present on the system, whether or not the install-tools state file lists it.
 One failing refresh does not stop the others; any failure makes `update` exit 1.
 
+To test a released Git Lantern build before adopting it broadly, set
+`DISTRODECK_GIT_LANTERN_TAG` when installing `git-lantern`. DistroDeck validates
+the tag, checks out that exact detached release, then installs `lantern` from it.
+The next ordinary install returns the managed checkout to its default branch.
+
+```bash
+DISTRODECK_GIT_LANTERN_TAG=0.8.2 distrodeck install-tools --tools git-lantern
+lantern --version
+```
+
 ```
 distrodeck update
 distrodeck update --cleanup-kernels

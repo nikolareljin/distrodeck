@@ -2,11 +2,16 @@
 # SCRIPT: uninstall
 # DESCRIPTION: Remove distrodeck binaries and shared files from a prefix.
 # USAGE: ./uninstall
-# PARAMETERS: PREFIX (optional, default: /usr/local)
+# PARAMETERS: PREFIX (optional, default: $HOME/.local on macOS, /usr/local elsewhere)
 # EXAMPLE: PREFIX=/usr/local ./uninstall
 set -euo pipefail
 
-PREFIX="${PREFIX:-/usr/local}"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  DEFAULT_PREFIX="${HOME}/.local"
+else
+  DEFAULT_PREFIX="/usr/local"
+fi
+PREFIX="${PREFIX:-${DEFAULT_PREFIX}}"
 resolution_fallback=false
 
 # Normalize PREFIX without requiring it to already exist.
@@ -59,6 +64,19 @@ fi
 if [[ "${PREFIX_REAL}" != /* || "${PREFIX_REAL}" == "/" || "${PREFIX_REAL}" == ".." || "${PREFIX_REAL}" == *"/.." || "${PREFIX_REAL}" == *"/../"* ]]; then
   echo "Refusing to uninstall with unsafe PREFIX: ${PREFIX_REAL}" >&2
   exit 1
+fi
+
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  for target in "${PREFIX_REAL}/bin" "${PREFIX_REAL}/share" "${PREFIX_REAL}/share/man/man1"; do
+    if [[ -d "$target" && ! -w "$target" ]]; then
+      if ! command -v sudo >/dev/null 2>&1; then
+        echo "${PREFIX_REAL} is not writable and sudo is not available." >&2
+        exit 1
+      fi
+      echo "${PREFIX_REAL} is not writable by $(id -un); re-running with sudo ..."
+      exec sudo env PREFIX="${PREFIX_REAL}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/uninstall"
+    fi
+  done
 fi
 
 echo "Uninstalling distrodeck from ${PREFIX_REAL} ..."

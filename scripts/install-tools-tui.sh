@@ -3530,7 +3530,7 @@ is_installed_tool() {
     fd) command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1;;
     fzf) command -v fzf >/dev/null 2>&1;;
     git) command -v git >/dev/null 2>&1;;
-    git-lantern) [[ -d "$STATE_DIR/tools/git-lantern/.git" ]];;
+    git-lantern) [[ -d "$STATE_DIR/tools/git-lantern/.git" && -x "$(git_lantern_bin_link)" ]];;
     ansible) command -v ansible-pull >/dev/null 2>&1 || command -v ansible >/dev/null 2>&1;;
     adb) command -v adb >/dev/null 2>&1;;
     git-lfs) command -v git-lfs >/dev/null 2>&1;;
@@ -3626,10 +3626,18 @@ is_installed_tool() {
 managed_source_checkout() {
   # Two locals: bash expands every word of one `local` before assigning any,
   # so dest would have been "$STATE_DIR/tools/" with an empty name.
-  local name="$1" url="$2"
+  local name="$1" url="$2" default_ref
   local dest="$STATE_DIR/tools/$name"
   mkdir -p "$STATE_DIR/tools"
   if [[ -d "$dest/.git" ]]; then
+    if ! git -C "$dest" symbolic-ref -q HEAD >/dev/null; then
+      default_ref="$(git -C "$dest" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+      if [[ -z "$default_ref" ]]; then
+        log_warn "$dest is detached and has no recorded default branch; leaving it alone."
+        return 1
+      fi
+      git -C "$dest" switch "${default_ref#origin/}" || return 1
+    fi
     git -C "$dest" pull --ff-only
   elif [[ -e "$dest" ]]; then
     log_warn "$dest exists but is not a managed checkout."
@@ -3639,9 +3647,43 @@ managed_source_checkout() {
   fi
 }
 
+# Check out one immutable release tag after managed_source_checkout has cloned
+# or refreshed the source. The environment variable is a test and recovery
+# override; ordinary installs continue to track the default branch.
+checkout_managed_source_tag() {
+  local dest="$1" tag="$2"
+  if ! git check-ref-format --allow-onelevel "refs/tags/$tag"; then
+    log_error "Invalid release tag: $tag"
+    return 2
+  fi
+  git -C "$dest" fetch origin "refs/tags/$tag:refs/tags/$tag" || return 1
+  git -C "$dest" checkout --detach "refs/tags/$tag"
+}
+
+# Install Git Lantern into a per-user prefix so it does not require sudo on
+# macOS or Linux. The marker limits removal to the files created here.
+git_lantern_install_root() {
+  printf '%s\n' "$HOME/.local/opt/git-lantern"
+}
+
+git_lantern_bin_link() {
+  printf '%s\n' "$HOME/.local/bin/lantern"
+}
+
 install_git_lantern() {
+  local checkout install_root bin_link tag
   command -v git >/dev/null 2>&1 || install_git "$1" || return 1
-  managed_source_checkout git-lantern https://github.com/nikolareljin/git-lantern.git
+  managed_source_checkout git-lantern https://github.com/nikolareljin/git-lantern.git || return 1
+  checkout="$STATE_DIR/tools/git-lantern"
+  tag="${DISTRODECK_GIT_LANTERN_TAG:-}"
+  if [[ -n "$tag" ]]; then
+    checkout_managed_source_tag "$checkout" "$tag" || return 1
+  fi
+  install_root="$(git_lantern_install_root)"
+  bin_link="$(git_lantern_bin_link)"
+  "$checkout/install" --prefix "$install_root" --bin-link "$bin_link" || return 1
+  : > "$install_root/.distrodeck-managed"
+  "$bin_link" --version
 }
 
 install_ai_runner() {
@@ -3659,6 +3701,31 @@ uninstall_source_checkout() {
     return 1
   fi
   rm -rf -- "$dest"
+}
+
+# Remove only the launcher and prefix installed by install_git_lantern. A
+# matching marker prevents deleting a prefix that another installer owns.
+uninstall_git_lantern() {
+  local install_root bin_link launcher_target
+  install_root="$(git_lantern_install_root)"
+  bin_link="$(git_lantern_bin_link)"
+
+  if [[ -L "$bin_link" ]]; then
+    launcher_target="$(readlink "$bin_link")"
+    if [[ "$launcher_target" == "$install_root/venv/bin/lantern" ]]; then
+      rm -f -- "$bin_link"
+    else
+      log_warn "$bin_link does not point to the managed Git Lantern launcher; leaving it alone."
+    fi
+  fi
+
+  if [[ -f "$install_root/.distrodeck-managed" ]]; then
+    rm -rf -- "$install_root"
+  elif [[ -e "$install_root" ]]; then
+    log_warn "$install_root is not marked as DistroDeck-managed; leaving it alone."
+  fi
+
+  uninstall_source_checkout git-lantern
 }
 
 # Selected in the checklist by default, and part of --all.
@@ -4013,7 +4080,7 @@ uninstall_tool() {
         gh) uninstall_gh "$mgr";;
         aider) uninstall_aider "$mgr";;
         ai-runner) uninstall_source_checkout ai-runner;;
-        git-lantern) uninstall_source_checkout git-lantern;;
+        git-lantern) uninstall_git_lantern;;
         antigravity) uninstall_antigravity "$mgr";;
         claude-code) uninstall_claude_code "$mgr";;
         codex) uninstall_codex "$mgr";;

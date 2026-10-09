@@ -107,6 +107,18 @@ def test_source_install_prefix_accepts_matching_path_installation(monkeypatch, t
     assert distrodeck.source_install_prefix(root) == prefix
 
 
+def test_source_install_prefix_default_matches_install_script(monkeypatch, tmp_path):
+    monkeypatch.delenv("PREFIX", raising=False)
+    monkeypatch.setattr(distrodeck, "runtime_share_root", None)
+    monkeypatch.setattr(distrodeck.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(distrodeck.Path, "home", classmethod(lambda _cls: tmp_path))
+
+    monkeypatch.setattr(distrodeck.sys, "platform", "darwin")
+    assert distrodeck.source_install_prefix(tmp_path / "source") == tmp_path / ".local"
+    monkeypatch.setattr(distrodeck.sys, "platform", "linux")
+    assert distrodeck.source_install_prefix(tmp_path / "source") == distrodeck.Path("/usr/local")
+
+
 def test_homebrew_ownership_resolves_formula_prefix(monkeypatch, tmp_path):
     cellar = tmp_path / "Cellar" / "distrodeck" / "0.10.0"
     cellar.mkdir(parents=True)
