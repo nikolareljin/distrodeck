@@ -4,6 +4,9 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Docs
+- Site: vellum (Markdown viewer for the terminal) joins the tool suite links on the site.
+
 ### Fixed
 - **Source install on macOS.** `./install` failed with "Operation not permitted"
   because `/usr/local/bin` is root-owned on macOS. `./install` and `./uninstall`
