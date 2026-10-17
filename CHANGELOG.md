@@ -4,6 +4,15 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- Releases publish the Homebrew formula: the tarball is uploaded to the
+  release and the formula is committed to the tap with its deploy key
+  (`HOMEBREW_TAP_DEPLOY_KEY`, `HOMEBREW_TAP_REPO` secrets). Before, publishing
+  was off and the formula's url pointed at a `v`-prefixed tag that does not
+  exist.
+- The macOS "Real install through brew" PR check failed to notice when `tree`
+  was already installed: `! command -v tree` never fails a step.
+
 ### Docs
 - Site: vellum (Markdown viewer for the terminal) joins the tool suite links on the site.
 
