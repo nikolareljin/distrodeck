@@ -48,6 +48,7 @@ jobs:
       # tree is not part of macOS: this is a real brew install.
       - name: Real install through brew
         run: |
-          ! command -v tree
+          # `! cmd` never fails a step (errexit ignores it), so test explicitly.
+          if command -v tree; then echo "::error::tree is already installed; the install would not be tested"; exit 1; fi
           scripts/install-tools-tui.sh --tools tree
           brew list --versions tree
