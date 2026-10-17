@@ -4,6 +4,13 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+- Releases publish the Homebrew formula: the tarball is uploaded to the
+  release and the formula is committed to the tap with its deploy key
+  (`HOMEBREW_TAP_DEPLOY_KEY`, `HOMEBREW_TAP_REPO` secrets). Before, publishing
+  was off and the formula's url pointed at a `v`-prefixed tag that does not
+  exist.
+
 ### Docs
 - Site: vellum (Markdown viewer for the terminal) joins the tool suite links on the site.
 

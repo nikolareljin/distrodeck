@@ -62,6 +62,12 @@ jobs:
       artifact_glob: "dist/*.rpm"
 
   brew:
+    # Builds on every push; publishes only when this push cut a release. The
+    # tarball is uploaded to that release, so the job needs contents: write.
+    needs: [auto_tag, release]
+    if: ${{ always() && needs.auto_tag.result == 'success' && needs.release.result != 'failure' }}
+    permissions:
+      contents: write
     uses: nikolareljin/ci-helpers/.github/workflows/homebrew-package.yml@production
     with:
       working_directory: "."
@@ -71,10 +77,9 @@ jobs:
       homepage: "https://github.com/nikolareljin/distrodeck"
       deps: "python@3.12"
       man_path: "docs/man/distrodeck.1"
-      release_repo: "nikolareljin/distrodeck"
       exclude_paths: ".git,.github,dist,.venv,__pycache__"
-      publish: ${{ vars.HOMEBREW_PUBLISH_ENABLED }}
-      tap_repo: ${{ vars.HOMEBREW_TAP_REPO }}
-      tap_branch: ${{ vars.HOMEBREW_TAP_BRANCH }}
+      release_tag: ${{ needs.auto_tag.outputs.version }}
+      publish: ${{ needs.auto_tag.outputs.version != '' }}
     secrets:
-      tap_token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      tap_repo: ${{ secrets.HOMEBREW_TAP_REPO }}
+      tap_deploy_key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
