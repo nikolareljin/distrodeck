@@ -259,7 +259,8 @@ other marketplace is ever added. They install at user scope with stdin closed
 and a 300 s limit (`DISTRODECK_PLUGIN_TIMEOUT`), so a `--tools` or `--all` run
 never waits on a prompt. A plugin that needs a confirmed command fails and is
 installed by hand. `claude-reelsmith` also needs `ffmpeg` on PATH (`needs`
-column: `claude-code,ffmpeg`).
+column: `claude-code,ffmpeg`). GitHub clones during add and install go
+over https, so a machine without a GitHub SSH key installs them too.
 
 **macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
 if it is missing) and installs with `brew` / `brew install --cask`. Tools with

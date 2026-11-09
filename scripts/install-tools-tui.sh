@@ -2626,15 +2626,22 @@ claude_plugin_id() {
   printf '%s@%s\n' "${extra%%@*}" "$(claude_plugin_marketplace "$1")"
 }
 
+# Succeed if the `--json` output on stdin has "$1": "$2" exactly, so
+# nikolareljin-plugins never matches nikolareljin-plugins-dev. Names and ids
+# hold no quotes or backslashes, so a fixed-string match is exact.
+claude_json_has() {
+  tr -d ' \t' | grep -qF "\"$1\":\"$2\""
+}
+
 # `claude plugin list` takes about a second; ask once per run.
 CLAUDE_PLUGIN_LIST_CACHE=""
 claude_plugin_installed() {
   command -v claude >/dev/null 2>&1 || return 1
   if [[ -z "$CLAUDE_PLUGIN_LIST_CACHE" ]]; then
-    CLAUDE_PLUGIN_LIST_CACHE="$(claude plugin list 2>/dev/null || true)"
+    CLAUDE_PLUGIN_LIST_CACHE="$(claude plugin list --json 2>/dev/null || true)"
     [[ -n "$CLAUDE_PLUGIN_LIST_CACHE" ]] || CLAUDE_PLUGIN_LIST_CACHE=" "
   fi
-  grep -qF "$(claude_plugin_id "$1")" <<< "$CLAUDE_PLUGIN_LIST_CACHE"
+  claude_json_has id "$(claude_plugin_id "$1")" <<< "$CLAUDE_PLUGIN_LIST_CACHE"
 }
 
 install_claude_plugin() {
@@ -2648,10 +2655,28 @@ install_claude_plugin() {
     log_error "$tool names marketplace '$marketplace', which distrodeck does not know."
     return 1
   fi
-  if ! claude plugin marketplace list 2>/dev/null | grep -qF "$marketplace"; then
-    claude_bounded plugin marketplace add "$repo" --scope user || return 1
+  # The text listing shows the built-in anthropic-plugin-directory, which
+  # cannot install name@claude-plugins-official; --json lists only added ones.
+  if ! claude_bounded plugin marketplace list --json 2>/dev/null | claude_json_has name "$marketplace"; then
+    claude_https plugin marketplace add "$repo" --scope user || return 1
   fi
-  claude_bounded plugin install "$(claude_plugin_id "$tool")" --scope user
+  claude_https plugin install "$(claude_plugin_id "$tool")" --scope user
+}
+
+# claude_bounded with git told to fetch git@github.com: over https. claude
+# falls back to https for a marketplace clone but not for a plugin whose
+# source is a GitHub repo, so without this a machine with no GitHub SSH key
+# adds the marketplace and then fails the install. Every repo here is public.
+# Entries the caller already passes as GIT_CONFIG_* are kept.
+claude_https() {
+  local n="${GIT_CONFIG_COUNT:-0}"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  (
+    export GIT_CONFIG_COUNT=$((n + 1))
+    export "GIT_CONFIG_KEY_$n=url.https://github.com/.insteadOf"
+    export "GIT_CONFIG_VALUE_$n=git@github.com:"
+    claude_bounded "$@"
+  )
 }
 
 uninstall_claude_plugin() {

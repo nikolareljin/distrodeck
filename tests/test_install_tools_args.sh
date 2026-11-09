@@ -817,7 +817,7 @@ stub_bin="$(mktemp -d)"
 cat > "$stub_bin/claude" <<'STUB'
 #!/usr/bin/env bash
 state="${CLAUDE_STUB_STATE:?}"
-if [[ "$1 $2" == "plugin list" ]]; then cat "$state/plugins" 2>/dev/null; exit 0; fi
+if [[ "$1 $2" == "plugin list" ]]; then printf '[\n'; sed 's/.*/  {"id": "&"},/' "$state/plugins" 2>/dev/null; printf ']\n'; exit 0; fi
 if [[ "$1 $2 $3" == "plugin marketplace list" ]]; then exit 0; fi
 echo "CLAUDE $*"
 IFS= read -r -t 1 answer && echo "READ-STDIN $answer"
@@ -1084,10 +1084,16 @@ plugin_tmp="$(mktemp -d)"
 cat > "$plugin_tmp/claude" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CLAUDE_STUB_LOG"
+if [[ "$2" == install || "$3" == add ]]; then
+  for ((i = 0; i < ${GIT_CONFIG_COUNT:-0}; i++)); do k="GIT_CONFIG_KEY_$i" v="GIT_CONFIG_VALUE_$i"; printf 'GITCFG %s %s=%s\n' "$i" "${!k}" "${!v}" >> "$CLAUDE_STUB_LOG"; done
+fi
+# Same shapes as `claude plugin marketplace list --json` / `plugin list --json`;
+# without --json, print the names as bare text the way a substring grep sees them.
+json_list() { local key="$1" f="$2" sep="" n; printf '['; while IFS= read -r n; do printf '%s\n  {\n    "%s": "%s",\n    "scope": "user"\n  }' "$sep" "$key" "$n"; sep=","; done < "$f"; printf '\n]\n'; }
 if [[ "$1 $2 $3" == "plugin marketplace list" ]]; then
-  cat "$CLAUDE_STUB_MARKETPLACES"
+  if [[ "$4" == --json ]]; then json_list name "$CLAUDE_STUB_MARKETPLACES"; else cat "$CLAUDE_STUB_MARKETPLACES"; fi
 elif [[ "$1 $2" == "plugin list" ]]; then
-  cat "$CLAUDE_STUB_PLUGINS"
+  if [[ "$3" == --json ]]; then json_list id "$CLAUDE_STUB_PLUGINS"; else cat "$CLAUDE_STUB_PLUGINS"; fi
 fi
 STUB
 chmod +x "$plugin_tmp/claude"
@@ -1104,6 +1110,30 @@ plugin_out="$(PATH="$plugin_tmp:$PATH" bash -c '
   claude_plugin_installed claude-reposec || echo "reposec not installed"
   claude_plugin_installed plugin-hookify && echo "hookify installed"
 ' _ "$INSTALLER" 2>&1)"
+# A near name must not count: claude-plugins-official-dev is not the official
+# marketplace, and hookify@claude-plugins-official-dev is not the plugin.
+printf 'claude-plugins-official-dev\nnikolareljin-plugins-dev\n' > "$CLAUDE_STUB_MARKETPLACES"
+printf 'hookify@claude-plugins-official-dev\nxclaude-docsmith@nikolareljin-plugins\n' > "$CLAUDE_STUB_PLUGINS"
+near_log="$plugin_tmp/near.log"
+near_out="$(PATH="$plugin_tmp:$PATH" CLAUDE_STUB_LOG="$near_log" bash -c '
+  source "$1"
+  install_claude_plugin plugin-hookify
+  install_claude_plugin claude-docsmith
+  claude_plugin_installed plugin-hookify && echo "hookify falsely installed"
+  claude_plugin_installed claude-docsmith && echo "docsmith falsely installed"
+' _ "$INSTALLER" 2>&1)"
+assert_contains "$(<"$near_log")" "plugin marketplace add anthropics/claude-plugins-official --scope user" "a -dev marketplace does not count as the official one"
+assert_contains "$(<"$near_log")" "plugin marketplace add nikolareljin/claude-plugins --scope user" "a -dev marketplace does not count as nikolareljin-plugins"
+assert_not_contains "$near_out" "falsely installed" "a near plugin id does not count as installed"
+# Plugin sources inside a marketplace are cloned over SSH with no HTTPS
+# fallback (claude 2.1.x), so a machine without a GitHub key fails. Every
+# add/install runs with git rewriting git@github.com: to https, and a git
+# config the caller already passes in the environment is kept.
+gitcfg_log="$plugin_tmp/gitcfg.log"
+PATH="$plugin_tmp:$PATH" CLAUDE_STUB_LOG="$gitcfg_log" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.useConfigOnly GIT_CONFIG_VALUE_0=true bash -c 'source "$1"; install_claude_plugin claude-docsmith' _ "$INSTALLER" >/dev/null 2>&1
+assert_contains "$(<"$gitcfg_log")" "GITCFG 1 url.https://github.com/.insteadOf=git@github.com:" "plugin clones of github repos go over https"
+assert_contains "$(<"$gitcfg_log")" "GITCFG 0 user.useConfigOnly=true" "a caller's GIT_CONFIG_* entries are kept"
+[[ "$(grep -c '^GITCFG 1 url' "$gitcfg_log")" -eq 2 ]] && pass "both marketplace add and plugin install use https" || fail "both marketplace add and plugin install use https" "$(<"$gitcfg_log")"
 plugin_log="$(<"$CLAUDE_STUB_LOG")"
 assert_contains "$plugin_out" "docsmith rc=0" "install_claude_plugin claude-docsmith succeeds with the stub"
 assert_contains "$plugin_out" "reelsmith rc=0" "install_claude_plugin claude-reelsmith succeeds with the stub"
