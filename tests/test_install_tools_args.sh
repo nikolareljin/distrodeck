@@ -470,7 +470,7 @@ tsv="$("$INSTALLER" --list-catalog --format tsv 2>&1)"; rc=$?
 bad_lines="$(awk -F'\t' 'NF != 7 || $5 !~ /^[01]$/ || $6 !~ /^[01]$/ || $7 !~ /^(-|[a-z0-9-]+(,[a-z0-9-]+)*)$/' <<< "$tsv")"
 [[ -z "$bad_lines" ]] && pass "every TSV line has 7 columns: 0/1 flags and a needs list" || fail "every TSV line has 7 columns: 0/1 flags and a needs list" "$bad_lines"
 needs_of() { awk -F'\t' -v t="$1" '$3 == t {print $7}' <<< "$tsv"; }
-for pair in qdrant:docker oracle-free:docker plugin-hookify:claude-code chroma:pipx pgvector:postgresql atlas:- mongodb:- vlc:-; do
+for pair in qdrant:docker oracle-free:docker plugin-hookify:claude-code claude-docsmith:claude-code claude-reposec:claude-code claude-reelsmith:claude-code,ffmpeg chroma:pipx pgvector:postgresql atlas:- mongodb:- vlc:-; do
   [[ "$(needs_of "${pair%%:*}")" == "${pair#*:}" ]] && pass "needs of ${pair%%:*} is ${pair#*:}" || fail "needs of ${pair%%:*} is ${pair#*:}" "got $(needs_of "${pair%%:*}")"
 done
 bad_needs="$(awk -F'\t' '$7 != "-" {print $7}' <<< "$tsv" | tr ',' '\n' | sort -u | while read -r n; do is_catalog_tool "$n" || echo "$n"; done)"
@@ -834,7 +834,7 @@ cl_out="$(PATH="$stub_bin:$PATH" CLAUDE_STUB_STATE="$claude_state" install_claud
 assert_contains "$cl_out" "CLAUDE plugin marketplace add anthropics/claude-plugins-official --scope user" "the official marketplace is added when missing"
 assert_contains "$cl_out" "CLAUDE plugin install code-review@claude-plugins-official --scope user" "plugins install from the official marketplace, user scope"
 assert_not_contains "$cl_out" "READ-STDIN" "claude plugin commands never read stdin"
-[[ "$CLAUDE_MARKETPLACE_REPO" == "anthropics/claude-plugins-official" && "$(grep -c 'marketplace add' "$INSTALLER")" -eq 1 ]] && pass "only the official marketplace is ever added" || fail "only the official marketplace is ever added"
+[[ "$(claude_marketplace_repo "$CLAUDE_MARKETPLACE")" == "anthropics/claude-plugins-official" && "$(grep -c 'plugin marketplace add ' "$INSTALLER")" -eq 1 ]] && pass "a marketplace is only ever added from claude_marketplace_repo" || fail "a marketplace is only ever added from claude_marketplace_repo"
 hang_start=$SECONDS
 hang_out="$(PATH="$stub_bin:$PATH" CLAUDE_STUB_STATE="$claude_state" CLAUDE_STUB_HANG=1 CLAUDE_PLUGIN_TIMEOUT=2 install_claude_plugin plugin-hookify 2>&1; echo "rc=$?")"
 assert_contains "$hang_out" "gave no answer in 2s" "a hung plugin install is stopped by the timeout"
@@ -1034,6 +1034,92 @@ java_rm="$(
 )"
 assert_contains "$java_rm" "REMOVE apt default-jdk default-jdk-headless openjdk-17-jdk openjdk-17-jdk-headless" "legacy default-jdk uninstall removes the JDK behind it"
 assert_contains "$java_rm" "REMOVE apt openjdk-21-jdk openjdk-21-jdk-headless" "java uninstall removes the headless JDK too"
+
+# ── Claude plugins from a second marketplace ─────────────────────────────────
+
+# Catalog rows: the three own plugins sit in claude-plugins, opt-in, and carry
+# the marketplace in the spec's extra field as name@marketplace.
+for t in claude-docsmith claude-reposec claude-reelsmith; do
+  row="$(awk -F'\t' -v t="$t" '$3 == t' <<< "$tsv")"
+  [[ "$row" == claude-plugins$'\t'* ]] && pass "$t is in the claude-plugins category" || fail "$t is in the claude-plugins category" "$row"
+  [[ "$(cut -f5 <<< "$row")" == "1" ]] && pass "$t is opt-in" || fail "$t is opt-in" "$row"
+  [[ "$(spec_field "$t" extra)" == "$t@nikolareljin-plugins" ]] && pass "$t spec names its marketplace" || fail "$t spec names its marketplace" "$(spec_field "$t" extra)"
+done
+[[ "$(claude_plugin_id plugin-hookify)" == "hookify@claude-plugins-official" ]] && pass "official plugin id defaults to claude-plugins-official" || fail "official plugin id defaults to claude-plugins-official" "$(claude_plugin_id plugin-hookify)"
+[[ "$(claude_plugin_id claude-docsmith)" == "claude-docsmith@nikolareljin-plugins" ]] && pass "own plugin id keeps its marketplace" || fail "own plugin id keeps its marketplace" "$(claude_plugin_id claude-docsmith)"
+[[ "$(claude_marketplace_repo nikolareljin-plugins)" == "nikolareljin/claude-plugins" ]] && pass "nikolareljin-plugins maps to its repo" || fail "nikolareljin-plugins maps to its repo"
+[[ "$(claude_marketplace_repo claude-plugins-official)" == "anthropics/claude-plugins-official" ]] && pass "claude-plugins-official maps to its repo" || fail "claude-plugins-official maps to its repo"
+claude_marketplace_repo nowhere >/dev/null 2>&1 && fail "unknown marketplace has no repo" || pass "unknown marketplace has no repo"
+
+# Every claude-plugin row in the catalog names a marketplace the map knows.
+bad_mkt=""
+for t in "${TOOL_CATALOG[@]}"; do
+  [[ "$(spec_field "$t" kind 2>/dev/null)" == "claude-plugin" ]] || continue
+  claude_marketplace_repo "$(claude_plugin_marketplace "$t")" >/dev/null 2>&1 || bad_mkt+=" $t"
+done
+[[ -z "$bad_mkt" ]] && pass "every catalog plugin names a known marketplace" || fail "every catalog plugin names a known marketplace" "$bad_mkt"
+
+# A plugin row whose marketplace is not in the map is a catalog error: exit 2
+# before any package manager is detected, naming the marketplace.
+mkt_out="$(bash -c '
+  source "$1"
+  eval "$(declare -f package_tool_spec | sed "1s/^package_tool_spec/orig_package_tool_spec/")"
+  package_tool_spec() {
+    case "$1" in
+      plugin-bogus) echo "claude-plugin - - - - - - bogus@nowhere -";;
+      *) orig_package_tool_spec "$1";;
+    esac
+  }
+  TOOL_CATALOG+=(plugin-bogus)
+  detect_pkg_mgr() { echo "DETECTED"; echo apt; }
+  main --tools plugin-bogus
+' _ "$INSTALLER" 2>&1)"; mkt_rc=$?
+[[ "$mkt_rc" -eq 2 ]] && pass "unknown plugin marketplace exits 2" || fail "unknown plugin marketplace exits 2" "rc=$mkt_rc: $mkt_out"
+assert_contains "$mkt_out" "nowhere" "unknown marketplace error names the marketplace"
+assert_not_contains "$mkt_out" "DETECTED" "unknown marketplace is refused before package manager detection"
+
+# install_claude_plugin with a stub claude on PATH: the marketplace is added
+# once, from its repo, and the plugin id carries the marketplace name.
+plugin_tmp="$(mktemp -d)"
+cat > "$plugin_tmp/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CLAUDE_STUB_LOG"
+if [[ "$1 $2 $3" == "plugin marketplace list" ]]; then
+  cat "$CLAUDE_STUB_MARKETPLACES"
+elif [[ "$1 $2" == "plugin list" ]]; then
+  cat "$CLAUDE_STUB_PLUGINS"
+fi
+STUB
+chmod +x "$plugin_tmp/claude"
+export CLAUDE_STUB_LOG="$plugin_tmp/argv.log" CLAUDE_STUB_MARKETPLACES="$plugin_tmp/marketplaces" CLAUDE_STUB_PLUGINS="$plugin_tmp/plugins"
+printf 'claude-plugins-official\n' > "$CLAUDE_STUB_MARKETPLACES"
+printf 'hookify@claude-plugins-official\nclaude-docsmith@nikolareljin-plugins\n' > "$CLAUDE_STUB_PLUGINS"
+plugin_out="$(PATH="$plugin_tmp:$PATH" bash -c '
+  source "$1"
+  install_claude_plugin claude-docsmith; echo "docsmith rc=$?"
+  printf "claude-plugins-official\nnikolareljin-plugins\n" > "$CLAUDE_STUB_MARKETPLACES"
+  install_claude_plugin claude-reelsmith; echo "reelsmith rc=$?"
+  install_claude_plugin plugin-hookify; echo "hookify rc=$?"
+  claude_plugin_installed claude-docsmith && echo "docsmith installed"
+  claude_plugin_installed claude-reposec || echo "reposec not installed"
+  claude_plugin_installed plugin-hookify && echo "hookify installed"
+' _ "$INSTALLER" 2>&1)"
+plugin_log="$(<"$CLAUDE_STUB_LOG")"
+assert_contains "$plugin_out" "docsmith rc=0" "install_claude_plugin claude-docsmith succeeds with the stub"
+assert_contains "$plugin_out" "reelsmith rc=0" "install_claude_plugin claude-reelsmith succeeds with the stub"
+assert_contains "$plugin_out" "hookify rc=0" "install_claude_plugin plugin-hookify succeeds with the stub"
+assert_contains "$plugin_out" "docsmith installed" "claude_plugin_installed sees an own plugin in claude plugin list"
+assert_contains "$plugin_out" "reposec not installed" "claude_plugin_installed misses a plugin not in claude plugin list"
+assert_contains "$plugin_out" "hookify installed" "claude_plugin_installed sees an official plugin in claude plugin list"
+assert_contains "$plugin_log" $'\nplugin marketplace add nikolareljin/claude-plugins --scope user\n' "own marketplace is added from nikolareljin/claude-plugins"
+[[ "$(grep -c '^plugin marketplace add ' <<< "$plugin_log")" -eq 1 ]] && pass "marketplace add runs once: never for a listed marketplace" || fail "marketplace add runs once: never for a listed marketplace" "$plugin_log"
+assert_contains "$plugin_log" $'\nplugin install claude-docsmith@nikolareljin-plugins --scope user\n' "own plugin installs as name@nikolareljin-plugins"
+assert_contains "$plugin_log" $'\nplugin install claude-reelsmith@nikolareljin-plugins --scope user\n' "reelsmith installs as name@nikolareljin-plugins"
+assert_contains "$plugin_log" $'\nplugin install hookify@claude-plugins-official --scope user\n' "official plugin still installs as name@claude-plugins-official"
+assert_not_contains "$plugin_log" "anthropics/claude-plugins-official" "official marketplace is not re-added when listed"
+assert_not_contains "$plugin_log" " -y" "plugin install never passes -y"
+unset CLAUDE_STUB_LOG CLAUDE_STUB_MARKETPLACES CLAUDE_STUB_PLUGINS
+rm -rf "$plugin_tmp"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
