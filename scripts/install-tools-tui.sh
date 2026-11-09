@@ -4621,7 +4621,7 @@ main() {
       [[ "$(spec_field "$tool" kind 2>/dev/null)" == "claude-plugin" ]] || continue
       marketplace="$(claude_plugin_marketplace "$tool")"
       if ! claude_marketplace_repo "$marketplace" >/dev/null; then
-        log_error "$tool names Claude plugin marketplace '$marketplace', which is not in claude_marketplace_repo."
+        log_error "$tool names Claude plugin marketplace '$marketplace', which distrodeck does not know."
         exit 2
       fi
     done
