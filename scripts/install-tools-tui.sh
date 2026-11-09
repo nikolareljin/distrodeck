@@ -2671,6 +2671,7 @@ install_claude_plugin() {
 claude_https() {
   local n="${GIT_CONFIG_COUNT:-0}"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  n=$((10#$n)) # git reads decimal; bash would take 08 as bad octal
   (
     export GIT_CONFIG_COUNT=$((n + 1))
     export "GIT_CONFIG_KEY_$n=url.https://github.com/.insteadOf"

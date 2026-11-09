@@ -261,6 +261,10 @@ never waits on a prompt. A plugin that needs a confirmed command fails and is
 installed by hand. `claude-reelsmith` also needs `ffmpeg` on PATH (`needs`
 column: `claude-code,ffmpeg`). GitHub clones during add and install go
 over https, so a machine without a GitHub SSH key installs them too.
+A later `claude plugin update` outside distrodeck still clones over SSH
+there; prefix it with `GIT_CONFIG_COUNT=1
+GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf
+GIT_CONFIG_VALUE_0=git@github.com:`.
 
 **macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
 if it is missing) and installs with `brew` / `brew install --cask`. Tools with

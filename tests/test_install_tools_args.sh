@@ -1134,6 +1134,10 @@ PATH="$plugin_tmp:$PATH" CLAUDE_STUB_LOG="$gitcfg_log" GIT_CONFIG_COUNT=1 GIT_CO
 assert_contains "$(<"$gitcfg_log")" "GITCFG 1 url.https://github.com/.insteadOf=git@github.com:" "plugin clones of github repos go over https"
 assert_contains "$(<"$gitcfg_log")" "GITCFG 0 user.useConfigOnly=true" "a caller's GIT_CONFIG_* entries are kept"
 [[ "$(grep -c '^GITCFG 1 url' "$gitcfg_log")" -eq 2 ]] && pass "both marketplace add and plugin install use https" || fail "both marketplace add and plugin install use https" "$(<"$gitcfg_log")"
+# git reads GIT_CONFIG_COUNT as decimal; bash would read "08" as bad octal.
+gitcfg8_log="$plugin_tmp/gitcfg8.log"
+PATH="$plugin_tmp:$PATH" CLAUDE_STUB_LOG="$gitcfg8_log" GIT_CONFIG_COUNT=08 bash -c 'source "$1"; install_claude_plugin claude-docsmith' _ "$INSTALLER" >/dev/null 2>&1 || true
+assert_contains "$(cat "$gitcfg8_log" 2>/dev/null)" "GITCFG 8 url.https://github.com/.insteadOf=git@github.com:" "a zero-padded GIT_CONFIG_COUNT is read as decimal"
 plugin_log="$(<"$CLAUDE_STUB_LOG")"
 assert_contains "$plugin_out" "docsmith rc=0" "install_claude_plugin claude-docsmith succeeds with the stub"
 assert_contains "$plugin_out" "reelsmith rc=0" "install_claude_plugin claude-reelsmith succeeds with the stub"
