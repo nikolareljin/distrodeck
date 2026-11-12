@@ -11,19 +11,19 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 
-if command -v rg >/dev/null 2>&1; then
-  SEARCH_CMD='rg -n'
-else
-  SEARCH_CMD='grep -n'
-fi
-
-changelog_version="$($SEARCH_CMD -m 1 '^## \[' CHANGELOG.md 2>/dev/null | sed -E 's/^## \[([^]]+)\].*/\1/' || true)"
+# Newest released section: "## <date> - <version>" (any dash) or "## [<version>]".
+# "## [Unreleased]" is skipped. No line-number flags: the match is parsed as text.
+changelog_version="$(awk '
+  /^## \[Unreleased\]/ { next }
+  /^## \[/ { v = $0; sub(/^## \[/, "", v); sub(/\].*/, "", v); print v; exit }
+  /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / { print $NF; exit }
+' CHANGELOG.md 2>/dev/null || true)"
 if [[ -n "$changelog_version" && "$changelog_version" != "$version" ]]; then
   echo "[pre-commit] VERSION ($version) does not match CHANGELOG.md ($changelog_version)." >&2
   exit 1
 fi
 
-man_version="$($SEARCH_CMD '^\.TH DISTRODECK' docs/man/distrodeck.1 | sed -E 's/.*"distrodeck ([^"]+)".*/\1/')"
+man_version="$(grep '^\.TH DISTRODECK' docs/man/distrodeck.1 | sed -E 's/.*"distrodeck ([^"]+)".*/\1/' || true)"
 if [[ -n "$man_version" && "$man_version" != "$version" ]]; then
   echo "[pre-commit] VERSION ($version) does not match docs/man/distrodeck.1 ($man_version)." >&2
   exit 1

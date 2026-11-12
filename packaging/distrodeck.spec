@@ -1,5 +1,5 @@
 Name:           distrodeck
-Version:        0.11.0
+Version:        0.12.0
 Release:        1%{?dist}
 Summary:        Export and restore packages before distro upgrades
 License:        MIT
@@ -32,6 +32,9 @@ install -m 0644 docs/man/distrodeck.1 %{buildroot}/usr/share/man/man1/distrodeck
 /usr/share/man/man1/distrodeck.1*
 
 %changelog
+* Thu Nov 12 2026 Nikola Reljin <nikola.reljin@gmail.com> - 0.12.0-1
+- Claude Code plugins from a second marketplace; Git Lantern launcher; Homebrew formula published on release
+
 * Thu Oct 01 2026 Nikola Reljin <nikola.reljin@gmail.com> - 0.11.0-1
 - Install tools by category; databases, admin, web, programming and Claude plugin tools; Ollama model groups; macOS via Homebrew
 
