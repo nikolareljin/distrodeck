@@ -4,6 +4,8 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## 2026-11-12 — 0.12.0
+
 ### Added
 - Claude Code plugins from a second marketplace: `claude-docsmith`,
   `claude-reposec` and `claude-reelsmith` (category `claude-plugins`, opt-in)
