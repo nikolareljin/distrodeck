@@ -1682,7 +1682,8 @@ install_aider() {
 #        pipx, claude-plugin.
 # brew:  a formula, or cask:<name>.
 # extra: pkg/pipx -> pipx package; container -> see container_spec;
-#        claude-plugin -> plugin name in the official marketplace.
+#        claude-plugin -> plugin name, or name@marketplace for a marketplace
+#        other than the official one (see claude_marketplace_repo).
 # bins:  comma separated binaries from the package file lists.
 # apt names: packages.ubuntu.com (noble); dnf: Fedora rawhide (mdapi); pacman:
 # archlinux.org (official repos only, AUR is unsupported); zypper: Tumbleweed
@@ -1769,8 +1770,12 @@ package_tool_spec() {
     pre-commit) echo "pkg pre-commit pre-commit pre-commit - pre-commit - pre-commit pre-commit";;
     httpie) echo "pkg httpie httpie httpie httpie httpie - - http";;
     bruno) echo "pkg - - - - cask:bruno com.usebruno.Bruno - bruno";;
-    # ── Claude Code plugins (anthropics/claude-plugins-official only) ──
+    # ── Claude Code plugins: plugin-* from anthropics/claude-plugins-official,
+    #    the rest from the marketplace named after the @ ──
     plugin-*) echo "claude-plugin - - - - - - ${1#plugin-} -";;
+    claude-docsmith) echo "claude-plugin - - - - - - claude-docsmith@nikolareljin-plugins -";;
+    claude-reposec) echo "claude-plugin - - - - - - claude-reposec@nikolareljin-plugins -";;
+    claude-reelsmith) echo "claude-plugin - - - - - - claude-reelsmith@nikolareljin-plugins -";;
     *) return 1;;
   esac
 }
@@ -2588,13 +2593,44 @@ uninstall_container_tool() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Claude Code plugins (public anthropics/claude-plugins-official only)
+# Claude Code plugins (public marketplaces listed in claude_marketplace_repo)
 # ─────────────────────────────────────────────────────────────────────────────
+# A spec's extra field is "name" (official marketplace) or "name@marketplace".
 CLAUDE_MARKETPLACE="claude-plugins-official"
-CLAUDE_MARKETPLACE_REPO="anthropics/claude-plugins-official"
 
+# Print the GitHub repo of marketplace $1; return 1 for a marketplace not
+# listed here, so a catalog row can never add a marketplace by name alone.
+claude_marketplace_repo() {
+  case "$1" in
+    claude-plugins-official) echo "anthropics/claude-plugins-official";;
+    nikolareljin-plugins) echo "nikolareljin/claude-plugins";;
+    *) return 1;;
+  esac
+}
+
+# Print the marketplace name of plugin tool $1.
+claude_plugin_marketplace() {
+  local extra
+  extra="$(spec_field "$1" extra)"
+  if [[ "$extra" == *@* ]]; then
+    printf '%s\n' "${extra#*@}"
+  else
+    printf '%s\n' "$CLAUDE_MARKETPLACE"
+  fi
+}
+
+# Print name@marketplace for plugin tool $1, as `claude plugin` takes it.
 claude_plugin_id() {
-  printf '%s@%s\n' "$(spec_field "$1" extra)" "$CLAUDE_MARKETPLACE"
+  local extra
+  extra="$(spec_field "$1" extra)"
+  printf '%s@%s\n' "${extra%%@*}" "$(claude_plugin_marketplace "$1")"
+}
+
+# Succeed if the `--json` output on stdin has "$1": "$2" exactly, so
+# nikolareljin-plugins never matches nikolareljin-plugins-dev. Names and ids
+# hold no quotes or backslashes, so a fixed-string match is exact.
+claude_json_has() {
+  tr -d ' \t' | grep -qF "\"$1\":\"$2\""
 }
 
 # `claude plugin list` takes about a second; ask once per run.
@@ -2602,22 +2638,46 @@ CLAUDE_PLUGIN_LIST_CACHE=""
 claude_plugin_installed() {
   command -v claude >/dev/null 2>&1 || return 1
   if [[ -z "$CLAUDE_PLUGIN_LIST_CACHE" ]]; then
-    CLAUDE_PLUGIN_LIST_CACHE="$(claude plugin list 2>/dev/null || true)"
+    CLAUDE_PLUGIN_LIST_CACHE="$(claude plugin list --json 2>/dev/null || true)"
     [[ -n "$CLAUDE_PLUGIN_LIST_CACHE" ]] || CLAUDE_PLUGIN_LIST_CACHE=" "
   fi
-  grep -qF "$(claude_plugin_id "$1")" <<< "$CLAUDE_PLUGIN_LIST_CACHE"
+  claude_json_has id "$(claude_plugin_id "$1")" <<< "$CLAUDE_PLUGIN_LIST_CACHE"
 }
 
 install_claude_plugin() {
-  local tool="$1"
+  local tool="$1" marketplace repo
   if ! command -v claude >/dev/null 2>&1; then
     log_warn "$tool is a Claude Code plugin and needs the claude CLI. Install the claude-code tool (AI tools) first."
     return 1
   fi
-  if ! claude plugin marketplace list 2>/dev/null | grep -qF "$CLAUDE_MARKETPLACE"; then
-    claude_bounded plugin marketplace add "$CLAUDE_MARKETPLACE_REPO" --scope user || return 1
+  marketplace="$(claude_plugin_marketplace "$tool")"
+  if ! repo="$(claude_marketplace_repo "$marketplace")"; then
+    log_error "$tool names marketplace '$marketplace', which distrodeck does not know."
+    return 1
   fi
-  claude_bounded plugin install "$(claude_plugin_id "$tool")" --scope user
+  # The text listing shows the built-in anthropic-plugin-directory, which
+  # cannot install name@claude-plugins-official; --json lists only added ones.
+  if ! claude_bounded plugin marketplace list --json 2>/dev/null | claude_json_has name "$marketplace"; then
+    claude_https plugin marketplace add "$repo" --scope user || return 1
+  fi
+  claude_https plugin install "$(claude_plugin_id "$tool")" --scope user
+}
+
+# claude_bounded with git told to fetch git@github.com: over https. claude
+# falls back to https for a marketplace clone but not for a plugin whose
+# source is a GitHub repo, so without this a machine with no GitHub SSH key
+# adds the marketplace and then fails the install. Every repo here is public.
+# Entries the caller already passes as GIT_CONFIG_* are kept.
+claude_https() {
+  local n="${GIT_CONFIG_COUNT:-0}"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  n=$((10#$n)) # git reads decimal; bash would take 08 as bad octal
+  (
+    export GIT_CONFIG_COUNT=$((n + 1))
+    export "GIT_CONFIG_KEY_$n=url.https://github.com/.insteadOf"
+    export "GIT_CONFIG_VALUE_$n=git@github.com:"
+    claude_bounded "$@"
+  )
 }
 
 uninstall_claude_plugin() {
@@ -3509,6 +3569,9 @@ tool_desc() {
     bruno) echo "[Prog] Bruno - API client";;
     # ── Claude Code plugins ──
     plugin-*) echo "[Claude] ${1#plugin-} plugin (claude-plugins-official)";;
+    claude-docsmith) echo "[Claude] docsmith plugin (nikolareljin-plugins): refresh a repo's docs";;
+    claude-reposec) echo "[Claude] reposec plugin (nikolareljin-plugins): repo security scan";;
+    claude-reelsmith) echo "[Claude] reelsmith plugin (nikolareljin-plugins): batch-finish video, needs ffmpeg";;
     # ── Databases ──
     atlas) echo "[DB] MongoDB Atlas CLI (local deployments)";;
     mongodb) echo "[DB] MongoDB Community server + mongosh";;
@@ -3764,7 +3827,7 @@ TOOL_CATEGORIES=(
   "sysadmin|System admin|btop cockpit glances lnav"
   "web|Web services|apache2 caddy certbot haproxy mkcert nginx"
   "prog|Programming tools|bruno clang cmake dotnet-sdk gdb httpie kotlin ninja nvm pipx pre-commit pyenv sdkman shellcheck uv valgrind"
-  "claude-plugins|Claude Code plugins|plugin-claude-md-management plugin-code-review plugin-code-simplifier plugin-commit-commands plugin-feature-dev plugin-frontend-design plugin-hookify plugin-pr-review-toolkit plugin-security-guidance plugin-skill-creator"
+  "claude-plugins|Claude Code plugins|claude-docsmith claude-reelsmith claude-reposec plugin-claude-md-management plugin-code-review plugin-code-simplifier plugin-commit-commands plugin-feature-dev plugin-frontend-design plugin-hookify plugin-pr-review-toolkit plugin-security-guidance plugin-skill-creator"
   "apps|Apps|image-view isoforge nemo rustdesk streamcontroller"
 )
 
@@ -3801,6 +3864,7 @@ OPT_IN_TOOLS=(aider antigravity atlas claude-code codex copilot cursor gemini
   beekeeper-studio dbeaver-ce mongodb-compass pgadmin4 sqlitebrowser
   cockpit apache2 caddy haproxy nginx
   bruno dotnet-sdk sdkman
+  claude-docsmith claude-reelsmith claude-reposec
   plugin-claude-md-management plugin-code-review plugin-code-simplifier plugin-commit-commands plugin-feature-dev plugin-frontend-design plugin-hookify plugin-pr-review-toolkit plugin-security-guidance plugin-skill-creator)
 
 # Return 0 when $1 is a known catalog tool.
@@ -4362,6 +4426,9 @@ tool_needs() {
       pipx) needs+=(pipx);;
     esac
   fi
+  case "$1" in
+    claude-reelsmith) needs+=(ffmpeg);;
+  esac
   if [[ ${#needs[@]} -eq 0 ]]; then
     echo "-"
   else
@@ -4574,6 +4641,16 @@ main() {
       log_error "Run with --list-tools to see the catalog."
       exit 2
     fi
+    # A plugin row may only name a marketplace claude_marketplace_repo knows.
+    local marketplace
+    for tool in "${requested[@]}"; do
+      [[ "$(spec_field "$tool" kind 2>/dev/null)" == "claude-plugin" ]] || continue
+      marketplace="$(claude_plugin_marketplace "$tool")"
+      if ! claude_marketplace_repo "$marketplace" >/dev/null; then
+        log_error "$tool names Claude plugin marketplace '$marketplace', which distrodeck does not know."
+        exit 2
+      fi
+    done
   elif $reconcile; then
     log_error "--reconcile only applies to --tools/--tools-file runs."
     exit 2

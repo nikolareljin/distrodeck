@@ -4,6 +4,21 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- Claude Code plugins from a second marketplace: `claude-docsmith`,
+  `claude-reposec` and `claude-reelsmith` (category `claude-plugins`, opt-in)
+  install from `nikolareljin/claude-plugins` (marketplace
+  `nikolareljin-plugins`), added when missing. A spec row's extra field now
+  carries `name@marketplace`; the marketplace name maps to its repo in
+  `claude_marketplace_repo`, and a row naming an unknown marketplace exits 2
+  before anything is detected or installed. `claude-reelsmith` reports
+  `needs` `claude-code,ffmpeg`.
+- Claude Code plugin checks match marketplace names and plugin ids exactly
+  (`--json` output), so `nikolareljin-plugins-dev` no longer counts as
+  `nikolareljin-plugins`. Marketplace add and plugin install fetch
+  `git@github.com:` repos over https: claude 2.1.x falls back to https for a
+  marketplace clone but not for a plugin's own GitHub source.
+
 ### Changed
 - Releases publish the Homebrew formula: the tarball is uploaded to the
   release and the formula is committed to the tap with its deploy key

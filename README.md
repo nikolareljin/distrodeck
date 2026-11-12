@@ -193,7 +193,7 @@ menu for the next one; Quit ends. Nothing is preselected in bulk.
 | `sysadmin` | System admin | btop, cockpit* (127.0.0.1:9090), glances, lnav |
 | `web` | Web services | apache2*, caddy*, certbot, haproxy*, mkcert, nginx* |
 | `prog` | Programming tools | bruno*, clang, cmake, dotnet-sdk*, gdb, httpie, kotlin, ninja, nvm, pipx, pre-commit, pyenv, sdkman*, shellcheck, uv, valgrind |
-| `claude-plugins` | Claude Code plugins | plugin-claude-md-management*, plugin-code-review*, plugin-code-simplifier*, plugin-commit-commands*, plugin-feature-dev*, plugin-frontend-design*, plugin-hookify*, plugin-pr-review-toolkit*, plugin-security-guidance*, plugin-skill-creator* |
+| `claude-plugins` | Claude Code plugins | claude-docsmith*, claude-reelsmith*, claude-reposec*, plugin-claude-md-management*, plugin-code-review*, plugin-code-simplifier*, plugin-commit-commands*, plugin-feature-dev*, plugin-frontend-design*, plugin-hookify*, plugin-pr-review-toolkit*, plugin-security-guidance*, plugin-skill-creator* |
 | `apps` | Apps | image-view, isoforge, nemo, rustdesk, streamcontroller |
 
 Unchecking a previously installed tool prompts to uninstall it. Installed tools are tracked in `~/.local/state/distrodeck/installed-tools.txt`.
@@ -250,11 +250,21 @@ runs it at the pinned tag (embedded etcd, its config under
 on 127.0.0.1 and etcd's 2379 not published. Qdrant has no Homebrew formula, so
 like the other containers it is hidden on macOS.
 
-**Claude Code plugins** need the `claude` CLI and come only from the public
-`anthropics/claude-plugins-official` marketplace, which is added when missing.
-They install at user scope with stdin closed and a 300 s limit
-(`DISTRODECK_PLUGIN_TIMEOUT`), so a `--tools` or `--all` run never waits on a
-prompt. A plugin that needs a confirmed command fails and is installed by hand.
+**Claude Code plugins** need the `claude` CLI and come from two public
+marketplaces, each added when missing: `plugin-*` tools from
+`anthropics/claude-plugins-official`, and `claude-docsmith`, `claude-reposec`
+and `claude-reelsmith` from `nikolareljin/claude-plugins` (marketplace
+`nikolareljin-plugins`, pinned to a release tag and commit per plugin). No
+other marketplace is ever added. They install at user scope with stdin closed
+and a 300 s limit (`DISTRODECK_PLUGIN_TIMEOUT`), so a `--tools` or `--all` run
+never waits on a prompt. A plugin that needs a confirmed command fails and is
+installed by hand. `claude-reelsmith` also needs `ffmpeg` on PATH (`needs`
+column: `claude-code,ffmpeg`). GitHub clones during add and install go
+over https, so a machine without a GitHub SSH key installs them too.
+A later `claude plugin update` outside distrodeck still clones over SSH
+there; prefix it with `GIT_CONFIG_COUNT=1
+GIT_CONFIG_KEY_0=url.https://github.com/.insteadOf
+GIT_CONFIG_VALUE_0=git@github.com:`.
 
 **macOS**: the installer re-execs under Homebrew bash 5 (`brew install bash`
 if it is missing) and installs with `brew` / `brew install --cask`. Tools with
