@@ -454,6 +454,7 @@ chmod +x "$checkout_tmp/tools/git-lantern/install"
   git_lantern_bin_link() { printf '%s\n' "$lantern_bin"; }
   managed_source_checkout() { :; }
   checkout_managed_source_tag() { printf '%s\n' "$2" > "$STATE_DIR/git-lantern-tag"; }
+  # shellcheck disable=SC2034  # read by the sourced installer
   DISTRODECK_GIT_LANTERN_TAG="0.8.2"
   install_git_lantern test >/dev/null
 )
