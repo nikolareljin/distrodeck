@@ -2371,8 +2371,8 @@ uninstall_cassandra() {
   apt_vendor_repo_remove cassandra
 }
 
-# Neo4j Admins <admins@neotechnology.com>, key id 59D700E4D37F5F19.
-NEO4J_KEY_FINGERPRINT="1EEFB8767D4924B86EAD08A459D700E4D37F5F19"
+# Neo4j Admins signing key, key id 59D700E4D37F5F19.
+NEO4J_SIGNER_FPR="1EEFB8767D4924B86EAD08A459D700E4D37F5F19"
 
 install_neo4j() {
   local mgr="$1"
@@ -2381,7 +2381,7 @@ install_neo4j() {
     return 1
   fi
   apt_vendor_repo neo4j https://debian.neo4j.com/neotechnology.gpg.key \
-    https://debian.neo4j.com stable latest "$NEO4J_KEY_FINGERPRINT" || return 1
+    https://debian.neo4j.com stable latest "$NEO4J_SIGNER_FPR" || return 1
   apt_install_no_autostart neo4j
 }
 
@@ -2748,7 +2748,7 @@ MONGODB_SERIES="${DISTRODECK_MONGODB_SERIES:-8.2}"
 MONGODB_SUPPORTED_SERIES="8.0 8.2"
 MONGODB_KEY_URL="https://pgp.mongodb.com/server-8.0.asc"
 # "MongoDB 8.0 Release Signing Key", key id 41DE058A4E7DCA05.
-MONGODB_KEY_FINGERPRINT="4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05"
+MONGODB_SIGNER_FPR="4B0752C1BCA238C0B4EE14DC41DE058A4E7DCA05"
 MONGODB_RPM_KEY="/etc/pki/rpm-gpg/RPM-GPG-KEY-mongodb-server-8.0"
 MONGODB_KEYRING="/usr/share/keyrings/mongodb-server.gpg"
 MONGODB_APT_LIST="/etc/apt/sources.list.d/mongodb-org.list"
@@ -2822,7 +2822,7 @@ mongodb_repo_setup() {
         rm -f "$tmp_key"
         return 1
       fi
-      verify_key_fingerprint "$tmp_key" "$MONGODB_KEY_FINGERPRINT" || { rm -f "$tmp_key"; return 1; }
+      verify_key_fingerprint "$tmp_key" "$MONGODB_SIGNER_FPR" || { rm -f "$tmp_key"; return 1; }
       if ! sudo gpg --batch --yes -o "$MONGODB_KEYRING" --dearmor "$tmp_key"; then
         rm -f "$tmp_key"
         return 1
@@ -2845,7 +2845,7 @@ mongodb_repo_setup() {
         rm -f "$rpm_key"
         return 1
       fi
-      verify_key_fingerprint "$rpm_key" "$MONGODB_KEY_FINGERPRINT" || { rm -f "$rpm_key"; return 1; }
+      verify_key_fingerprint "$rpm_key" "$MONGODB_SIGNER_FPR" || { rm -f "$rpm_key"; return 1; }
       # mkdir + install, not install -D: BSD install (macOS test runs) has no -D.
       { sudo mkdir -p "$(dirname "$MONGODB_RPM_KEY")" && sudo install -m 644 "$rpm_key" "$MONGODB_RPM_KEY"; } || { rm -f "$rpm_key"; return 1; }
       rm -f "$rpm_key"

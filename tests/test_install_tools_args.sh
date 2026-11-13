@@ -935,13 +935,13 @@ if command -v gpg >/dev/null 2>&1; then
   assert_exit 1 "a different key is refused" verify_key_fingerprint "$KEYS/test-key-b.asc" "$FPR_A"
   assert_exit 1 "the pinned key plus an extra key is refused" verify_key_fingerprint "$KEYS/test-keys-ab.asc" "$FPR_A"
   assert_exit 1 "a file with no key is refused" verify_key_fingerprint "$KEYS/not-a-key.txt" "$FPR_A"
-  [[ "$MONGODB_KEY_FINGERPRINT" == *41DE058A4E7DCA05 && ${#MONGODB_KEY_FINGERPRINT} -eq 40 ]] && pass "MongoDB pin is the full 8.0 key fingerprint" || fail "MongoDB pin is the full 8.0 key fingerprint"
-  [[ "$NEO4J_KEY_FINGERPRINT" == *59D700E4D37F5F19 && ${#NEO4J_KEY_FINGERPRINT} -eq 40 ]] && pass "Neo4j pin is the full key fingerprint" || fail "Neo4j pin is the full key fingerprint"
+  [[ "$MONGODB_SIGNER_FPR" == *41DE058A4E7DCA05 && ${#MONGODB_SIGNER_FPR} -eq 40 ]] && pass "MongoDB pin is the full 8.0 key fingerprint" || fail "MongoDB pin is the full 8.0 key fingerprint"
+  [[ "$NEO4J_SIGNER_FPR" == *59D700E4D37F5F19 && ${#NEO4J_SIGNER_FPR} -eq 40 ]] && pass "Neo4j pin is the full key fingerprint" || fail "Neo4j pin is the full key fingerprint"
   for case in "b:refuse" "a:accept"; do
     key="${case%%:*}"
     mongo_pin_tmp="$(mktemp -d)"
     pin_out="$(
-      MONGODB_KEY_FINGERPRINT="$FPR_A"
+      MONGODB_SIGNER_FPR="$FPR_A"
       # shellcheck disable=SC2034  # read by the sourced installer
       MONGODB_YUM_REPO="$mongo_pin_tmp/mongodb-org.repo"
       # shellcheck disable=SC2034  # read by the sourced installer
@@ -973,7 +973,7 @@ if command -v gpg >/dev/null 2>&1; then
   assert_contains "$vend_out" "signing keys: $FPR_A $FPR_B" "cassandra logs every KEYS fingerprint"
   assert_contains "$vend_out" "unpinned rc=0" "cassandra accepts a KEYS file with keys"
   assert_contains "$vend_out" "nokey rc=1" "cassandra refuses a KEYS file with no key"
-  grep -q 'stable latest "\$NEO4J_KEY_FINGERPRINT"' "$INSTALLER" && pass "neo4j repo setup passes its pin" || fail "neo4j repo setup passes its pin"
+  grep -q 'stable latest "\$NEO4J_SIGNER_FPR"' "$INSTALLER" && pass "neo4j repo setup passes its pin" || fail "neo4j repo setup passes its pin"
   rm -rf "$vend_tmp"
 else
   echo "SKIP: gpg not available; key pin tests skipped."
