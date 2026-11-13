@@ -4,6 +4,11 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+- RPM build: `scripts/script-helpers` moves to `production`, whose
+  `build_rpm_artifacts.sh` no longer writes the source tarball into the
+  tree it is archiving (`tar: ... file changed as we read it`).
+
 ## 2026-11-12 — 0.12.0
 
 ### Added
