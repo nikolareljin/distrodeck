@@ -77,7 +77,7 @@ jobs:
       homepage: "https://github.com/nikolareljin/distrodeck"
       deps: "python@3.12"
       man_path: "docs/man/distrodeck.1"
-      exclude_paths: ".git,.github,dist,.venv,__pycache__"
+      exclude_paths: ".git,.github,dist,.venv,__pycache__,scripts/script-helpers/tests"
       release_tag: ${{ needs.auto_tag.outputs.version }}
       publish: ${{ needs.auto_tag.outputs.version != '' }}
     secrets:

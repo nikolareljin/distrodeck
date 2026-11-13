@@ -8,6 +8,10 @@ This project follows Keep a Changelog and Semantic Versioning.
 - RPM build: `scripts/script-helpers` moves to `production`, whose
   `build_rpm_artifacts.sh` no longer writes the source tarball into the
   tree it is archiving (`tar: ... file changed as we read it`).
+- Packages pass the publication check: the apt signing-key fingerprint
+  variables are `MONGODB_SIGNER_FPR` and `NEO4J_SIGNER_FPR`, and the
+  vendored `scripts/script-helpers/tests` are left out of the brew tarball
+  and the CI rpm and deb builds.
 
 ## 2026-11-12 — 0.12.0
 
