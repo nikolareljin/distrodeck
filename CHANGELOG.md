@@ -12,9 +12,9 @@ This project follows Keep a Changelog and Semantic Versioning.
   variables are `MONGODB_SIGNER_FPR` and `NEO4J_SIGNER_FPR`, and the
   vendored `scripts/script-helpers/tests` are left out of the brew tarball
   and the CI rpm and deb builds.
-- `scripts/script-helpers` moves to 0.67.0 (`production`), which reads
-  small `.gz` and `.tar.gz` files in the publication check instead of
-  refusing them.
+- `scripts/script-helpers` moves to 0.67.1 (`production`). The publication
+  check reads small `.gz` and `.tar.gz` files instead of refusing them, and
+  release downloads retry transient network errors.
 
 ## 2026-11-12 — 0.12.0
 
