@@ -1,3 +1,10 @@
+distrodeck (0.12.1) unstable; urgency=medium
+
+  * rpm and Homebrew packages pass the publication check; script-helpers
+    0.67.1.
+
+ -- Nikola Reljin <nikola.reljin@gmail.com>  Sat, 21 Nov 2026 00:00:00 +0000
+
 distrodeck (0.12.0) unstable; urgency=medium
 
   * Claude Code plugins from a second marketplace; Git Lantern launcher;
